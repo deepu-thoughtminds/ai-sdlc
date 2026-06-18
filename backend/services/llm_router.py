@@ -1,9 +1,10 @@
 """LLM router: routes requests to freellmapi (heavy) or main model (light).
 
 Heavy stages (describe, architecture, codegen, testgen) are sent to the
-freellmapi service via the Ollama native /api/chat endpoint. Light stages
-(assign) use the configured main model — in the Walking Skeleton, the light
-path returns a stub response without making a real API call.
+freellmapi service via the OpenAI-compatible /v1/chat/completions endpoint
+with Bearer auth. Light stages (assign) use the configured main model —
+in the Walking Skeleton, the light path returns a stub response without
+making a real API call.
 
 Threat mitigations applied:
 - T-02-05: Stage is checked against HEAVY_STAGES; routing only happens for
@@ -36,18 +37,23 @@ class LLMResponse:
     model: str = ""  # model name used
 
 
+FREELLMAPI_API_KEY = os.getenv("FREELLMAPI_API_KEY", "")
+FREELLMAPI_MODELS = os.getenv("FREELLMAPI_MODELS", "auto")
+
+
 def route_request(stage: str, prompt: str) -> LLMResponse:
     """Route a prompt to the appropriate LLM provider based on stage.
 
-    Heavy stages → freellmapi via Ollama native /api/chat endpoint.
+    Heavy stages → freellmapi via OpenAI-compatible /v1/chat/completions endpoint.
     Light stages → main model stub (no real API call in Walking Skeleton).
 
-    Ollama /api/chat request format:
-      POST {FREELLMAPI_BASE_URL}/api/chat
-      {"model": "<model>", "messages": [{"role": "user", "content": "<prompt>"}], "stream": false}
+    OpenAI /v1/chat/completions request format:
+      POST {FREELLMAPI_BASE_URL}/v1/chat/completions
+      Authorization: Bearer {FREELLMAPI_API_KEY}
+      {"model": "auto", "messages": [{"role": "user", "content": "<prompt>"}]}
 
-    Ollama /api/chat response format:
-      {"model": "<model>", "message": {"role": "assistant", "content": "<text>"}, ...}
+    OpenAI /v1/chat/completions response format:
+      {"choices": [{"message": {"role": "assistant", "content": "<text>"}}], ...}
 
     Args:
         stage: The pipeline stage name (must have been validated by parse_mention).
@@ -56,8 +62,9 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
     Returns:
         LLMResponse with provider, content, and model fields.
     """
-    freellmapi_base_url = os.environ.get("FREELLMAPI_BASE_URL", "http://freellmapi:11434")
-    freellmapi_model = os.environ.get("FREELLMAPI_MODEL", "llama3")
+    freellmapi_base_url = os.environ.get("FREELLMAPI_BASE_URL", "http://freellmapi:3001")
+    freellmapi_api_key = os.environ.get("FREELLMAPI_API_KEY", FREELLMAPI_API_KEY)
+    freellmapi_model = os.environ.get("FREELLMAPI_MODELS", FREELLMAPI_MODELS)
     main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
 
     if stage in HEAVY_STAGES:
@@ -65,18 +72,18 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
         payload = {
             "model": freellmapi_model,
             "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
         }
         try:
             resp = httpx.post(
-                f"{freellmapi_base_url}/api/chat",
+                f"{freellmapi_base_url}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {freellmapi_api_key}"},
                 json=payload,
                 timeout=30.0,
             )
             resp.raise_for_status()
             data = resp.json()
-            # Ollama native format: data["message"]["content"]
-            response_text = data["message"]["content"]
+            # OpenAI format: data["choices"][0]["message"]["content"]
+            response_text = data["choices"][0]["message"]["content"]
             model_name = data.get("model", freellmapi_model)
             return LLMResponse(provider="freellmapi", content=response_text, model=model_name)
         except Exception as exc:
