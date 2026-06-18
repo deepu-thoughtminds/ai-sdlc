@@ -38,10 +38,27 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
       - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
+      - MCP_ATLASSIAN_URL=${MCP_ATLASSIAN_URL:-http://mcp-atlassian:9000/sse}
     depends_on:
       - freellmapi
+      - mcp-atlassian
     networks:
       - ai-sdlc-net
+
+  mcp-atlassian:
+    image: sooperset/mcp-atlassian:latest
+    environment:
+      - TRANSPORT=sse
+      - PORT=9000
+      # JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN intentionally omitted — their
+      # absence activates per-request (multi-user) credential mode. Setting them
+      # would lock the server to a single Jira instance and expose credentials
+      # in `docker inspect` output (T-07-01).
+    ports:
+      - "9000:9000"
+    networks:
+      - ai-sdlc-net
+    restart: unless-stopped
 
   backend:
     build:
