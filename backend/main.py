@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from database import init_db
 import models.ticket_status  # noqa: F401 — registers TicketStatus table with Base.metadata
+import models.pipeline_state  # noqa: F401 — registers PipelineState table with Base.metadata
 from routers.dashboard import router as dashboard_router
 from routers.projects import router as projects_router
 from routers.webhook import router as webhook_router
