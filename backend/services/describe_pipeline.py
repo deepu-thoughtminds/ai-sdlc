@@ -2,15 +2,15 @@
 
 Implements the describe stage pipeline:
   1. (DESC-01) Fetch structured codebase summary from GitHub via graphify_service
-  2. (DESC-02) Fetch active sprint backlog from Jira REST API via JiraClient
+  2. (DESC-02) Fetch active sprint backlog from Jira REST API via hermes_client
   3. Assemble a prompt combining ticket info + codebase context + sprint context
   4. Route to freellmapi via route_request("describe", prompt) — now in HEAVY_STAGES
   5. Return the generated description string
 
 Threat mitigations:
-  T-03-02: Prompt assembled inline — decrypted token is only used to construct
-           JiraClient, not included in the prompt string; only issue_key is logged.
-  T-03-06: JiraClient.get_sprint_backlog handles all errors and returns [].
+  T-03-02: Prompt assembled inline — decrypted token is only used for hermes_client
+           calls, not included in the prompt string; only issue_key is logged.
+  T-03-06: post_sprint_backlog handles all errors and returns [].
 """
 
 import logging
@@ -19,7 +19,7 @@ import os
 from models.project import Project
 from services.crypto import decrypt_credential
 from services.graphify_service import get_codebase_summary
-from services.jira_client import JiraClient
+from services.hermes_client import post_sprint_backlog
 from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
@@ -61,10 +61,9 @@ async def run(event: object, project: Project) -> str:
     except Exception:
         jira_token = ""
 
-    jira_email = os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-    client = JiraClient(project.jira_url, jira_token, jira_email)
-    # T-03-06: all errors caught inside get_sprint_backlog; returns [] on failure
-    backlog = client.get_sprint_backlog(project.project_key)
+    jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+    # T-03-06: all errors caught inside post_sprint_backlog; returns [] on failure
+    backlog = await post_sprint_backlog(project.jira_url, jira_email, jira_token, project.project_key)
 
     # --- Step 3: Assemble prompt ---
     # Sprint context
@@ -79,8 +78,9 @@ async def run(event: object, project: Project) -> str:
 
     # Ticket info from the event
     issue_key = getattr(event.issue, "key", "UNKNOWN")  # type: ignore[union-attr]
-    fields = getattr(event.issue, "fields", {}) or {}  # type: ignore[union-attr]
-    ticket_title = fields.get("summary", issue_key) if isinstance(fields, dict) else issue_key
+    # Use .summary directly — JiraIssue now has summary as a top-level field
+    # (flattened from issue.fields.summary in the webhook model validator)
+    ticket_title = getattr(event.issue, "summary", None) or issue_key  # type: ignore[union-attr]
     # T-03-02: comment body from Jira (validated at webhook layer, max 10000 chars)
     trigger_comment = getattr(event.comment, "body", "") or ""  # type: ignore[union-attr]
 

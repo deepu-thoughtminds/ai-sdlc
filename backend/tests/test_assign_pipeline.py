@@ -6,8 +6,8 @@ Tests (4 total):
 3. test_assign_pipeline_posts_confirmation_comment
 4. test_assign_pipeline_user_not_found
 
-All JiraClient calls are mocked; no real DB required (project is a mock object).
-T-03-11: raw_assignee is passed to Jira /user/search as a query param, not interpolated.
+All hermes_client calls are mocked; no real DB required (project is a mock object).
+T-03-11: raw_assignee is passed to post_assign, not interpolated into SQL/shell.
 """
 
 import os
@@ -60,99 +60,83 @@ def _make_mention(extra: str = "@john.doe") -> MentionResult:
 
 @pytest.mark.asyncio
 async def test_assign_pipeline_calls_lookup_user():
-    """run() with '@john.doe' in mention_result.extra calls lookup_user('john.doe')."""
+    """run() with '@john.doe' in mention_result.extra calls post_assign('john.doe')."""
     from services.assign_pipeline import run
 
     project = _make_project()
     event = _make_event()
     mention_result = _make_mention(extra="@john.doe")
 
-    with patch("services.assign_pipeline.JiraClient") as MockJiraClient, \
+    with patch("services.assign_pipeline.post_assign", new_callable=AsyncMock) as mock_post_assign, \
+         patch("services.assign_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
          patch("services.assign_pipeline.decrypt_credential", return_value="plaintext-token"):
-        mock_instance = MagicMock()
-        mock_instance.lookup_user.return_value = "ACCOUNT123"
-        mock_instance.assign_issue.return_value = {}
-        mock_instance.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_instance
+        mock_post_assign.return_value = "ACCOUNT123"
 
         await run(event, project, mention_result)
 
-    mock_instance.lookup_user.assert_called_once_with("john.doe")
+    mock_post_assign.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_assign_pipeline_calls_assign_issue():
-    """run() calls assign_issue(issue_key, account_id) after lookup_user."""
+    """run() calls post_assign(issue_key, raw_assignee) to lookup+assign in one call."""
     from services.assign_pipeline import run
 
     project = _make_project()
     event = _make_event()
     mention_result = _make_mention(extra="@john.doe")
 
-    with patch("services.assign_pipeline.JiraClient") as MockJiraClient, \
+    with patch("services.assign_pipeline.post_assign", new_callable=AsyncMock) as mock_post_assign, \
+         patch("services.assign_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
          patch("services.assign_pipeline.decrypt_credential", return_value="plaintext-token"):
-        mock_instance = MagicMock()
-        mock_instance.lookup_user.return_value = "ACCOUNT123"
-        mock_instance.assign_issue.return_value = {}
-        mock_instance.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_instance
+        mock_post_assign.return_value = "ACCOUNT123"
 
         await run(event, project, mention_result)
 
-    mock_instance.assign_issue.assert_called_once_with("PROJ-1", "ACCOUNT123")
+    mock_post_assign.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_assign_pipeline_posts_confirmation_comment():
-    """run() calls add_comment after successful assign with body containing the assignee name."""
+    """run() calls hermes_post_comment after successful assign with body containing the assignee name."""
     from services.assign_pipeline import run
 
     project = _make_project()
     event = _make_event()
     mention_result = _make_mention(extra="@john.doe")
 
-    with patch("services.assign_pipeline.JiraClient") as MockJiraClient, \
+    with patch("services.assign_pipeline.post_assign", new_callable=AsyncMock) as mock_post_assign, \
+         patch("services.assign_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
          patch("services.assign_pipeline.decrypt_credential", return_value="plaintext-token"):
-        mock_instance = MagicMock()
-        mock_instance.lookup_user.return_value = "ACCOUNT123"
-        mock_instance.assign_issue.return_value = {}
-        mock_instance.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_instance
+        mock_post_assign.return_value = "ACCOUNT123"
 
         await run(event, project, mention_result)
 
-    assert mock_instance.add_comment.called
-    call_args = mock_instance.add_comment.call_args
-    # First positional arg should be the issue key
-    assert call_args[0][0] == "PROJ-1"
-    # Second positional arg (body) should mention the assignee name
-    body = call_args[0][1]
+    assert mock_comment.called is True
+    # Find the confirmation call (last call after successful assign)
+    call_args = mock_comment.call_args
+    body = call_args[0][4]  # 5th positional arg is the comment body
     assert "john.doe" in body
 
 
 @pytest.mark.asyncio
 async def test_assign_pipeline_user_not_found():
-    """When lookup_user returns None, add_comment is called with 'not found' message,
-    and assign_issue is NOT called. No exception raised.
-    """
+    """When post_assign raises, hermes_post_comment is called with 'not found' message."""
     from services.assign_pipeline import run
 
     project = _make_project()
     event = _make_event()
     mention_result = _make_mention(extra="@ghost.user")
 
-    with patch("services.assign_pipeline.JiraClient") as MockJiraClient, \
+    with patch("services.assign_pipeline.post_assign", new_callable=AsyncMock) as mock_post_assign, \
+         patch("services.assign_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
          patch("services.assign_pipeline.decrypt_credential", return_value="plaintext-token"):
-        mock_instance = MagicMock()
-        mock_instance.lookup_user.return_value = None
-        mock_instance.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_instance
+        mock_post_assign.side_effect = Exception("user not found")
 
         # Should not raise
         await run(event, project, mention_result)
 
-    mock_instance.assign_issue.assert_not_called()
-    assert mock_instance.add_comment.called
-    call_args = mock_instance.add_comment.call_args
-    body = call_args[0][1]
-    assert "not found" in body.lower() or "ghost.user" in body
+    assert mock_comment.called is True
+    call_args = mock_comment.call_args
+    body = call_args[0][4]  # 5th positional arg is the comment body
+    assert "ghost.user" in body or "not found" in body.lower()

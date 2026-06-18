@@ -32,7 +32,7 @@ from models.project import Project
 from models.webhook import JiraCommentEvent
 from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline
 from services.crypto import decrypt_credential
-from services.jira_client import JiraClient
+from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
 from services.mention_parser import parse_mention
 
@@ -118,9 +118,11 @@ async def handle_jira_comment(
         # Post the draft as a Jira comment
         try:
             jira_token = decrypt_credential(project.jira_token)
-            jira_email = os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-            client = JiraClient(project.jira_url, jira_token, jira_email)
-            client.add_comment(
+            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+            await hermes_post_comment(
+                project.jira_url,
+                jira_email,
+                jira_token,
                 event.issue.key,
                 (
                     "*Draft description (awaiting your approval):*\n\n"

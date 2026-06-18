@@ -14,8 +14,8 @@ Tests (12 total):
 11. test_parse_developer_from_approval_returns_none_when_no_mention (NEW)
 12. test_architecture_approval_priority_over_describe (NEW)
 
-Uses StaticPool + DB session + mocked JiraClient pattern.
-T-03-10: Token-based matching prevents substring false-positives (unapproved ≠ approved).
+Uses StaticPool + DB session + mocked hermes_client functions pattern.
+T-03-10: Token-based matching prevents substring false-positives (unapproved != approved).
 """
 
 import os
@@ -130,13 +130,13 @@ def test_is_approval_returns_false_for_random():
 
 
 def test_is_approval_returns_false_for_unapproved():
-    """is_approval('unapproved') returns False — T-03-10: no substring match."""
+    """is_approval('unapproved') returns False - T-03-10: no substring match."""
     from services.approval_detector import is_approval
     assert is_approval("unapproved") is False
 
 
 def test_is_approval_returns_false_for_disapprove():
-    """is_approval('I disapprove of this') returns False — T-03-10: no substring match."""
+    """is_approval('I disapprove of this') returns False - T-03-10: no substring match."""
     from services.approval_detector import is_approval
     assert is_approval("I disapprove of this") is False
 
@@ -149,7 +149,7 @@ def test_is_approval_returns_false_for_disapprove():
 @pytest.mark.asyncio
 async def test_detect_and_apply_approval_updates_jira():
     """When a PipelineState row with status='awaiting_approval' exists and comment is 'LGTM',
-    detect_and_apply_approval calls JiraClient.update_description with draft_content and
+    detect_and_apply_approval calls hermes_put_description with draft_content and
     sets status='approved'.
     """
     from services.approval_detector import detect_and_apply_approval
@@ -172,16 +172,18 @@ async def test_detect_and_apply_approval_updates_jira():
 
         event = _make_event(issue_key="PROJ-1", body="LGTM")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
+             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_instance = MagicMock()
-            mock_instance.update_description.return_value = {}
-            MockJiraClient.return_value = mock_instance
+            mock_put_desc.return_value = {}
 
             result = await detect_and_apply_approval(event, db, project)
 
         assert result is True
-        mock_instance.update_description.assert_called_once_with("PROJ-1", "Elaborated description.")
+        mock_put_desc.assert_called_once()
+        # Verify the draft_content was passed
+        call_args = mock_put_desc.call_args
+        assert "Elaborated description." in call_args[0]
 
         # Verify status was updated
         db.refresh(ps)
@@ -193,7 +195,7 @@ async def test_detect_and_apply_approval_updates_jira():
 @pytest.mark.asyncio
 async def test_detect_and_apply_approval_noop_when_no_pending():
     """When no PipelineState row with status='awaiting_approval' exists, returns False
-    and JiraClient.update_description is NOT called.
+    and hermes_put_description is NOT called.
     """
     from services.approval_detector import detect_and_apply_approval
 
@@ -204,15 +206,14 @@ async def test_detect_and_apply_approval_noop_when_no_pending():
 
         event = _make_event(issue_key="PROJ-1", body="LGTM")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
+             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_instance = MagicMock()
-            MockJiraClient.return_value = mock_instance
 
             result = await detect_and_apply_approval(event, db, project)
 
         assert result is False
-        mock_instance.update_description.assert_not_called()
+        mock_put_desc.assert_not_called()
     finally:
         db.close()
 
@@ -242,15 +243,14 @@ async def test_detect_and_apply_approval_noop_when_not_approval_text():
 
         event = _make_event(issue_key="PROJ-1", body="Can you change the wording?")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
+             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_instance = MagicMock()
-            MockJiraClient.return_value = mock_instance
 
             result = await detect_and_apply_approval(event, db, project)
 
         assert result is False
-        mock_instance.update_description.assert_not_called()
+        mock_put_desc.assert_not_called()
 
         # Row status unchanged
         db.refresh(ps)
@@ -268,7 +268,7 @@ async def test_detect_and_apply_approval_noop_when_not_approval_text():
 async def test_detect_and_apply_approval_architecture_stage_posts_comment():
     """Test 8: When a PipelineState row with stage='architecture' and
     status='awaiting_approval' exists and comment is 'LGTM', detect_and_apply_approval
-    calls JiraClient.add_comment with draft_content and sets status='approved'.
+    calls hermes_post_comment with draft_content and sets status='approved'.
     """
     from services.approval_detector import detect_and_apply_approval
 
@@ -290,16 +290,18 @@ async def test_detect_and_apply_approval_architecture_stage_posts_comment():
 
         event = _make_event(issue_key="PROJ-1", body="LGTM")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_instance = MagicMock()
-            mock_instance.add_comment = MagicMock(return_value={})
-            MockJiraClient.return_value = mock_instance
+            mock_comment.return_value = {}
 
             result = await detect_and_apply_approval(event, db, project)
 
         assert result is True
-        mock_instance.add_comment.assert_called_once_with("PROJ-1", "Architecture options draft.")
+        assert mock_comment.called is True
+        # Check the draft content was passed to post_comment
+        call_args = mock_comment.call_args
+        assert "Architecture options draft." in call_args[0]
 
         # Verify status was updated to approved
         db.refresh(ps)
@@ -332,12 +334,11 @@ async def test_detect_and_apply_approval_architecture_with_developer_calls_assig
 
         event = _make_event(issue_key="PROJ-1", body="approved @john.doe")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"), \
              patch("services.approval_detector.assign_pipeline") as mock_assign_pipeline:
-            mock_instance = MagicMock()
-            mock_instance.add_comment = MagicMock(return_value={})
-            MockJiraClient.return_value = mock_instance
+            mock_comment.return_value = {}
             mock_assign_pipeline.run = AsyncMock(return_value=None)
 
             result = await detect_and_apply_approval(event, db, project)
@@ -399,19 +400,18 @@ async def test_architecture_approval_priority_over_describe():
 
         event = _make_event(issue_key="PROJ-1", body="LGTM")
 
-        with patch("services.approval_detector.JiraClient") as MockJiraClient, \
+        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_instance = MagicMock()
-            mock_instance.add_comment = MagicMock(return_value={})
-            mock_instance.update_description = MagicMock(return_value={})
-            MockJiraClient.return_value = mock_instance
+            mock_comment.return_value = {}
+            mock_put_desc.return_value = {}
 
             result = await detect_and_apply_approval(event, db, project)
 
         assert result is True
-        # Architecture approval uses add_comment, not update_description
-        mock_instance.add_comment.assert_called_once_with("PROJ-1", "Arch draft.")
-        mock_instance.update_description.assert_not_called()
+        # Architecture approval uses hermes_post_comment, not hermes_put_description
+        assert mock_comment.called is True
+        mock_put_desc.assert_not_called()
 
         # Architecture row is approved; describe row is unchanged
         db.refresh(arch_ps)

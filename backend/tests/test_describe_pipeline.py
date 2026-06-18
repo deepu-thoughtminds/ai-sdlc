@@ -5,11 +5,11 @@ Tests (3 total):
 2. test_run_with_no_sprint_backlog - empty backlog; run() completes and returns non-empty string
 3. test_run_with_graphify_error - empty StructuredCodebaseSummary; run() still calls route_request
 
-All dependencies (get_codebase_summary, JiraClient, route_request) are mocked via unittest.mock.
+All dependencies (get_codebase_summary, post_sprint_backlog, route_request) are mocked via unittest.mock.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -75,14 +75,12 @@ def test_run_returns_generated_description():
 
     with (
         patch("services.describe_pipeline.get_codebase_summary", return_value=_make_stub_summary()),
-        patch("services.describe_pipeline.JiraClient") as MockJiraClient,
+        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
         patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
             "Elaborated: feature adds login capability with JWT tokens."
         )),
     ):
-        mock_client_instance = MagicMock()
-        mock_client_instance.get_sprint_backlog.return_value = backlog
-        MockJiraClient.return_value = mock_client_instance
+        mock_backlog.return_value = backlog
 
         import asyncio
         from services.describe_pipeline import run
@@ -97,14 +95,12 @@ def test_run_with_no_sprint_backlog():
     """Empty sprint backlog; run() completes and returns a non-empty string."""
     with (
         patch("services.describe_pipeline.get_codebase_summary", return_value=_make_stub_summary()),
-        patch("services.describe_pipeline.JiraClient") as MockJiraClient,
+        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
         patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
             "Feature description without sprint context."
         )),
     ):
-        mock_client_instance = MagicMock()
-        mock_client_instance.get_sprint_backlog.return_value = []  # Empty backlog
-        MockJiraClient.return_value = mock_client_instance
+        mock_backlog.return_value = []  # Empty backlog
 
         import asyncio
         from services.describe_pipeline import run
@@ -123,16 +119,14 @@ def test_run_with_graphify_error():
 
     with (
         patch("services.describe_pipeline.get_codebase_summary", return_value=empty_summary),
-        patch("services.describe_pipeline.JiraClient") as MockJiraClient,
+        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
         patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
             "Description even without codebase context."
         )) as mock_route,
     ):
-        mock_client_instance = MagicMock()
-        mock_client_instance.get_sprint_backlog.return_value = [
+        mock_backlog.return_value = [
             {"key": "PROJ-1", "summary": "Background task", "issue_type": "Task"}
         ]
-        MockJiraClient.return_value = mock_client_instance
 
         import asyncio
         from services.describe_pipeline import run

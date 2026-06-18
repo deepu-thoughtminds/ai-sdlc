@@ -185,7 +185,7 @@ async def test_no_mention_returns_ignored():
 async def test_hermes_mention_returns_action():
     """Test 4: POST with @hermes describe and a matching project returns action=describe.
 
-    Creates a PROJ project in the test DB and mocks describe_pipeline.run and JiraClient
+    Creates a PROJ project in the test DB and mocks describe_pipeline.run and hermes_post_comment
     so the handler completes without real API calls.
     """
     db = TestingSession()
@@ -195,11 +195,9 @@ async def test_hermes_mention_returns_action():
         db.close()
 
     with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
-         patch("routers.webhook.JiraClient") as MockJiraClient:
+         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post_comment:
         mock_run.return_value = "Draft text."
-        mock_jira = MagicMock()
-        mock_jira.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_jira
+        mock_post_comment.return_value = {}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
@@ -227,11 +225,9 @@ async def test_describe_mention_creates_pipeline_state():
         db.close()
 
     with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
-         patch("routers.webhook.JiraClient") as MockJiraClient:
+         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post_comment:
         mock_run.return_value = "Draft text."
-        mock_jira = MagicMock()
-        mock_jira.add_comment.return_value = {}
-        MockJiraClient.return_value = mock_jira
+        mock_post_comment.return_value = {}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
