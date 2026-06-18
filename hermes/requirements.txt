@@ -3,3 +3,5 @@ openai>=1.0
 python-dotenv
 pytest
 pytest-asyncio
+mcp>=1.0
+httpx-sse>=0.4
