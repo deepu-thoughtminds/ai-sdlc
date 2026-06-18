@@ -81,12 +81,14 @@ async def test_client_uses_env_base_url(monkeypatch):
     monkeypatch.setenv("FREELLMAPI_BASE_URL", "http://custom-host:9999/v1")
     monkeypatch.setenv("FREELLMAPI_API_KEY", "env-key")
 
+    # Reload first so the module-level FREELLMAPI_BASE_URL constant picks up the new env value.
+    # Then patch AsyncOpenAI on the freshly-reloaded module to intercept instantiation.
+    import importlib
+    import hermes.llm_client as mod
+    importlib.reload(mod)
+
     with patch("hermes.llm_client.AsyncOpenAI") as MockClass:
         MockClass.return_value = MagicMock()
-        # Re-import to pick up new env values
-        import importlib
-        import hermes.llm_client as mod
-        importlib.reload(mod)
         mod.HermesLLMClient()
         call_kwargs = MockClass.call_args.kwargs
         assert call_kwargs.get("base_url") == "http://custom-host:9999/v1"
