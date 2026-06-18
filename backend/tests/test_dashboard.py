@@ -73,12 +73,25 @@ TOKEN_FIELD_NAMES = {"jira_token", "github_token", "confluence_token"}
 
 @pytest.fixture(autouse=True)
 def reset_tables():
-    """Drop and recreate all tables before each test for full isolation."""
+    """Drop and recreate all tables before each test for full isolation.
+
+    Also re-registers the dashboard's override_get_db for the duration of
+    each test, then restores the prior override. This prevents cross-test
+    contamination when test_projects.py or other test modules install their
+    own dependency overrides (test collection order is not guaranteed).
+    """
+    prior_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
     Base.metadata.drop_all(TEST_ENGINE)
     Base.metadata.create_all(TEST_ENGINE)
     yield
     Base.metadata.drop_all(TEST_ENGINE)
     Base.metadata.create_all(TEST_ENGINE)
+    # Restore the prior override (or remove ours if there was none)
+    if prior_override is not None:
+        app.dependency_overrides[get_db] = prior_override
+    else:
+        app.dependency_overrides.pop(get_db, None)
 
 
 # ---------------------------------------------------------------------------

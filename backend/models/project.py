@@ -21,7 +21,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy import DateTime, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
 
@@ -45,6 +45,11 @@ class Project(Base):
     confluence_token: Mapped[str] = mapped_column(String(2000), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
+    )
+
+    # Relationship to TicketStatus (cascade delete when project is deleted)
+    ticket_statuses: Mapped[list["TicketStatus"]] = relationship(  # type: ignore[name-defined]
+        "TicketStatus", back_populates="project", cascade="all, delete-orphan"
     )
 
 
