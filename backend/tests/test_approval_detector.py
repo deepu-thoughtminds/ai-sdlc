@@ -293,7 +293,7 @@ async def test_detect_and_apply_approval_architecture_stage_posts_comment():
         with patch("services.approval_detector.JiraClient") as MockJiraClient, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
             mock_instance = MagicMock()
-            mock_instance.add_comment = AsyncMock(return_value={})
+            mock_instance.add_comment = MagicMock(return_value={})
             MockJiraClient.return_value = mock_instance
 
             result = await detect_and_apply_approval(event, db, project)
@@ -336,7 +336,7 @@ async def test_detect_and_apply_approval_architecture_with_developer_calls_assig
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"), \
              patch("services.approval_detector.assign_pipeline") as mock_assign_pipeline:
             mock_instance = MagicMock()
-            mock_instance.add_comment = AsyncMock(return_value={})
+            mock_instance.add_comment = MagicMock(return_value={})
             MockJiraClient.return_value = mock_instance
             mock_assign_pipeline.run = AsyncMock(return_value=None)
 
@@ -402,7 +402,7 @@ async def test_architecture_approval_priority_over_describe():
         with patch("services.approval_detector.JiraClient") as MockJiraClient, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
             mock_instance = MagicMock()
-            mock_instance.add_comment = AsyncMock(return_value={})
+            mock_instance.add_comment = MagicMock(return_value={})
             mock_instance.update_description = MagicMock(return_value={})
             MockJiraClient.return_value = mock_instance
 
