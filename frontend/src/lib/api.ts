@@ -15,6 +15,7 @@ export interface ProjectCreatePayload {
   name: string
   project_key: string
   jira_url: string
+  jira_email: string
   jira_token: string
   github_token: string
   confluence_url: string

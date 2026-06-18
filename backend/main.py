@@ -1,8 +1,11 @@
+import json
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from database import init_db
 import models.ticket_status  # noqa: F401 — registers TicketStatus table with Base.metadata
@@ -33,6 +36,39 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    try:
+        raw_body = await request.body()
+        body_str = raw_body.decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(body_str)
+            body_log = json.dumps(parsed, indent=2)
+        except Exception:
+            body_log = body_str
+    except Exception as e:
+        body_log = f"<could not read body: {e}>"
+
+    logger.error(
+        "422 Validation error on %s %s\nErrors: %s\nRaw body:\n%s",
+        request.method,
+        request.url,
+        exc.errors(),
+        body_log,
+    )
+    def _safe_errors(errors):
+        result = []
+        for e in errors:
+            ec = dict(e)
+            if "ctx" in ec and isinstance(ec["ctx"].get("error"), Exception):
+                ec = dict(ec)
+                ec["ctx"] = {**ec["ctx"], "error": str(ec["ctx"]["error"])}
+            result.append(ec)
+        return result
+
+    return JSONResponse(status_code=422, content={"detail": _safe_errors(exc.errors())})
+
 
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
 app.include_router(projects_router, prefix="/api", tags=["projects"])

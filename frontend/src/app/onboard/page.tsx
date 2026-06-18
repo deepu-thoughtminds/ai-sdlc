@@ -11,6 +11,7 @@ interface FormState {
   name: string
   project_key: string
   jira_url: string
+  jira_email: string
   jira_token: string
   github_token: string
   confluence_url: string
@@ -21,6 +22,7 @@ const emptyForm: FormState = {
   name: "",
   project_key: "",
   jira_url: "",
+  jira_email: "",
   jira_token: "",
   github_token: "",
   confluence_url: "",
@@ -47,6 +49,7 @@ export default function OnboardPage() {
         name: form.name,
         project_key: form.project_key,
         jira_url: form.jira_url,
+        jira_email: form.jira_email,
         jira_token: form.jira_token,
         github_token: form.github_token,
         confluence_url: form.confluence_url,
@@ -170,6 +173,25 @@ export default function OnboardPage() {
             onChange={handleChange}
             style={inputStyle}
           />
+        </div>
+
+        <div style={fieldStyle}>
+          <label htmlFor="jira_email" style={labelStyle}>
+            Jira Account Email
+          </label>
+          <input
+            id="jira_email"
+            name="jira_email"
+            type="email"
+            required
+            placeholder="you@example.com"
+            value={form.jira_email}
+            onChange={handleChange}
+            style={inputStyle}
+          />
+          <small style={{ color: "#666", fontSize: "12px" }}>
+            Atlassian account email used with the API token above
+          </small>
         </div>
 
         <div style={fieldStyle}>

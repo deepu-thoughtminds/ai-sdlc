@@ -4,17 +4,15 @@ import pytest
 import httpx
 import respx
 
-# Set env var BEFORE importing hermes_client so module picks up test URL
-os.environ["HERMES_BASE_URL"] = "http://test-hermes:8001"
-
 from services.hermes_client import (
     post_comment,
     post_sprint_backlog,
     post_assign,
     put_description,
 )
+import services.hermes_client as _hermes_client_mod
 
-BASE = "http://test-hermes:8001"
+BASE = _hermes_client_mod.HERMES_BASE_URL
 
 
 @pytest.mark.asyncio

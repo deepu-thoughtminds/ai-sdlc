@@ -41,6 +41,7 @@ def create_project(
         name=payload.name,
         project_key=payload.project_key,
         jira_url=str(payload.jira_url),
+        jira_email=payload.jira_email,
         confluence_url=str(payload.confluence_url),
         # Encrypt tokens before writing to DB (T-02-03)
         jira_token=encrypt_credential(payload.jira_token),

@@ -38,6 +38,7 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     project_key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     jira_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    jira_email: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
     confluence_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     # Optional GitHub repository URL for codebase context (graphify_service)
     github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -77,6 +78,7 @@ class ProjectCreate(BaseModel):
         pattern=r"^[A-Z0-9_-]+$",
     )
     jira_url: HttpUrl
+    jira_email: str = Field(default="", max_length=500)
     confluence_url: HttpUrl
     jira_token: str = Field(..., min_length=1, max_length=500)
     github_token: str = Field(..., min_length=1, max_length=500)

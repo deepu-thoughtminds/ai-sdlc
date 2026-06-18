@@ -62,7 +62,7 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
     Returns:
         LLMResponse with provider, content, and model fields.
     """
-    freellmapi_base_url = os.environ.get("FREELLMAPI_BASE_URL", "http://freellmapi:3001")
+    freellmapi_base_url = os.environ.get("FREELLMAPI_BASE_URL", "http://freellmapi:3001/v1")
     freellmapi_api_key = os.environ.get("FREELLMAPI_API_KEY", FREELLMAPI_API_KEY)
     freellmapi_model = os.environ.get("FREELLMAPI_MODELS", FREELLMAPI_MODELS)
     main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
@@ -75,7 +75,7 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
         }
         try:
             resp = httpx.post(
-                f"{freellmapi_base_url}/v1/chat/completions",
+                f"{freellmapi_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {freellmapi_api_key}"},
                 json=payload,
                 timeout=30.0,

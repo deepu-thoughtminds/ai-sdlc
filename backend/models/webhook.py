@@ -66,8 +66,8 @@ class JiraIssue(BaseModel):
         if isinstance(data, dict) and isinstance(data.get("fields"), dict):
             data = dict(data)  # shallow copy — avoid mutating caller's dict
             fields = data["fields"]
-            data.setdefault("summary", fields.get("summary"))
-            data.setdefault("description", fields.get("description"))
+            data.setdefault("summary", fields.get("summary") or "")
+            data.setdefault("description", fields.get("description") or "")
         if isinstance(data, dict) and isinstance(data.get("description"), dict):
             # ADF object slipped through — explicit deferral, no ADF parsing.
             data = dict(data)
