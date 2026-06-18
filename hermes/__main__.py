@@ -3,6 +3,8 @@ import asyncio
 import logging
 import os
 
+import uvicorn
+
 from hermes.llm_client import HermesLLMClient
 
 logging.basicConfig(
@@ -25,15 +27,14 @@ async def _llm_self_test(client: HermesLLMClient) -> None:
         logger.warning("LLM self-test failed: %s", exc)
 
 
-async def main() -> None:
+def main() -> None:
+    """Start Hermes: run LLM self-test then start the FastAPI server."""
     logger.info("Hermes agent started")
     client = HermesLLMClient()
-    await _llm_self_test(client)
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await client.close()
+    asyncio.run(_llm_self_test(client))
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+    uvicorn.run("hermes.server:app", host="0.0.0.0", port=8001, log_level=log_level)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

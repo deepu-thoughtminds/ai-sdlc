@@ -44,6 +44,8 @@ services:
       - mcp-atlassian
     networks:
       - ai-sdlc-net
+    ports:
+      - "8001:8001"
 
   mcp-atlassian:
     image: sooperset/mcp-atlassian:latest

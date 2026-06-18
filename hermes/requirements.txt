@@ -5,3 +5,5 @@ pytest
 pytest-asyncio
 mcp>=1.0
 httpx-sse>=0.4
+fastapi
+uvicorn[standard]
