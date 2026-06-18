@@ -1,18 +1,31 @@
 services:
   freellmapi:
-    # Walking skeleton stub: ghcr.io/codefuse-ai/freellmapi:latest is a private registry
-    # and requires authentication. This local stub serves the same OpenAI-compatible API
-    # on port 11434 so inter-container networking can be verified. Replace this build
-    # with image: ghcr.io/codefuse-ai/freellmapi:latest once registry credentials are
-    # configured (see Phase 1 deviation notes).
     build:
       context: ./freellmapi
       dockerfile: Dockerfile
-    restart: unless-stopped
+    ports:
+      - "3001:3001"
     environment:
-      - FREELLMAPI_MODELS=${FREELLMAPI_MODELS}
+      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY}
+      - PORT=3001
+      - HOST_BIND=0.0.0.0
+    volumes:
+      - freellmapi_data:/app/server/data
     networks:
       - ai-sdlc-net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/ping').then((res) => { if (!res.ok) process.exit(1); }).catch(() => process.exit(1));"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   hermes:
     build:
@@ -59,3 +72,4 @@ networks:
 
 volumes:
   app_data:
+  freellmapi_data:
