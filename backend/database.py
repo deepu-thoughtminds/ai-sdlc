@@ -40,6 +40,28 @@ def init_db() -> None:
 
     Called once at application startup (in main.py startup_event).
     Safe to call multiple times — SQLAlchemy uses CREATE TABLE IF NOT EXISTS.
+
+    IMPORTANT — this does not add columns to existing tables:
+    Base.metadata.create_all() only issues CREATE TABLE for tables that do not
+    yet exist in the database. If a table (e.g. `projects`) was already
+    created by a previous run and a model is later updated to add a new
+    column (e.g. `github_url`), create_all() will NOT retroactively add that
+    column to the pre-existing SQLite file — it silently does nothing for
+    tables that already exist.
+
+    This project intentionally has no migration framework (no Alembic, no
+    migrations/ directory) — this is a dev-only walking-skeleton stage where
+    schema drift is handled by recreating the local database rather than by
+    writing migrations.
+
+    If you see `sqlalchemy.exc.OperationalError: no such column: ...` after
+    pulling a model change, the fix is to drop and recreate the Docker volume
+    holding the SQLite file:
+
+        docker compose down -v && docker compose up --build
+
+    This destroys local dev data only — never run this against a production
+    volume.
     """
     Base.metadata.create_all(engine)
 
