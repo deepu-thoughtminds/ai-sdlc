@@ -3,6 +3,8 @@ import os
 
 from fastapi import FastAPI
 
+from database import init_db
+from routers.projects import router as projects_router
 from routers.webhook import router as webhook_router
 
 logging.basicConfig(
@@ -15,10 +17,12 @@ logger = logging.getLogger("backend")
 app = FastAPI(title="AI-SDLC Jira Backend")
 
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
+app.include_router(projects_router, prefix="/api", tags=["projects"])
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    init_db()
     logger.info("Backend started")
 
 

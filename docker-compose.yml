@@ -32,6 +32,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./backend:/app
+      - app_data:/app/data
     env_file: .env
     depends_on:
       - hermes
@@ -55,3 +56,6 @@ services:
 networks:
   ai-sdlc-net:
     driver: bridge
+
+volumes:
+  app_data:

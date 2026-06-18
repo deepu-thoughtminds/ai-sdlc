@@ -1,9 +1,5 @@
 """TDD tests for the project API endpoints.
 
-TDD RED phase: these tests import from database, models, and routers that do not
-yet exist — they will fail with ImportError until the GREEN phase implements those
-modules.
-
 Tests (8 total):
 1. test_create_project_returns_201 - POST returns 201 with "id" key
 2. test_create_project_response_omits_tokens - POST response has no token fields
@@ -13,32 +9,50 @@ Tests (8 total):
 6. test_get_project_by_id - GET /api/projects/{id} returns correct project_key
 7. test_get_project_by_id_omits_tokens - GET by id response has no token fields
 8. test_create_project_missing_required_field - missing project_key returns 422
+
+Implementation note on SQLite in-memory and connection pools:
+SQLAlchemy's default pool creates multiple connections; each `sqlite:///:memory:`
+connection gets a separate, empty database. To share state across connections we
+use `StaticPool` which forces all connections through the same underlying
+sqlite3 connection object, keeping the in-memory database alive and consistent.
 """
 
 import os
 
-import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-# Set ENCRYPTION_KEY before importing app modules that depend on it.
+# Set env vars BEFORE importing any app modules.
 _TEST_KEY = Fernet.generate_key().decode()
 os.environ["ENCRYPTION_KEY"] = _TEST_KEY
 
-from database import Base, get_db  # noqa: E402
-from main import app  # noqa: E402
-
 # ---------------------------------------------------------------------------
-# In-memory SQLite test DB setup
+# Set up a shared in-memory SQLite engine using StaticPool so all connections
+# (app handler thread + test code) see the same database.
 # ---------------------------------------------------------------------------
 
 TEST_ENGINE = create_engine(
-    "sqlite:///:memory:", connect_args={"check_same_thread": False}
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
+
+# Override DATABASE_URL so that database.py's module-level engine creation
+# also uses in-memory SQLite (it will be a different engine object, but we
+# override get_db to use TestingSession which is bound to TEST_ENGINE).
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+
+# Import app modules after setting env vars.
+from database import Base, get_db  # noqa: E402
+import models.project  # noqa: E402 — ensures Project is registered on Base.metadata
+from main import app  # noqa: E402
+
+# Create tables on our StaticPool-backed engine.
 Base.metadata.create_all(TEST_ENGINE)
+
+TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
 
 
 def override_get_db():
@@ -51,23 +65,32 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
+from fastapi.testclient import TestClient  # noqa: E402
+
 client = TestClient(app)
 
 # ---------------------------------------------------------------------------
-# Shared test payload
+# Helpers
 # ---------------------------------------------------------------------------
 
-VALID_PAYLOAD = {
-    "name": "Test Project",
-    "project_key": "TESTPROJ",
-    "jira_url": "https://test.atlassian.net",
-    "jira_token": "plaintext-jira-token",
-    "github_token": "plaintext-github-token",
-    "confluence_url": "https://test.atlassian.net/wiki",
-    "confluence_token": "plaintext-confluence-token",
-}
-
 TOKEN_FIELD_NAMES = {"jira_token", "github_token", "confluence_token"}
+
+_project_counter = 0
+
+
+def _unique_payload() -> dict:
+    """Return a valid payload with a unique project_key to avoid UNIQUE constraint violations."""
+    global _project_counter
+    _project_counter += 1
+    return {
+        "name": f"Test Project {_project_counter}",
+        "project_key": f"TESTPROJ{_project_counter}",
+        "jira_url": "https://test.atlassian.net",
+        "jira_token": "plaintext-jira-token",
+        "github_token": "plaintext-github-token",
+        "confluence_url": "https://test.atlassian.net/wiki",
+        "confluence_token": "plaintext-confluence-token",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +100,7 @@ TOKEN_FIELD_NAMES = {"jira_token", "github_token", "confluence_token"}
 
 def test_create_project_returns_201() -> None:
     """POST /api/projects with full valid payload must return HTTP 201 and include 'id'."""
-    response = client.post("/api/projects", json=VALID_PAYLOAD)
+    response = client.post("/api/projects", json=_unique_payload())
     assert response.status_code == 201, response.text
     data = response.json()
     assert "id" in data
@@ -85,8 +108,8 @@ def test_create_project_returns_201() -> None:
 
 
 def test_create_project_response_omits_tokens() -> None:
-    """POST response body must NOT contain any plaintext or encrypted token fields."""
-    response = client.post("/api/projects", json=VALID_PAYLOAD)
+    """POST response body must NOT contain any token fields."""
+    response = client.post("/api/projects", json=_unique_payload())
     assert response.status_code == 201, response.text
     data = response.json()
     for token_field in TOKEN_FIELD_NAMES:
@@ -94,8 +117,9 @@ def test_create_project_response_omits_tokens() -> None:
 
 
 def test_create_project_persists_encrypted() -> None:
-    """After POST, the DB row must store an encrypted ciphertext, not the plaintext token."""
-    response = client.post("/api/projects", json=VALID_PAYLOAD)
+    """After POST, the DB row must store Fernet ciphertext, not the plaintext token."""
+    payload = _unique_payload()
+    response = client.post("/api/projects", json=payload)
     assert response.status_code == 201, response.text
     project_id = response.json()["id"]
 
@@ -105,25 +129,27 @@ def test_create_project_persists_encrypted() -> None:
         from models.project import Project
         row = db.get(Project, project_id)
         assert row is not None
-        # Fernet ciphertext starts with "gAAAAA" (base64-encoded token version byte)
-        assert row.jira_token != "plaintext-jira-token"
-        assert "plaintext-jira-token" not in row.jira_token
-        assert row.jira_token.startswith("gAAAAA"), (
-            f"Expected Fernet ciphertext (starts with 'gAAAAA'), got: {row.jira_token[:20]}"
+        stored_token = row.jira_token
+        assert stored_token != payload["jira_token"], "Token must not be stored as plaintext"
+        assert payload["jira_token"] not in stored_token
+        # Fernet ciphertext always starts with "gAAAAA" (base64-encoded version byte)
+        assert stored_token.startswith("gAAAAA"), (
+            f"Expected Fernet ciphertext (starts with 'gAAAAA'), got: {stored_token[:20]!r}"
         )
     finally:
         db.close()
 
 
 def test_list_projects_empty() -> None:
-    """GET /api/projects on a fresh DB (no prior creates in this test) returns 200 and a list."""
-    # Use a brand-new engine so this test is isolated
-    from fastapi.testclient import TestClient as TC
+    """GET /api/projects on a fresh isolated DB returns 200 and an empty list."""
+    # Use a separate StaticPool engine so this test has a clean slate.
     fresh_engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
-    FreshSession = sessionmaker(bind=fresh_engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(fresh_engine)
+    FreshSession = sessionmaker(bind=fresh_engine, autocommit=False, autoflush=False)
 
     def fresh_get_db():
         db = FreshSession()
@@ -133,6 +159,7 @@ def test_list_projects_empty() -> None:
             db.close()
 
     app.dependency_overrides[get_db] = fresh_get_db
+    from fastapi.testclient import TestClient as TC
     fresh_client = TC(app)
     response = fresh_client.get("/api/projects")
     app.dependency_overrides[get_db] = override_get_db  # restore
@@ -142,31 +169,14 @@ def test_list_projects_empty() -> None:
 
 
 def test_list_projects_after_create() -> None:
-    """After POST, GET /api/projects returns a list with at least 1 item containing 'id' and 'project_key'."""
-    # Use a fresh isolated DB for this test
-    isolated_engine = create_engine(
-        "sqlite:///:memory:", connect_args={"check_same_thread": False}
-    )
-    IsolatedSession = sessionmaker(bind=isolated_engine, autocommit=False, autoflush=False)
-    Base.metadata.create_all(isolated_engine)
+    """After POST, GET /api/projects returns a list containing 'id' and 'project_key'."""
+    payload = _unique_payload()
+    create_resp = client.post("/api/projects", json=payload)
+    assert create_resp.status_code == 201, create_resp.text
 
-    def isolated_get_db():
-        db = IsolatedSession()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    from fastapi.testclient import TestClient as TC
-    app.dependency_overrides[get_db] = isolated_get_db
-    isolated_client = TC(app)
-
-    isolated_client.post("/api/projects", json=VALID_PAYLOAD)
-    response = isolated_client.get("/api/projects")
-    app.dependency_overrides[get_db] = override_get_db  # restore
-
-    assert response.status_code == 200, response.text
-    items = response.json()
+    list_resp = client.get("/api/projects")
+    assert list_resp.status_code == 200, list_resp.text
+    items = list_resp.json()
     assert len(items) >= 1
     assert "id" in items[0]
     assert "project_key" in items[0]
@@ -174,20 +184,22 @@ def test_list_projects_after_create() -> None:
 
 def test_get_project_by_id() -> None:
     """POST then GET /api/projects/{id} returns 200 with the correct project_key."""
-    post_response = client.post("/api/projects", json=VALID_PAYLOAD)
+    payload = _unique_payload()
+    post_response = client.post("/api/projects", json=payload)
     assert post_response.status_code == 201
     project_id = post_response.json()["id"]
 
     get_response = client.get(f"/api/projects/{project_id}")
     assert get_response.status_code == 200, get_response.text
     data = get_response.json()
-    assert data["project_key"] == VALID_PAYLOAD["project_key"]
+    assert data["project_key"] == payload["project_key"]
     assert data["id"] == project_id
 
 
 def test_get_project_by_id_omits_tokens() -> None:
     """GET /api/projects/{id} response must NOT contain token fields."""
-    post_response = client.post("/api/projects", json=VALID_PAYLOAD)
+    payload = _unique_payload()
+    post_response = client.post("/api/projects", json=payload)
     assert post_response.status_code == 201
     project_id = post_response.json()["id"]
 
@@ -200,6 +212,7 @@ def test_get_project_by_id_omits_tokens() -> None:
 
 def test_create_project_missing_required_field() -> None:
     """POST without required field 'project_key' must return 422 Unprocessable Entity."""
-    payload_without_key = {k: v for k, v in VALID_PAYLOAD.items() if k != "project_key"}
-    response = client.post("/api/projects", json=payload_without_key)
+    payload = _unique_payload()
+    del payload["project_key"]
+    response = client.post("/api/projects", json=payload)
     assert response.status_code == 422, response.text
