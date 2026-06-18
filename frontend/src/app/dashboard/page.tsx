@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { getDashboard, ProjectWithTickets, TicketStatusPublic } from "@/lib/api"
+import { getDashboard, ProjectWithTickets, TicketStatusPublic } from "../../lib/api"
 
 const STAGE_COLORS: Record<string, string> = {
   description: "#cfe2ff",
