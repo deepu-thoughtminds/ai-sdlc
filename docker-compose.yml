@@ -34,6 +34,10 @@ services:
     volumes:
       - ./hermes:/app/hermes
     env_file: .env
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
     depends_on:
       - freellmapi
     networks:
