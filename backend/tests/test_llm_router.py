@@ -4,8 +4,9 @@ TDD RED phase: These tests specify routing behaviour (heavy vs light) and
 verify the HEAVY_STAGES constant. httpx.post is mocked to prevent real
 network calls during testing.
 
-Updated in 03-01: heavy stages now call /api/chat (Ollama native format)
-instead of /v1/chat/completions (OpenAI-compat format). Mock shapes updated.
+Updated in 05-02: heavy stages now call /v1/chat/completions (OpenAI-compat
+format) with Bearer auth, instead of /api/chat (Ollama native format).
+Mock shapes updated to OpenAI response format.
 """
 
 import pytest
@@ -14,12 +15,11 @@ from unittest.mock import MagicMock, patch
 from services.llm_router import HEAVY_STAGES, LLMResponse, route_request
 
 
-def _make_ollama_mock(content="test response", model="llama3"):
-    """Helper: create a mock httpx response matching Ollama /api/chat shape."""
+def _make_openai_mock(content="test response", model="auto"):
+    """Helper: create a mock httpx response matching OpenAI /v1/chat/completions shape."""
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
-        "model": model,
-        "message": {"role": "assistant", "content": content},
+        "choices": [{"message": {"role": "assistant", "content": content}}],
     }
     mock_resp.raise_for_status.return_value = None
     return mock_resp
@@ -27,7 +27,7 @@ def _make_ollama_mock(content="test response", model="llama3"):
 
 def test_architecture_stage_routes_to_freellmapi():
     """Test 1: route_request('architecture', ...) -> provider='freellmapi'."""
-    with patch("httpx.post", return_value=_make_ollama_mock()) as mock_post:
+    with patch("httpx.post", return_value=_make_openai_mock()) as mock_post:
         result = route_request("architecture", "design a system")
     assert isinstance(result, LLMResponse)
     assert result.provider == "freellmapi"
@@ -36,7 +36,7 @@ def test_architecture_stage_routes_to_freellmapi():
 
 def test_codegen_stage_routes_to_freellmapi():
     """Test 2: route_request('codegen', ...) -> provider='freellmapi'."""
-    with patch("httpx.post", return_value=_make_ollama_mock()) as mock_post:
+    with patch("httpx.post", return_value=_make_openai_mock()) as mock_post:
         result = route_request("codegen", "write a function")
     assert result.provider == "freellmapi"
     mock_post.assert_called_once()
@@ -44,7 +44,7 @@ def test_codegen_stage_routes_to_freellmapi():
 
 def test_testgen_stage_routes_to_freellmapi():
     """Test 3: route_request('testgen', ...) -> provider='freellmapi'."""
-    with patch("httpx.post", return_value=_make_ollama_mock()) as mock_post:
+    with patch("httpx.post", return_value=_make_openai_mock()) as mock_post:
         result = route_request("testgen", "write tests for this")
     assert result.provider == "freellmapi"
     mock_post.assert_called_once()
@@ -72,7 +72,7 @@ def test_describe_stage_in_heavy_stages():
 
 def test_describe_routes_to_freellmapi():
     """Test 7 (03-01): route_request('describe', ...) -> provider='freellmapi', calls httpx.post."""
-    with patch("httpx.post", return_value=_make_ollama_mock(content="elaborated")) as mock_post:
+    with patch("httpx.post", return_value=_make_openai_mock(content="elaborated")) as mock_post:
         result = route_request("describe", "test prompt")
     assert isinstance(result, LLMResponse)
     assert result.provider == "freellmapi"
@@ -80,13 +80,13 @@ def test_describe_routes_to_freellmapi():
     mock_post.assert_called_once()
 
 
-def test_heavy_stage_uses_ollama_api_chat_path():
-    """Test 8 (03-01): httpx.post URL ends with '/api/chat' (not '/v1/chat/completions')."""
-    with patch("httpx.post", return_value=_make_ollama_mock()) as mock_post:
+def test_heavy_stage_uses_openai_completions_path():
+    """Test 8 (05-02): httpx.post URL ends with '/v1/chat/completions' (OpenAI format)."""
+    with patch("httpx.post", return_value=_make_openai_mock()) as mock_post:
         route_request("describe", "test prompt")
 
     call_args = mock_post.call_args
     posted_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-    assert posted_url.endswith("/api/chat"), (
-        f"Expected URL ending with '/api/chat', got: '{posted_url}'"
+    assert posted_url.endswith("/v1/chat/completions"), (
+        f"Expected URL ending with '/v1/chat/completions', got: '{posted_url}'"
     )
