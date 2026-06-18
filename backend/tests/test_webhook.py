@@ -408,3 +408,42 @@ async def test_architecture_mention_schedules_pipeline():
     assert response.status_code == 200
     # asyncio.create_task should have been called exactly once
     assert len(captured_coros) == 1
+
+
+# ---------------------------------------------------------------------------
+# New test (Quick 260618-n0u): real Jira Cloud / Jira Automation payload shape
+# ---------------------------------------------------------------------------
+
+
+NATIVE_JIRA_PAYLOAD = {
+    "webhookEvent": "comment_created",
+    "issue": {
+        "id": "10001",
+        "key": "PROJ-1",
+        "fields": {"summary": "Native shaped issue", "description": "Plain text description"},
+    },
+    "comment": {
+        "id": "30001",
+        "body": "Just a plain comment, no mention",
+        "author": {"accountId": "acc-123", "displayName": "Alice Architect"},
+    },
+    "timestamp": 1718000030,
+}
+
+
+async def test_native_jira_shaped_payload_returns_200():
+    """Real Jira Cloud / Jira Automation 'issue data' payload shape (webhookEvent,
+    issue.fields.summary, comment.author object) must return 200, not 422.
+    """
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhook/jira-comment", json=NATIVE_JIRA_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "received"
