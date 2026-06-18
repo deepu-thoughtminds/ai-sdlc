@@ -29,8 +29,6 @@ from services.confluence_client import ConfluenceClient  # noqa: E402
 CONFLUENCE_BASE = "https://confluence.example.com"
 CONF_TOKEN = "confluence-token-plain"
 
-pytestmark = pytest.mark.asyncio
-
 
 def _make_client() -> ConfluenceClient:
     return ConfluenceClient(base_url=CONFLUENCE_BASE, token=CONF_TOKEN)
@@ -56,6 +54,7 @@ def _make_mock_project():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 @respx.mock
 async def test_create_page_posts_correct_payload():
     """Mock POST to Confluence returns 200; assert body payload and return dict."""
@@ -84,6 +83,7 @@ async def test_create_page_posts_correct_payload():
     assert result["id"] == "12345"
 
 
+@pytest.mark.asyncio
 @respx.mock
 async def test_create_page_sets_basic_auth():
     """Assert Authorization header uses Basic auth encoding of (':token')."""
@@ -109,12 +109,16 @@ async def test_create_page_sets_basic_auth():
 
 
 def test_get_page_url_constructs_correctly():
-    """get_page_url returns correct URL without making a network call."""
+    """get_page_url returns correct URL without making a network call.
+
+    This is a synchronous test — get_page_url does not make any network calls.
+    """
     client = _make_client()
     url = client.get_page_url("PROJ", "12345")
     assert url == f"{CONFLUENCE_BASE}/wiki/spaces/PROJ/pages/12345"
 
 
+@pytest.mark.asyncio
 @respx.mock
 async def test_publish_architecture_returns_page_url():
     """Mock POST returns page id '99'; publish_architecture returns URL containing '99'."""
@@ -138,6 +142,7 @@ async def test_publish_architecture_returns_page_url():
     assert "99" in result
 
 
+@pytest.mark.asyncio
 @respx.mock
 async def test_publish_architecture_graceful_on_failure():
     """Mock POST returns 500; publish_architecture returns '' (no exception raised)."""
