@@ -39,6 +39,8 @@ class Project(Base):
     project_key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     jira_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     confluence_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    # Optional GitHub repository URL for codebase context (graphify_service)
+    github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Stored as Fernet ciphertext — see services/crypto.py
     jira_token: Mapped[str] = mapped_column(String(2000), nullable=False)
     github_token: Mapped[str] = mapped_column(String(2000), nullable=False)
