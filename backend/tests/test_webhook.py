@@ -1,83 +1,174 @@
 """Tests for POST /webhook/jira-comment endpoint.
 
-TDD RED phase: These tests are written before the implementation exists.
-All tests should fail until models/webhook.py, routers/webhook.py, and
-main.py are updated.
+Tests (8 total):
+Existing (4, kept intact):
+1. test_valid_webhook_returns_200 - returns 200 + status received (project not found → ignored is also 200/received)
+2. test_missing_required_field_returns_422 - 422 on missing required field
+3. test_no_mention_returns_ignored - no @hermes mention → action=ignored
+4. test_hermes_mention_returns_action - @hermes describe with matching project → action=describe
+
+New (4):
+5. test_describe_mention_creates_pipeline_state - describe → action=describe and PipelineState row created
+6. test_assign_mention_calls_assign_pipeline - assign → action=assign
+7. test_approval_comment_triggers_approval - LGTM comment with awaiting_approval row → action=approval_applied
+8. test_unknown_project_returns_ignored - unknown project key → action=ignored, reason=project_not_found
+
+Uses StaticPool + same dependency override pattern from test_dashboard.py.
+Pipeline service calls are mocked at 'routers.webhook.*' import path.
 """
+
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from cryptography.fernet import Fernet
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+# Set env vars BEFORE importing any app modules.
+_TEST_KEY = Fernet.generate_key().decode()
+os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+
+# ---------------------------------------------------------------------------
+# In-memory SQLite with StaticPool — all connections share the same DB.
+# ---------------------------------------------------------------------------
+
+TEST_ENGINE = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+
+from database import Base, get_db  # noqa: E402
+import models.project  # noqa: E402
+import models.ticket_status  # noqa: E402
+import models.pipeline_state  # noqa: E402
+from models.project import Project  # noqa: E402
+from models.pipeline_state import PipelineState  # noqa: E402
+from services.crypto import encrypt_credential  # noqa: E402
+from main import app  # noqa: E402
+
+Base.metadata.create_all(TEST_ENGINE)
+TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
+
+
+def override_get_db():
+    db = TestingSession()
+    try:
+        yield db
+    finally:
+        db.close()
+
 
 pytestmark = pytest.mark.asyncio
 
-# Sample valid JiraCommentEvent payload
-VALID_PAYLOAD = {
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_tables():
+    """Install webhook DB override, drop/recreate tables, restore prior override after.
+
+    The module-level override is NOT installed at import time to avoid
+    contaminating other test modules that load before test_webhook runs.
+    Instead, each test installs and tears down the override via this fixture.
+    """
+    prior_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    Base.metadata.drop_all(TEST_ENGINE)
+    Base.metadata.create_all(TEST_ENGINE)
+    yield
+    Base.metadata.drop_all(TEST_ENGINE)
+    Base.metadata.create_all(TEST_ENGINE)
+    if prior_override is not None:
+        app.dependency_overrides[get_db] = prior_override
+    else:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def _create_project(db, key: str = "PROJ") -> Project:
+    """Insert a Project row and return the ORM object."""
+    project = Project(
+        name="Test Project",
+        project_key=key,
+        jira_url="https://test.atlassian.net",
+        confluence_url="https://test.atlassian.net/wiki",
+        jira_token=encrypt_credential("fake-jira-token"),
+        github_token=encrypt_credential("fake-github-token"),
+        confluence_token=encrypt_credential("fake-confluence-token"),
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+# ---------------------------------------------------------------------------
+# Shared payloads
+# ---------------------------------------------------------------------------
+
+VALID_DESCRIBE_PAYLOAD = {
     "webhook_event": "comment_created",
-    "issue": {
-        "id": "10001",
-        "key": "PROJ-1",
-        "summary": "Feature X",
-    },
-    "comment": {
-        "id": "20001",
-        "body": "@hermes describe",
-        "author": "alice",
-    },
+    "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+    "comment": {"id": "20001", "body": "@hermes describe", "author": "alice"},
     "timestamp": 1718000000,
 }
 
 NO_MENTION_PAYLOAD = {
     "webhook_event": "comment_created",
-    "issue": {
-        "id": "10001",
-        "key": "PROJ-2",
-        "summary": "Feature Y",
-    },
-    "comment": {
-        "id": "20002",
-        "body": "Nice work team!",
-        "author": "bob",
-    },
+    "issue": {"id": "10001", "key": "PROJ-2", "summary": "Feature Y"},
+    "comment": {"id": "20002", "body": "Nice work team!", "author": "bob"},
     "timestamp": 1718000001,
 }
 
 MISSING_FIELD_PAYLOAD = {
-    # Missing 'issue' — should trigger 422 Unprocessable Entity
     "webhook_event": "comment_created",
-    "comment": {
-        "id": "20003",
-        "body": "@hermes describe",
-        "author": "carol",
-    },
+    "comment": {"id": "20003", "body": "@hermes describe", "author": "carol"},
     "timestamp": 1718000002,
 }
 
+UNKNOWN_PROJECT_PAYLOAD = {
+    "webhook_event": "comment_created",
+    "issue": {"id": "99999", "key": "UNKNOWN-1", "summary": "Unknown"},
+    "comment": {"id": "20099", "body": "@hermes describe", "author": "dave"},
+    "timestamp": 1718000010,
+}
 
-@pytest.fixture
-def app():
-    from main import app as _app
-    return _app
+# ---------------------------------------------------------------------------
+# Existing tests (preserved, adapted for project-lookup logic)
+# ---------------------------------------------------------------------------
 
 
-async def test_valid_webhook_returns_200(app):
-    """Test 1: POST with valid JiraCommentEvent returns HTTP 200 and status received."""
+async def test_valid_webhook_returns_200():
+    """Test 1: POST with valid JiraCommentEvent returns HTTP 200 and status received.
+
+    With no project in DB, the handler returns action=ignored (still 200 + status=received).
+    """
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/webhook/jira-comment", json=VALID_PAYLOAD)
+        response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "received"
 
 
-async def test_missing_required_field_returns_422(app):
+async def test_missing_required_field_returns_422():
     """Test 2: POST with missing required field returns HTTP 422."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhook/jira-comment", json=MISSING_FIELD_PAYLOAD)
     assert response.status_code == 422
 
 
-async def test_no_mention_returns_ignored(app):
-    """Test 3: POST where comment body has no @hermes mention returns action: ignored."""
+async def test_no_mention_returns_ignored():
+    """Test 3: POST where comment body has no @hermes mention returns action: ignored.
+
+    No project in DB for PROJ-2 → returns project_not_found ignored.
+    """
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhook/jira-comment", json=NO_MENTION_PAYLOAD)
     assert response.status_code == 200
@@ -86,12 +177,161 @@ async def test_no_mention_returns_ignored(app):
     assert body.get("action") == "ignored"
 
 
-async def test_hermes_mention_returns_non_ignored_action(app):
-    """Test 4: POST where comment body contains @hermes describe returns action != ignored."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/webhook/jira-comment", json=VALID_PAYLOAD)
+async def test_hermes_mention_returns_action():
+    """Test 4: POST with @hermes describe and a matching project returns action=describe.
+
+    Creates a PROJ project in the test DB and mocks describe_pipeline.run and JiraClient
+    so the handler completes without real API calls.
+    """
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
+         patch("routers.webhook.JiraClient") as MockJiraClient:
+        mock_run.return_value = "Draft text."
+        mock_jira = MagicMock()
+        mock_jira.add_comment.return_value = {}
+        MockJiraClient.return_value = mock_jira
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
+
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "received"
-    assert body.get("action") != "ignored"
-    assert "routed_to" in body
+    assert body.get("action") == "describe"
+
+
+# ---------------------------------------------------------------------------
+# New integration tests (Task 2)
+# ---------------------------------------------------------------------------
+
+
+async def test_describe_mention_creates_pipeline_state():
+    """Test 5: POST with '@hermes describe' and matching project returns action=describe
+    and creates a PipelineState row with status='awaiting_approval'.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        project_id = project.id
+    finally:
+        db.close()
+
+    with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
+         patch("routers.webhook.JiraClient") as MockJiraClient:
+        mock_run.return_value = "Draft text."
+        mock_jira = MagicMock()
+        mock_jira.add_comment.return_value = {}
+        MockJiraClient.return_value = mock_jira
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "describe"
+
+    # Verify PipelineState row was created in DB
+    check_db = TestingSession()
+    try:
+        row = (
+            check_db.query(PipelineState)
+            .filter(
+                PipelineState.project_id == project_id,
+                PipelineState.ticket_key == "PROJ-1",
+                PipelineState.stage == "describe",
+            )
+            .first()
+        )
+        assert row is not None, "PipelineState row should exist"
+        assert row.status == "awaiting_approval"
+        assert row.draft_content == "Draft text."
+    finally:
+        check_db.close()
+
+
+async def test_assign_mention_calls_assign_pipeline():
+    """Test 6: POST with '@hermes assign @jane.smith' returns action=assign."""
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    assign_payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+        "comment": {"id": "20001", "body": "@hermes assign @jane.smith", "author": "alice"},
+        "timestamp": 1718000000,
+    }
+
+    with patch("routers.webhook.assign_pipeline.run", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = None
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=assign_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "assign"
+    mock_run.assert_called_once()
+
+
+async def test_approval_comment_triggers_approval():
+    """Test 7: POST with plain 'LGTM' comment and existing awaiting_approval row
+    returns action=approval_applied.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+
+        # Insert awaiting_approval PipelineState row
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="describe",
+            status="awaiting_approval",
+            draft_content="Elaborated description.",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    approval_payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+        "comment": {"id": "20050", "body": "LGTM", "author": "alice"},
+        "timestamp": 1718000005,
+    }
+
+    with patch(
+        "routers.webhook.approval_detector.detect_and_apply_approval",
+        new_callable=AsyncMock,
+    ) as mock_detect:
+        mock_detect.return_value = True
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=approval_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "approval_applied"
+    mock_detect.assert_called_once()
+
+
+async def test_unknown_project_returns_ignored():
+    """Test 8: POST with issue key 'UNKNOWN-1' where no project with key 'UNKNOWN'
+    exists in DB returns action=ignored and reason=project_not_found.
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhook/jira-comment", json=UNKNOWN_PROJECT_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "ignored"
+    assert body.get("reason") == "project_not_found"
