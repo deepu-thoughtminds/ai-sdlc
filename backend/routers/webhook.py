@@ -3,8 +3,12 @@
 Receives POST /webhook/jira-comment from Jira Cloud, validates the webhook
 secret header, and orchestrates the full SDLC pipeline:
   - @hermes describe → describe_pipeline → post draft comment → PipelineState awaiting_approval
+  - @hermes architecture → architecture_pipeline (background task) → PipelineState awaiting_approval
   - @hermes assign @<name> → assign_pipeline → lookup_user + assign_issue + confirmation
-  - Plain comment with approval keyword → approval_detector → update Jira description
+    ASGN-02: @hermes assign @developer-name (architect → dev)
+    ASGN-03: @hermes assign @qa-name (developer → QA)
+    Both are satisfied by the existing stage-agnostic assign_pipeline.run() above.
+  - Plain comment with approval keyword → approval_detector → update Jira description / post arch comment
 
 Threat mitigations applied:
 - T-02-01: JIRA_WEBHOOK_SECRET header validation — returns 401 on mismatch.
@@ -26,7 +30,7 @@ from database import get_db
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent
-from services import approval_detector, assign_pipeline, describe_pipeline
+from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline
 from services.crypto import decrypt_credential
 from services.jira_client import JiraClient
 from services.llm_router import route_request
@@ -70,9 +74,10 @@ async def handle_jira_comment(
     3. If no project: return {"status": "received", "action": "ignored", "reason": "project_not_found"}.
     4. Parse @hermes mention from comment body.
     5a. stage == "describe": run describe_pipeline, post draft comment, save PipelineState.
-    5b. stage == "assign": run assign_pipeline.
-    5c. No mention: check for approval keyword; call approval_detector.
-    5d. Other known stages: route via llm_router (for future phases / backward compat).
+    5b. stage == "architecture": schedule architecture_pipeline as asyncio background task.
+    5c. stage == "assign": run assign_pipeline (ASGN-02 + ASGN-03 — stage-agnostic).
+    5d. No mention: check for approval keyword; call approval_detector.
+    5e. Other known stages: route via llm_router (for future phases / backward compat).
 
     T-03-13: project_key parsing uses rsplit("-", 1) — bounded, safe operation.
     """
@@ -140,13 +145,34 @@ async def handle_jira_comment(
         )
         return {"status": "received", "action": "describe", "ticket": event.issue.key}
 
-    # Step 4b: Handle 'assign' stage
+    # Step 4b: Handle 'architecture' stage (background task — LLM call is heavy)
+    elif mention_result is not None and mention_result.stage == "architecture":
+        issue_summary = event.issue.summary
+        issue_description = getattr(event.issue, "description", "") or ""
+        asyncio.create_task(
+            architecture_pipeline.run(
+                project, event.issue.key, issue_summary, issue_description, db
+            )
+        )
+        logger.info(
+            "Architecture pipeline scheduled for issue %s", event.issue.key
+        )
+        return {
+            "status": "received",
+            "action": "architecture",
+            "routed_to": "freellmapi",
+        }
+
+    # Step 4c: Handle 'assign' stage
+    # ASGN-02: @hermes assign @developer-name (architect → dev)
+    # ASGN-03: @hermes assign @qa-name (developer → QA)
+    # Both are satisfied by the existing stage-agnostic assign_pipeline.run() below.
     elif mention_result is not None and mention_result.stage == "assign":
         await assign_pipeline.run(event, project, mention_result)
         logger.info("Assign pipeline complete for issue %s", event.issue.key)
         return {"status": "received", "action": "assign", "ticket": event.issue.key}
 
-    # Step 4c: No recognized mention — check for approval keyword
+    # Step 4d: No recognized mention — check for approval keyword
     elif mention_result is None:
         applied = await approval_detector.detect_and_apply_approval(event, db, project)
         if applied:
@@ -157,7 +183,7 @@ async def handle_jira_comment(
             }
         return {"status": "received", "action": "ignored"}
 
-    # Step 4d: Other stages (architecture, codegen, testgen — future phases)
+    # Step 4e: Other stages (codegen, testgen — future phases)
     # Keep llm_router routing for backward compatibility with existing tests
     else:
         route_result = route_request(mention_result.stage, event.comment.body)

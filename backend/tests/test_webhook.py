@@ -1,22 +1,27 @@
 """Tests for POST /webhook/jira-comment endpoint.
 
-Tests (8 total):
+Tests (10 total):
 Existing (4, kept intact):
 1. test_valid_webhook_returns_200 - returns 200 + status received (project not found → ignored is also 200/received)
 2. test_missing_required_field_returns_422 - 422 on missing required field
 3. test_no_mention_returns_ignored - no @hermes mention → action=ignored
 4. test_hermes_mention_returns_action - @hermes describe with matching project → action=describe
 
-New (4):
+New (4 from Phase 3):
 5. test_describe_mention_creates_pipeline_state - describe → action=describe and PipelineState row created
 6. test_assign_mention_calls_assign_pipeline - assign → action=assign
 7. test_approval_comment_triggers_approval - LGTM comment with awaiting_approval row → action=approval_applied
 8. test_unknown_project_returns_ignored - unknown project key → action=ignored, reason=project_not_found
 
+New (2 from Phase 4-02):
+9. test_architecture_mention_returns_action - @hermes architecture → action=architecture, routed_to=freellmapi
+10. test_architecture_mention_schedules_pipeline - @hermes architecture for known project → asyncio.create_task called
+
 Uses StaticPool + same dependency override pattern from test_dashboard.py.
 Pipeline service calls are mocked at 'routers.webhook.*' import path.
 """
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -335,3 +340,71 @@ async def test_unknown_project_returns_ignored():
     body = response.json()
     assert body["action"] == "ignored"
     assert body.get("reason") == "project_not_found"
+
+
+# ---------------------------------------------------------------------------
+# New tests (Phase 04-02): architecture routing
+# ---------------------------------------------------------------------------
+
+
+ARCHITECTURE_PAYLOAD = {
+    "webhook_event": "comment_created",
+    "issue": {"id": "10001", "key": "PROJ-1", "summary": "New feature"},
+    "comment": {"id": "20001", "body": "@hermes architecture", "author": "architect"},
+    "timestamp": 1718000020,
+}
+
+
+async def test_architecture_mention_returns_action():
+    """Test 9: POST with '@hermes architecture' and a matching project returns
+    status=received, action=architecture, routed_to=freellmapi.
+    """
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    # Patch asyncio.create_task to prevent real background coroutine from running.
+    # Patch architecture_pipeline.run to return a completed coroutine (not AsyncMock,
+    # which creates unawaited coroutine warnings when create_task is also mocked).
+    with patch("routers.webhook.asyncio.create_task") as mock_create_task:
+        mock_create_task.return_value = None
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "received"
+    assert body["action"] == "architecture"
+    assert body["routed_to"] == "freellmapi"
+
+
+async def test_architecture_mention_schedules_pipeline():
+    """Test 10: POST with '@hermes architecture' for a known project calls
+    asyncio.create_task once to schedule architecture_pipeline.run.
+    """
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    # Patch asyncio.create_task to prevent background execution in test context.
+    # asyncio.create_task receives a coroutine from architecture_pipeline.run();
+    # we close it immediately to avoid "coroutine was never awaited" warnings.
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()  # prevent "never awaited" ResourceWarning
+        return None
+
+    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
+
+    assert response.status_code == 200
+    # asyncio.create_task should have been called exactly once
+    assert len(captured_coros) == 1
