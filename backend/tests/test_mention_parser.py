@@ -14,7 +14,7 @@ def test_hermes_describe_returns_mention_result():
     result = parse_mention("@jarvis describe")
     assert result is not None
     assert isinstance(result, MentionResult)
-    assert result.mention_target == "hermes"
+    assert result.mention_target == "jarvis"
     assert result.stage == "describe"
 
 
@@ -22,7 +22,7 @@ def test_hermes_architecture_returns_mention_result():
     """Test 2: @jarvis architecture -> MentionResult(mention_target='jarvis', stage='architecture')."""
     result = parse_mention("@jarvis architecture")
     assert result is not None
-    assert result.mention_target == "hermes"
+    assert result.mention_target == "jarvis"
     assert result.stage == "architecture"
 
 
@@ -36,7 +36,7 @@ def test_hermes_assign_with_extra_token():
     """Test 4: @jarvis assign @alice -> MentionResult with extra='@alice'."""
     result = parse_mention("@jarvis assign @alice")
     assert result is not None
-    assert result.mention_target == "hermes"
+    assert result.mention_target == "jarvis"
     assert result.stage == "assign"
     assert result.extra == "@alice"
 
