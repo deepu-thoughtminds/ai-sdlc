@@ -1,57 +1,55 @@
-"""Async Confluence REST API client.
+"""Async Confluence publishing client — routes through hermes/MCP.
 
-Publishes architecture pages to Confluence Cloud.
-Auth: Basic auth with ('', confluence_token) — Confluence Cloud API tokens do not
-require an email prefix for token-only auth.
+Publishes architecture pages to Confluence Cloud via the hermes internal
+HTTP server (which proxies through mcp-atlassian via MCP tool calls).
 
 Threat mitigations:
-  T-04-02: confluence_token decrypted at call time via decrypt_credential; never
-           passed to logger; _auth_header built and held in memory only.
-  T-04-03: timeout=30.0s on AsyncClient; all exceptions caught in publish_architecture
-           returning "" (no crash).
-  T-04-05: confluence_token is decrypted at runtime; never logged.
-  T-04-06: Basic auth uses ('', token) — Confluence API token auth pattern;
-           base64 encoding is standard; no email required for token-only API access.
+  T-04-02: confluence_token decrypted at call time via decrypt_credential in the
+           module-level publish_architecture wrapper; passed only as a plain function
+           argument to hermes_client, never persisted or logged.
+  T-04-03: publish_architecture instance method retains its existing try/except
+           wrapping all three transport calls; any exception (including hermes 500s,
+           httpx timeouts) results in "" return, never raises to caller.
+  T-04-05: token never logged; passed only as a plain function argument to
+           hermes_client functions, never persisted or logged at any layer.
+  T-12-01: _escape() HTML-escaping of LLM-generated text remains entirely
+           unchanged — runs before body_html is passed to create_page/update_page.
 """
 
-import base64
 import html
 import logging
+import os
 from typing import Any
-
-import httpx
 
 from models.project import Project
 from services.crypto import decrypt_credential
+from services.hermes_client import (
+    create_confluence_page,
+    find_confluence_page,
+    update_confluence_page,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ConfluenceClient:
-    """Async Confluence REST API client.
+    """Confluence publishing client that delegates transport to hermes_client.
 
-    Uses httpx.AsyncClient for all HTTP calls. Instantiated with a decrypted
-    token — the caller is responsible for decrypting before construction.
+    Instantiated with decrypted credentials — the caller is responsible for
+    decrypting before construction.
 
     Args:
         base_url: Confluence instance base URL (e.g. "https://org.atlassian.net").
         token: Decrypted Confluence API token (plaintext). T-04-02: never logged.
+        email: Confluence account email. Defaults to "" (sourced from env at
+               module-level publish_architecture wrapper).
     """
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, token: str, email: str = "") -> None:
         self.base_url = base_url.rstrip("/")
-        # T-04-02 / T-04-06: Basic auth with empty username for API token
-        # Never log the token value.
-        raw = f":{token}".encode()
-        self._auth_header = "Basic " + base64.b64encode(raw).decode()
-
-    def _headers(self) -> dict[str, str]:
-        """Return standard Confluence API request headers including auth."""
-        return {
-            "Authorization": self._auth_header,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        # T-04-02: token stored as plain attribute; never logged.
+        self.token = token
+        self.email = email
 
     async def create_page(
         self,
@@ -60,74 +58,37 @@ class ConfluenceClient:
         body_html: str,
         parent_id: str | None = None,
     ) -> dict[str, Any]:
-        """POST /wiki/rest/api/content — create a new Confluence page.
+        """Create a new Confluence page via hermes_client (MCP tool confluence_create_page).
 
         Args:
             space_key: Confluence space key (e.g. "PROJ").
             title: Page title.
             body_html: HTML content for the page body (storage format).
             parent_id: Optional parent page ID for nesting.
+                       NOTE: confluence_create_page MCP tool does not support a
+                       parent_id arg in this iteration; parameter kept for
+                       signature compatibility but not passed through.
 
         Returns:
-            Response dict from Confluence API (includes 'id' and '_links').
-
-        Raises:
-            httpx.HTTPStatusError: on non-2xx response.
+            Response dict (includes "id").
         """
-        payload: dict[str, Any] = {
-            "type": "page",
-            "title": title,
-            "space": {"key": space_key},
-            "body": {
-                "storage": {
-                    "value": body_html,
-                    "representation": "storage",
-                }
-            },
-        }
-        if parent_id:
-            payload["ancestors"] = [{"id": parent_id}]
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{self.base_url}/wiki/rest/api/content",
-                headers=self._headers(),
-                json=payload,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return await create_confluence_page(
+            self.base_url, self.email, self.token, space_key, title, body_html
+        )
 
     async def find_page(self, space_key: str, title: str) -> dict[str, Any] | None:
-        """GET /wiki/rest/api/content/search — find an existing page by exact title.
-
-        Uses a CQL query scoped to space_key + title + type=page, with
-        expand=version so the caller can read the current version number
-        without a second request. limit=1 bounds the response (T-12-04).
+        """Search for a Confluence page by exact title via hermes_client.
 
         Args:
             space_key: Confluence space key.
             title: Exact page title to search for.
 
         Returns:
-            The first matching result dict (includes "id" and "version.number")
-            if found, else None.
-
-        Raises:
-            httpx.HTTPStatusError: on non-2xx response (caller wraps in try/except).
+            The first matching result dict if found, else None.
         """
-        cql = f'space="{space_key}" AND title="{title}" AND type=page'
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                f"{self.base_url}/wiki/rest/api/content/search",
-                headers=self._headers(),
-                params={"cql": cql, "limit": 1, "expand": "version"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            results = data.get("results", [])
-            if results:
-                return results[0]
-            return None
+        return await find_confluence_page(
+            self.base_url, self.email, self.token, space_key, title
+        )
 
     async def update_page(
         self,
@@ -137,43 +98,23 @@ class ConfluenceClient:
         body_html: str,
         version: int,
     ) -> dict[str, Any]:
-        """PUT /wiki/rest/api/content/{page_id} — update an existing page in place.
+        """Update an existing Confluence page via hermes_client (MCP tool confluence_update_page).
 
         Args:
             page_id: Confluence page id to update.
             space_key: Confluence space key.
+                       NOTE: confluence_update_page MCP tool does not use space_key;
+                       parameter kept for signature compatibility but not passed through.
             title: Page title.
             body_html: New HTML content for the page body (storage format).
             version: New version number (must be current version + 1).
 
         Returns:
-            Response dict from Confluence API.
-
-        Raises:
-            httpx.HTTPStatusError: on non-2xx response.
+            Response dict from the MCP tool.
         """
-        payload: dict[str, Any] = {
-            "id": page_id,
-            "type": "page",
-            "title": title,
-            "space": {"key": space_key},
-            "body": {
-                "storage": {
-                    "value": body_html,
-                    "representation": "storage",
-                }
-            },
-            "version": {"number": version},
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.put(
-                f"{self.base_url}/wiki/rest/api/content/{page_id}",
-                headers=self._headers(),
-                json=payload,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return await update_confluence_page(
+            self.base_url, self.email, self.token, page_id, title, body_html, version
+        )
 
     def get_page_url(self, space_key: str, page_id: str) -> str:
         """Construct the Confluence page URL from base_url, space_key, and page_id.
@@ -415,7 +356,11 @@ async def publish_architecture(
     """
     try:
         conf_token = decrypt_credential(project.confluence_token)
-        client = ConfluenceClient(project.confluence_url, conf_token)
+        # Source email from project attribute or fall back to env var
+        conf_email = getattr(project, "jira_email", "") or os.environ.get(
+            "JIRA_ACCOUNT_EMAIL", ""
+        )
+        client = ConfluenceClient(project.confluence_url, conf_token, email=conf_email)
         return await client.publish_architecture(
             project,
             issue_key,

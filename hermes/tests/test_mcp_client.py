@@ -4,12 +4,18 @@ import pytest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from hermes.mcp_client import HermesMCPClient, JiraCredentials
+from hermes.mcp_client import HermesMCPClient, JiraCredentials, ConfluenceCredentials
 
 TEST_CREDS = JiraCredentials(
     jira_url="https://test.atlassian.net",
     jira_email="user@test.com",
     jira_token="token123",
+)
+
+TEST_CONFLUENCE_CREDS = ConfluenceCredentials(
+    confluence_url="https://confluence.atlassian.net",
+    confluence_email="conf@test.com",
+    confluence_token="conf-token-456",
 )
 
 
@@ -206,3 +212,124 @@ async def test_assign_issue_calls_correct_tool():
     assert tool_name == "jira_assign_issue"
     assert args["account_id"] == "abc123"
     assert args["issue_key"] == "TS-4"
+
+
+# ---------------------------------------------------------------------------
+# Confluence test helpers
+# ---------------------------------------------------------------------------
+
+
+def make_mcp_patches_kw(call_tool_return_text: str):
+    """Variant of make_mcp_patches that accepts keyword args (e.g. headers=...) to
+    streamablehttp_client — required because the Confluence methods pass credentials
+    as keyword arguments while the existing fake_streamable only accepts positional url.
+    """
+    mock_session = make_mock_session(call_tool_return_text)
+
+    read_mock = AsyncMock()
+    write_mock = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_streamable_kw(url, **kwargs):
+        yield read_mock, write_mock, None
+
+    mock_cs_instance = AsyncMock()
+    mock_cs_instance.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_cs_instance.__aexit__ = AsyncMock(return_value=False)
+
+    mock_cs_class = MagicMock(return_value=mock_cs_instance)
+
+    return fake_streamable_kw, mock_cs_class, mock_session
+
+
+# ---------------------------------------------------------------------------
+# Confluence method tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_confluence_page_calls_correct_tool():
+    """create_confluence_page() calls confluence_create_page with space_key/title/content."""
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(
+        json.dumps({"id": "9999"})
+    )
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.create_confluence_page(
+            "PROJ", "My Page", "<p>body</p>", TEST_CONFLUENCE_CREDS
+        )
+
+    assert result == {"id": "9999"}
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "confluence_create_page"
+    assert args["space_key"] == "PROJ"
+    assert args["title"] == "My Page"
+    assert args["content"] == "<p>body</p>"
+
+
+@pytest.mark.asyncio
+async def test_find_confluence_page_returns_first_result():
+    """find_confluence_page() returns the first item from a list result."""
+    page = {"id": "9999", "version": {"number": 2}}
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(
+        json.dumps([page])
+    )
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.find_confluence_page("PROJ", "My Page", TEST_CONFLUENCE_CREDS)
+
+    assert result == page
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "confluence_search"
+    assert "PROJ" in args["query"]
+    assert "My Page" in args["query"]
+    assert args["limit"] == 1
+
+
+@pytest.mark.asyncio
+async def test_find_confluence_page_returns_none_when_empty():
+    """find_confluence_page() returns None when confluence_search returns an empty list."""
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(
+        json.dumps([])
+    )
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.find_confluence_page("PROJ", "Nonexistent", TEST_CONFLUENCE_CREDS)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_update_confluence_page_calls_correct_tool():
+    """update_confluence_page() calls confluence_update_page with page_id and version."""
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(
+        json.dumps({"id": "9999", "version": {"number": 4}})
+    )
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.update_confluence_page(
+            "9999", "My Page", "<p>updated</p>", 4, TEST_CONFLUENCE_CREDS
+        )
+
+    assert result["id"] == "9999"
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "confluence_update_page"
+    assert args["page_id"] == "9999"
+    assert args["version"] == 4
+
+
+@pytest.mark.asyncio
+async def test_confluence_cred_headers_uses_distinct_header_name():
+    """_confluence_cred_headers uses x-atlassian-confluence-url, not x-atlassian-jira-url (T-Q01-01)."""
+    client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+    headers = client._confluence_cred_headers(TEST_CONFLUENCE_CREDS)
+
+    assert "x-atlassian-confluence-url" in headers
+    assert "x-atlassian-jira-url" not in headers
+    assert headers["x-atlassian-confluence-url"] == TEST_CONFLUENCE_CREDS.confluence_url
+    assert "Authorization" in headers
+    assert headers["Authorization"].startswith("Basic ")

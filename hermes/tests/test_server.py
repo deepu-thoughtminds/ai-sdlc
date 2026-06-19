@@ -21,6 +21,16 @@ def make_mock_client():
     )
     client.lookup_user = AsyncMock(return_value="acc-99")
     client.assign_issue = AsyncMock(return_value=None)
+    # Confluence stubs
+    client.create_confluence_page = AsyncMock(
+        return_value={"id": "9999", "space": {"key": "PROJ"}}
+    )
+    client.update_confluence_page = AsyncMock(
+        return_value={"id": "9999", "version": {"number": 4}}
+    )
+    client.find_confluence_page = AsyncMock(
+        return_value={"id": "9999", "version": {"number": 3}}
+    )
     return client
 
 
@@ -95,3 +105,99 @@ async def test_post_assign_calls_lookup_then_assign():
     # lookup_user returns "acc-99"; assign_issue must be called with that account_id
     assign_call = mock_client.assign_issue.call_args
     assert assign_call.args[1] == "acc-99" or assign_call.kwargs.get("account_id") == "acc-99"
+
+
+# ---------------------------------------------------------------------------
+# Confluence endpoint tests
+# ---------------------------------------------------------------------------
+
+BASE_CONF_CREDS = {
+    "confluence_url": "https://confluence.atlassian.net",
+    "confluence_email": "conf@test.com",
+    "confluence_token": "conf-token-456",
+}
+
+
+@pytest.mark.asyncio
+async def test_post_confluence_page_returns_created_page():
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    payload = {
+        **BASE_CONF_CREDS,
+        "space_key": "PROJ",
+        "title": "Architecture: TICKET-1",
+        "body_html": "<h1>Architecture</h1>",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/confluence/page", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "9999"
+    mock_client.create_confluence_page.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_put_confluence_page_returns_updated_page():
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    payload = {
+        **BASE_CONF_CREDS,
+        "title": "Architecture: TICKET-1",
+        "body_html": "<h1>Updated</h1>",
+        "version": 4,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.put("/confluence/page/9999", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "9999"
+    mock_client.update_confluence_page.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_search_returns_result_or_empty_dict():
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    params = {
+        **BASE_CONF_CREDS,
+        "space_key": "PROJ",
+        "title": "Architecture: TICKET-1",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/confluence/search", params=params)
+    assert resp.status_code == 200
+    body = resp.json()
+    # When find_confluence_page returns a dict, server returns it as-is
+    assert body["id"] == "9999"
+    mock_client.find_confluence_page.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_search_returns_empty_dict_when_not_found():
+    mock_client = make_mock_client()
+    mock_client.find_confluence_page = AsyncMock(return_value=None)
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    params = {
+        **BASE_CONF_CREDS,
+        "space_key": "PROJ",
+        "title": "Nonexistent Page",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/confluence/search", params=params)
+    assert resp.status_code == 200
+    assert resp.json() == {}
+
+
+@pytest.mark.asyncio
+async def test_post_confluence_page_500_on_client_error():
+    mock_client = make_mock_client()
+    mock_client.create_confluence_page = AsyncMock(side_effect=RuntimeError("mcp down"))
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    payload = {
+        **BASE_CONF_CREDS,
+        "space_key": "PROJ",
+        "title": "Architecture: TICKET-1",
+        "body_html": "<h1>Architecture</h1>",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/confluence/page", json=payload)
+    assert resp.status_code == 500
+    assert "mcp down" in resp.json()["detail"]
