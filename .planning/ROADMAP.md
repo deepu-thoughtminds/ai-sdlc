@@ -1,0 +1,327 @@
+# Roadmap: AI-SDLC Jira
+
+## Overview
+
+Four phases deliver the complete v1 platform. Phase 1 builds the event-driven backbone (Docker Compose + webhook receiver + mention parser + LLM router) that every later phase depends on. Phase 2 adds the web dashboard for project onboarding and encrypted credential management. Phase 3 wires the first end-to-end SDLC pipeline: description elaboration from codebase context through to Jira field update, plus the assignment trigger that hands a ticket to an architect. Phase 4 completes the v1 scope with the architecture pipeline — diagram generation, Confluence publishing, approval loop, and the remaining assignment triggers that close the hand-off chain.
+
+Phase 5 (milestone v1.1) replaces the Ollama stub in the LLM layer with the real freellmapi service (tashfeenahmed/freellmapi), wiring Docker Compose, the LLM router, and environment configuration to deliver actual LLM responses through the full pipeline.
+
+Phase 6 (milestone v1.2) gives the Hermes agent container its own dedicated LLM client — a thin async wrapper over the OpenAI SDK pointed at freellmapi — so all Hermes orchestration calls go through a typed, testable interface instead of raw HTTP.
+
+Phases 7-9 (milestone v1.3) replace all direct Jira REST calls in the platform with MCP tool calls routed through mcp-atlassian. Phase 7 stands up the mcp-atlassian Docker service with per-request credential support and installs the MCP SDK in the Hermes container. Phase 8 adds the HermesMCPClient class with typed tool wrappers and the four Hermes internal Jira HTTP endpoints the backend will call. Phase 9 migrates every backend call site from JiraClient to the hermes Jira API and removes jira_client.py entirely.
+
+Phases 10-13 (milestone v1.4) replace the multi-option architecture flow with a single complexity-aware pipeline. Phase 10 introduces an isolated complexity classifier module. Phase 11 enhances the diagram service with validated mxGraph XML output and a diagrams.net viewer URL. Phase 12 updates the Confluence client with two structured HTML templates and idempotent page management. Phase 13 rewires the full pipeline in architecture_pipeline.py, adds a webhook idempotency guard, and removes the old multi-option approval flow.
+
+## Phases
+
+**Phase Numbering:**
+
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+Decimal phases appear between their surrounding integers in numeric order.
+
+- [x] **Phase 1: Foundation** - Docker Compose services, Jira webhook receiver, mention parser, and LLM router
+- [x] **Phase 2: Web App** - Project onboarding dashboard with encrypted credential storage and ticket status view (completed 2026-06-18)
+- [x] **Phase 3: Description Elaboration** - Full description pipeline from graphify context through user approval to Jira field update, plus BU-to-architect assignment trigger (completed 2026-06-18)
+- [x] **Phase 4: Architecture Pipeline** - Architecture options, drawio diagrams, Confluence publishing, approval loop, and remaining assignment triggers (completed 2026-06-18)
+- [x] **Phase 5: freellmapi Integration** - Replace Ollama stub with real freellmapi service: git submodule, Docker Compose wiring, OpenAI-format LLM router, and smoke-test verified real responses (completed 2026-06-18)
+- [x] **Phase 6: Hermes LLM Client** - Typed async LLM client in the Hermes container, wired to freellmapi, with startup self-test and full unit test coverage (completed 2026-06-18)
+- [ ] **Phase 7: MCP Infrastructure** - mcp-atlassian Docker service with per-request credential support and MCP SDK installed in the Hermes container
+- [ ] **Phase 8: Hermes MCP Client + Internal API** - HermesMCPClient with all 5 typed tool methods and 4 internal Jira HTTP endpoints that the backend will call
+- [ ] **Phase 9: Backend Migration** - All 5 JiraClient call sites in the backend replaced with hermes Jira API calls; jira_client.py removed
+- [x] **Phase 10: Complexity Classifier** - New complexity_classifier.py module with structured LLM classification call, explicit rubric, and boundary-focused unit tests (completed 2026-06-19)
+- [ ] **Phase 11: Enhanced Diagram Service** - drawio_service.py enhanced with validated mxGraph XML output, directional edges, typed-component placement, and diagrams.net viewer URL
+- [ ] **Phase 12: Structured Confluence Publishing** - confluence_client.py updated with two HTML templates (text-only and diagram+components), HTML-escaped content, idempotent find-or-update page logic, and graceful degradation
+- [ ] **Phase 13: Pipeline Orchestration & Integration** - architecture_pipeline.py rewritten to wire classifier → diagram → Confluence → Jira comment; webhook idempotency guard added; old multi-option flow removed
+
+## Phase Details
+
+### Phase 1: Foundation
+
+**Goal**: All services run together and Jira comment events reach the correct pipeline stage handler
+**Mode:** mvp
+**Depends on**: Nothing (first phase)
+**Requirements**: INFRA-01, INFRA-02, INFRA-03, INFRA-04
+**Success Criteria** (what must be TRUE):
+
+  1. `docker compose up` starts Hermes agent, freellmapi, FastAPI backend, and Next.js frontend with no manual steps
+  2. A Jira comment webhook POST reaches the FastAPI endpoint and is acknowledged with a 200 response
+  3. A comment containing `@hermes describe` is parsed to identify the mention target and pipeline stage; an unrecognised comment is silently ignored
+  4. A request classified as heavy (architecture, code gen) is routed to freellmapi; a lightweight orchestration request uses the configured main model
+
+**Plans**: 2 plans
+Plans:
+**Wave 1**
+
+- [x] 01-01-PLAN.md — Docker Compose service definitions, Dockerfiles, and inter-container networking (INFRA-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 01-02-PLAN.md — FastAPI webhook endpoint, mention parser, and LLM router (INFRA-02, INFRA-03, INFRA-04)
+
+### Phase 2: Web App
+
+**Goal**: Team members can onboard projects and view per-ticket pipeline status without touching config files
+**Mode:** mvp
+**Depends on**: Phase 1
+**Requirements**: WEBAPP-01, WEBAPP-02, WEBAPP-03, WEBAPP-04
+**Success Criteria** (what must be TRUE):
+
+  1. User fills in a form with Jira URL, GitHub token, Confluence URL, and project key, submits it, and the project appears in the dashboard list
+  2. Dashboard lists every onboarded project and shows the current pipeline stage for each active ticket
+  3. Stored credentials are encrypted at rest; plaintext tokens are never returned by any API response or written to logs
+  4. User can see which SDLC stage (description, architecture, dev, QA) each active ticket is currently at
+
+**Plans**: TBD
+**UI hint**: yes
+
+Plans:
+
+- [x] 02-01: FastAPI credential storage API with encryption and Next.js project onboarding form
+- [x] 02-02: Dashboard views for project list and per-ticket pipeline stage status
+
+### Phase 3: Description Elaboration
+
+**Goal**: A business user can mention the agent in a Jira comment to get an elaborated feature description reviewed and applied to the ticket, and can then assign the ticket to an architect
+**Mode:** mvp
+**Depends on**: Phase 2
+**Requirements**: DESC-01, DESC-02, DESC-03, DESC-04, ASGN-01
+**Success Criteria** (what must be TRUE):
+
+  1. Agent reads the gsd-graphify knowledge graph for the project and incorporates relevant codebase patterns into the generated description
+  2. Agent fetches the current sprint backlog from Jira and uses it as context when generating the description
+  3. Elaborated description appears as a new comment on the Jira ticket within a reasonable time of the trigger mention
+  4. User types an approval reply in the comment thread; agent detects it and updates the epic/story description field via Jira MCP
+  5. Business user mentions `@hermes assign @architect-name` in a comment and the ticket is re-assigned to that team member in Jira
+
+**Plans**: TBD
+
+Plans:
+
+- [x] 03-01: graphify integration, sprint backlog fetch, and description generation via freellmapi
+- [x] 03-02: Comment posting, approval detection loop, Jira field update, and assignment trigger
+
+### Phase 4: Architecture Pipeline
+
+**Goal**: An architect can trigger the agent to produce architecture options with drawio diagrams published to Confluence, approve a choice, and hand the ticket off to a developer; remaining assignment triggers (arch-to-dev, dev-to-QA) are also wired
+**Mode:** mvp
+**Depends on**: Phase 3
+**Requirements**: ARCH-01, ARCH-02, ARCH-03, ARCH-04, ASGN-02, ASGN-03
+**Success Criteria** (what must be TRUE):
+
+  1. Architect mentions the agent and receives multiple architecture options with trade-off analysis posted to the Jira comment
+  2. Each architecture option includes at least one drawio diagram generated by the drawio skill
+  3. Architecture document (diagrams + analysis) is published to a Confluence page and the page URL is posted back to the Jira comment
+  4. Architect posts an approval comment; agent detects it and re-assigns the ticket to the named developer in Jira
+  5. Architect can mention `@hermes assign @developer-name` to assign a ticket to a developer; developer can mention `@hermes assign @qa-name` to assign a merged-PR ticket to QA
+
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 04-01-PLAN.md — drawio_service + confluence_client + architecture_pipeline (generation, diagram assembly, Confluence publishing) (ARCH-01, ARCH-02, ARCH-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 04-02-PLAN.md — architecture approval detection, webhook routing for architecture stage, ASGN-02/ASGN-03 confirmation (ARCH-04, ASGN-02, ASGN-03)
+
+### Phase 5: freellmapi Integration
+
+**Goal**: The freellmapi service runs from source as a git submodule, the LLM router speaks the OpenAI-compatible API it exposes, and a real LLM response flows end-to-end through the `@hermes describe` pipeline
+**Mode:** mvp
+**Depends on**: Phase 4
+**Milestone**: v1.1 — freellmapi
+**Requirements**: FLLM-01, FLLM-02, FLLM-03, FLLM-04, FLLM-05, FLLM-06, FLLM-07
+**Success Criteria** (what must be TRUE):
+
+  1. `git submodule update --init` pulls the freellmapi source and `docker compose build` succeeds without manual steps
+  2. `docker compose up` starts freellmapi on port 3001 with a named volume persisting the encrypted key store across restarts
+  3. A heavy-stage request from `llm_router.py` reaches freellmapi at `/v1/chat/completions` with a Bearer token and the response text is extracted from `choices[0].message.content`
+  4. `.env.example` documents FREELLMAPI_ENCRYPTION_KEY, FREELLMAPI_API_KEY, GEMINI_API_KEY, and OPENROUTER_API_KEY with generation instructions; FREELLMAPI_BASE_URL points to `http://freellmapi:3001`
+  5. All 88 existing tests pass after mock shapes are updated to OpenAI-format responses
+  6. A smoke test (skipped when FREELLMAPI_API_KEY is unset) sends a real `/v1/chat/completions` request and receives a non-stub LLM response
+
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 05-01-PLAN.md — git submodule add freellmapi, update docker-compose.yml (port 3001, build from submodule, named volume, env vars), update .env.example (FLLM-01, FLLM-02, FLLM-04, FLLM-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 05-02-PLAN.md — update llm_router.py to OpenAI /v1/chat/completions format with Bearer auth, update test_llm_router.py mocks, add smoke test (FLLM-03, FLLM-06, FLLM-07)
+
+### Phase 6: Hermes LLM Client
+
+**Goal**: The Hermes agent container has a typed async LLM client backed by freellmapi, with a safe startup self-test and full unit test coverage, so all Hermes orchestration calls go through a testable interface rather than raw HTTP
+**Mode:** mvp
+**Depends on**: Phase 5
+**Milestone**: v1.2 — hermes-freellmapi
+**Requirements**: HERMES-01, HERMES-02, HERMES-03, HERMES-04, HERMES-05, HERMES-06
+**Success Criteria** (what must be TRUE):
+
+  1. `docker compose build hermes` succeeds with the `openai` Python SDK installed (visible in the built image's `pip list`)
+  2. `hermes/llm_client.py` exports `HermesLLMClient` with an async `chat(messages, model="auto") -> str` method
+  3. `docker compose up hermes` logs either "LLM self-test passed" or "LLM self-test failed (freellmapi unavailable)" and the container stays running in both cases
+  4. Unit tests for `HermesLLMClient` pass without a live API key — all OpenAI SDK calls are mocked
+
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 06-01-PLAN.md — Add `openai>=1.0` to hermes/requirements.txt, implement hermes/llm_client.py with async HermesLLMClient, wire FREELLMAPI_BASE_URL and FREELLMAPI_API_KEY env vars into hermes container in docker-compose.yml (HERMES-01, HERMES-02, HERMES-03, HERMES-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 06-02-PLAN.md — Startup self-test in hermes/__main__.py that calls freellmapi with a ping prompt and logs success/failure without crashing; unit tests for HermesLLMClient with mocked OpenAI responses (HERMES-05, HERMES-06)
+
+### Phase 7: MCP Infrastructure
+
+**Goal**: The mcp-atlassian MCP server runs as a Docker service reachable by Hermes, supports per-request Jira credentials for multi-project use, and the Hermes container has the Python MCP SDK installed
+**Depends on**: Phase 6
+**Milestone**: v1.3 — hermes-mcp-agent
+**Requirements**: MCPINFRA-01, MCPINFRA-02, MCPINFRA-03
+**Success Criteria** (what must be TRUE):
+
+  1. `docker compose up` starts an `mcp-atlassian` container from the sooperset/mcp-atlassian image and it is reachable by Hermes on ai-sdlc-net without manual network setup
+  2. A Jira operation request carrying project-specific `jira_url`, `jira_email`, and `jira_token` values is processed using those credentials — not hardcoded env vars — confirming multi-user credential support
+  3. `docker compose build hermes` succeeds and the `mcp` Python package (and HTTP/SSE transport dependencies) are present in the built image
+
+**Plans**: 1 plan
+
+Plans:
+
+**Wave 1**
+
+- [ ] 07-01-PLAN.md — mcp-atlassian Docker service, per-request credential config, MCP SDK in hermes image, infrastructure smoke tests (MCPINFRA-01, MCPINFRA-02, MCPINFRA-03)
+
+### Phase 8: Hermes MCP Client + Internal API
+
+**Goal**: Hermes exposes a typed async client over mcp-atlassian and four internal HTTP endpoints so the FastAPI backend can perform every Jira operation through Hermes rather than calling Jira directly
+**Depends on**: Phase 7
+**Milestone**: v1.3 — hermes-mcp-agent
+**Requirements**: MCPCLIENT-01, MCPCLIENT-02, MCPCLIENT-03, MCPCLIENT-04, MCPCLIENT-05, MCPCLIENT-06, MCPAPI-01, MCPAPI-02, MCPAPI-03, MCPAPI-04
+**Success Criteria** (what must be TRUE):
+
+  1. `hermes/mcp_client.py` exports `HermesMCPClient` and each of the five typed methods (`add_comment`, `update_description`, `get_sprint_issues`, `lookup_user`, `assign_issue`) can be called with per-request credentials and returns the documented type
+  2. `POST /jira/comment` called with valid credentials and an issue key returns a JSON body containing `comment_id`
+  3. `PUT /jira/description` called with valid credentials updates the issue description and returns an empty JSON body
+  4. `POST /jira/sprint-backlog` returns a JSON array of `{key, summary, issue_type}` objects for the requested project
+  5. `POST /jira/assign` accepts a display name, resolves it to a Jira `accountId` via user lookup, assigns the issue, and returns `{account_id}`
+
+**Plans**:
+
+- 08-01: HermesMCPClient typed async wrappers (Wave 1, complete)
+- 08-02: Hermes FastAPI server /jira/* endpoints + uvicorn boot + port 8001 (Wave 2, complete)
+
+### Phase 9: Backend Migration
+
+**Goal**: Every Jira operation in the backend goes through the Hermes internal API; jira_client.py no longer exists and no backend module imports JiraClient
+**Depends on**: Phase 8
+**Milestone**: v1.3 — hermes-mcp-agent
+**Requirements**: MCPMIG-01, MCPMIG-02, MCPMIG-03, MCPMIG-04, MCPMIG-05
+**Success Criteria** (what must be TRUE):
+
+  1. `describe_pipeline.py` fetches the sprint backlog via `POST /jira/sprint-backlog` on the hermes service; the old `JiraClient.get_sprint_backlog` call is gone
+  2. `webhook.py` posts draft description comments and architecture comments via `POST /jira/comment` on the hermes service; no `JiraClient` instantiation remains in that module
+  3. `approval_detector.py` updates issue descriptions via `PUT /jira/description` and posts approval comments via `POST /jira/comment`; no `JiraClient` instantiation remains
+  4. `assign_pipeline.py` assigns issues via `POST /jira/assign` on the hermes service; the separate `lookup_user` + `assign_issue` JiraClient calls are replaced by the single endpoint
+  5. `backend/services/jira_client.py` does not exist; `grep -r "JiraClient" backend/` returns no matches; all backend tests pass with hermes API mocks in place of the old JiraClient mock
+
+**Plans**: TBD
+
+---
+
+## Milestone v1.4: Smart Architecture & Confluence Publishing
+
+### Phase 10: Complexity Classifier
+
+**Goal**: The agent can reliably classify a requested change as "small" or "complex" using a single low-temperature LLM call with an explicit rubric, and the result plus its rationale are stored in PipelineState for all downstream branches to consume
+**Depends on**: Phase 9
+**Milestone**: v1.4 — smart-architecture
+**Requirements**: CLASSIFY-01, CLASSIFY-02
+**Success Criteria** (what must be TRUE):
+
+  1. A single LLM call with `temperature=0` and a structured JSON output schema classifies a ticket as `"small"` or `"complex"` based on the rubric (2+ distinct components, services, or integration points implies "complex")
+  2. The classification result and its rationale string are stored on `PipelineState` and retrievable by downstream pipeline stages without making a second LLM call
+  3. Unit tests cover the boundary cases — a ticket at threshold-1, threshold, and threshold+1 — and the parse-to-branch logic is tested independently of the LLM call
+  4. `complexity_classifier.py` can be imported and called with no database or Jira side effects, confirming it is independently testable
+
+**Plans**: TBD
+
+### Phase 11: Enhanced Diagram Service
+
+**Goal**: The diagram service produces mxGraph XML that is validated before use, includes directional edges and typed-component placement, and provides a diagrams.net viewer URL so architects can open and edit diagrams without a Confluence plugin
+**Depends on**: Phase 10
+**Milestone**: v1.4 — smart-architecture
+**Requirements**: ARCHGEN-04, CONFPUB-02
+**Success Criteria** (what must be TRUE):
+
+  1. `drawio_service.py` generates mxGraph XML with directional edges between components and typed shapes (e.g. service, database, external system) placed according to component type
+  2. Every XML output from `drawio_service` is parse-validated before being returned; malformed XML causes the caller to receive a sentinel value that triggers the text-only degradation path rather than crashing the pipeline
+  3. The service returns a `diagrams.net` viewer URL (`https://app.diagrams.net/?xml=<url-encoded-xml>`) alongside the raw XML, allowing an architect to open and edit the diagram in a browser without the draw.io Confluence Marketplace plugin
+  4. No new Python packages are introduced; the implementation is pure-Python string building on the existing mxGraph XML builder
+
+**Plans**: TBD
+
+### Phase 12: Structured Confluence Publishing
+
+**Goal**: The Confluence client publishes architecture pages using two validated HTML templates, HTML-escapes all LLM-generated text, finds and updates an existing page instead of creating duplicates, and degrades gracefully on publish failure
+**Depends on**: Phase 11
+**Milestone**: v1.4 — smart-architecture
+**Requirements**: CONFPUB-01, CONFPUB-02 (diagram embed), CONFPUB-03, CONFPUB-04
+**Success Criteria** (what must be TRUE):
+
+  1. `confluence_client.publish_architecture()` accepts a branch flag and renders one of two HTML templates — text-only (Summary, Approach, Key Decisions, Risks) or diagram+components (Summary, Approach, Component Breakdown, Integration Points, Key Decisions, Risks) — with all LLM-generated text HTML-escaped before interpolation
+  2. For diagram pages, the Confluence page body contains a `<pre class="drawio-xml">` block with the raw mxGraph XML and an `<a href="...">` link to the diagrams.net viewer URL so architects can open the diagram without a plugin
+  3. Before creating a new page, the client searches for an existing page titled `Architecture: {issue_key}` in the project space and updates it in place if found; a duplicate page is never created for the same ticket
+  4. When Confluence publish fails for any reason, a Jira comment is posted with the architecture text inline and no page URL; the pipeline exits cleanly without an unhandled exception
+
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 13: Pipeline Orchestration & Integration
+
+**Goal**: The architecture pipeline is a single-pass flow that classifies, conditionally generates a diagram, publishes to Confluence, and posts back to Jira with the complexity rationale and page link — the old multi-option approval prompt and `_parse_options` logic no longer exist
+**Depends on**: Phase 12
+**Milestone**: v1.4 — smart-architecture
+**Requirements**: ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-01, ARCHINT-02, ARCHINT-03
+**Success Criteria** (what must be TRUE):
+
+  1. A `@jarvis architecture` Jira comment mention routes to the new single-architecture pipeline via `KNOWN_STAGES` in `mention_parser.py` and the webhook handler; `_parse_options()` and the "Reply 'approved [option name]'" prompt no longer exist anywhere in `architecture_pipeline.py`
+  2. For a "complex" ticket, the pipeline posts a Jira comment containing the architecture summary, the Confluence page URL, and a label such as "Multi-component feature — diagram included"; the Confluence page includes all six structured sections plus the embedded diagram
+  3. For a "simple" ticket, the pipeline posts a Jira comment containing the prose architecture and a label such as "Simple change — text architecture"; no diagram is generated and no diagram block appears on the Confluence page
+  4. If a second `@jarvis architecture` webhook fires for the same ticket while a pipeline is already active (status not `"failed"`), the webhook returns 200 immediately and the pipeline is not re-triggered
+  5. All existing tests pass after the pipeline rewrite; an end-to-end test runs the new pipeline against mocked LLM, diagram, and Confluence calls and asserts that `PipelineState.draft_content` is a well-formed human-readable string (not a JSON blob)
+
+**Plans**: TBD
+
+---
+
+## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Foundation | 2/2 | Complete | 2026-06-18 |
+| 2. Web App | 2/2 | Complete | 2026-06-18 |
+| 3. Description Elaboration | 2/2 | Complete | 2026-06-18 |
+| 4. Architecture Pipeline | 2/2 | Complete | 2026-06-18 |
+| 5. freellmapi Integration | 2/2 | Complete | 2026-06-18 |
+| 6. Hermes LLM Client | 2/2 | Complete | 2026-06-18 |
+| 7. MCP Infrastructure | 0/1 | Not started | - |
+| 8. Hermes MCP Client + Internal API | 0/? | Not started | - |
+| 9. Backend Migration | 0/? | Not started | - |
+| 10. Complexity Classifier | 2/2 | Complete   | 2026-06-19 |
+| 11. Enhanced Diagram Service | 0/? | Not started | - |
+| 12. Structured Confluence Publishing | 0/? | Not started | - |
+| 13. Pipeline Orchestration & Integration | 0/? | Not started | - |
