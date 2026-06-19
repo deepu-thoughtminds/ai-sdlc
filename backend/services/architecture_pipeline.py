@@ -1,144 +1,79 @@
-"""Architecture pipeline service — ARCH-01, ARCH-02, ARCH-03.
+"""Architecture pipeline service — ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03.
 
-Generates architecture options via freellmapi (Ollama /api/chat), creates drawio
-diagrams for each option, publishes to Confluence, and stores draft in PipelineState
-for architect review.
-
-Pipeline flow:
-  1. Build structured prompt with ticket info (issue_key, summary, description).
-  2. Call route_request("architecture", prompt) — routes to Ollama via HEAVY_STAGES.
-  3. Parse LLM output into option dicts (name, description, components, trade_offs).
-  4. Generate mxGraph XML diagram for each option via generate_diagram().
-  5. Publish all options + diagrams to Confluence via publish_architecture().
-  6. Compose Jira comment text (options + optional Confluence URL).
-  7. Persist PipelineState(stage="architecture", status="awaiting_approval").
-  8. Return comment_text.
+Single-pass, complexity-aware architecture pipeline that:
+  1. Creates a PipelineState row immediately (status="running") for idempotency.
+  2. Classifies the ticket as "small" or "complex" via complexity_classifier.
+  3. Generates a recommended architecture (NOT multiple options).
+  4. For "complex" tickets: generates a drawio diagram and calls publish_architecture
+     with is_complex=True.
+  5. For "small" tickets: skips diagram generation and calls publish_architecture
+     with is_complex=False.
+  6. Posts a final Jira comment string. Sets PipelineState.status="complete".
 
 Threat mitigations:
   T-04-01: prompt contains only issue_key/summary/description — no token values
            are ever interpolated into the LLM prompt.
   T-04-03: Confluence publish failure is caught and degraded (page_url = "");
            pipeline continues and posts Jira comment without URL.
-  T-04-07: LLM output embedded inside <pre> tags in Confluence body_html —
-           not rendered as executable HTML/JS.
 """
 
 import logging
-import re
-from typing import Any
 
 from sqlalchemy.orm import Session
 
 from models.pipeline_state import PipelineState
 from models.project import Project
+from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
-from services.drawio_service import generate_diagram
+from services.drawio_service import generate_diagram, generate_viewer_url
 from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
 
 
-def _build_prompt(issue_key: str, summary: str, description: str) -> str:
-    """Build the LLM prompt for architecture option generation.
+def _parse_sections(llm_output: str, section_names: list[str]) -> dict[str, str]:
+    """Parse labelled sections from LLM output into a dict.
 
-    Asks for exactly 2-3 numbered architecture options in a structured format
-    the parser can reliably extract.
+    Splits on lines that start with "## ". Each recognised section name is
+    mapped to the text that follows it until the next "## " heading or end of
+    string.
 
-    T-04-01: prompt contains only issue_key, summary, description — no token values.
-
-    Args:
-        issue_key: Jira issue key (e.g. "PROJ-1").
-        summary: Issue summary/title field.
-        description: Issue description field (plain text).
-
-    Returns:
-        A string prompt ready for route_request("architecture", ...).
-    """
-    return (
-        f"You are a software architect. Analyze the following Jira ticket and propose "
-        f"2-3 distinct architecture options.\n\n"
-        f"Ticket: {issue_key}\n"
-        f"Summary: {summary}\n"
-        f"Description: {description}\n\n"
-        f"For each option, output a section in exactly this format:\n\n"
-        f"## Option [N]: [Name]\n"
-        f"Description: [1-2 sentence description]\n"
-        f"Components: [comma-separated list of component names]\n"
-        f"Trade-offs: [bullet list of pros and cons]\n\n"
-        f"Be concise. Focus on technical architecture decisions."
-    )
-
-
-def _parse_options(llm_output: str) -> list[dict[str, Any]]:
-    """Parse LLM output into a list of architecture option dicts.
-
-    Each dict has keys: name (str), description (str), components (list[str]),
-    trade_offs (str).
-
-    Parsing strategy: split on lines starting with '## Option'. For each section,
-    extract name from the heading, Components line (split on comma), Description
-    line, and Trade-offs block. Falls back gracefully — if parsing fails, returns
-    a single option with the full LLM output as description and an empty
-    components list.
+    Missing sections return "". Never raises — malformed LLM output is handled
+    gracefully.
 
     Args:
         llm_output: Raw LLM response text.
+        section_names: Ordered list of expected section names (without "## ").
 
     Returns:
-        Non-empty list of option dicts.
+        Dict mapping each section name to its extracted content string (stripped).
     """
-    options: list[dict[str, Any]] = []
-    # Split on option headings (## Option N: Name)
-    sections = re.split(r'\n(?=## Option)', llm_output.strip())
-    for section in sections:
-        section = section.strip()
-        if not section.startswith("## Option"):
-            continue
-        lines = section.split("\n")
-        # First line: "## Option N: Name"
-        heading = lines[0].replace("##", "").strip()
-        # Remove "Option N: " prefix to get the option name
-        name_match = re.match(r"Option\s+\d+:\s*(.*)", heading)
-        name = name_match.group(1).strip() if name_match else heading
+    result: dict[str, str] = {name: "" for name in section_names}
 
-        description = ""
-        components: list[str] = []
-        trade_offs_lines: list[str] = []
-        in_tradeoffs = False
+    lines = llm_output.split("\n")
+    current_section: str | None = None
+    accumulated: list[str] = []
 
-        for line in lines[1:]:
-            if line.startswith("Description:"):
-                description = line.replace("Description:", "").strip()
-                in_tradeoffs = False
-            elif line.startswith("Components:"):
-                raw_comps = line.replace("Components:", "").strip()
-                components = [c.strip() for c in raw_comps.split(",") if c.strip()]
-                in_tradeoffs = False
-            elif line.startswith("Trade-offs:"):
-                in_tradeoffs = True
-                rest = line.replace("Trade-offs:", "").strip()
-                if rest:
-                    trade_offs_lines.append(rest)
-            elif in_tradeoffs and line.strip():
-                trade_offs_lines.append(line.strip())
+    def _flush() -> None:
+        if current_section is not None and current_section in result:
+            result[current_section] = "\n".join(accumulated).strip()
 
-        options.append({
-            "name": name,
-            "description": description,
-            "components": components,
-            "trade_offs": "\n".join(trade_offs_lines),
-        })
+    for line in lines:
+        if line.startswith("## "):
+            _flush()
+            accumulated = []
+            heading = line[3:].strip()
+            # Match the heading to a known section (case-insensitive).
+            current_section = None
+            for name in section_names:
+                if name.lower() == heading.lower():
+                    current_section = name
+                    break
+        else:
+            accumulated.append(line)
 
-    if not options:
-        # Fallback: treat entire output as one option so pipeline never fails
-        options = [{
-            "name": "Architecture Proposal",
-            "description": llm_output[:500],
-            "components": [],
-            "trade_offs": "",
-        }]
-
-    return options
+    _flush()
+    return result
 
 
 async def run(
@@ -148,19 +83,15 @@ async def run(
     issue_description: str,
     db: Session,
 ) -> str:
-    """Run the full architecture pipeline for a ticket.
+    """Run the single-pass complexity-aware architecture pipeline for a ticket.
 
-    Steps:
-    1. Build prompt and call route_request("architecture", prompt) — routes to Ollama.
-    2. Parse LLM output into architecture options.
-    3. For each option: call generate_diagram(name, components, connections=[]).
-    4. Call publish_architecture(project, issue_key, full_text, diagram_xmls) — returns URL or "".
-    5. Compose final comment text: options + Confluence URL (if available).
-    6. Create PipelineState(stage="architecture", status="awaiting_approval", draft_content=comment_text).
-    7. Return comment_text.
+    ARCHGEN-01: Classifies complexity (small / complex) before generating architecture.
+    ARCHGEN-02: For complex tickets, generates a drawio diagram.
+    ARCHGEN-03: Publishes a single recommended architecture to Confluence (find-or-update).
+    ARCHINT-03: No multi-option flow — one recommended architecture only.
 
-    T-04-01: prompt contains only issue_key, summary, description — no token values.
-    T-04-03: Confluence publish failure is caught and degraded; pipeline continues.
+    T-04-01: prompt contains only issue_key/summary/description — no token values.
+    T-04-03: Confluence publish failure is caught; pipeline continues without URL.
 
     Args:
         project: Project ORM with jira_url, confluence_url, encrypted tokens.
@@ -170,73 +101,249 @@ async def run(
         db: SQLAlchemy session for PipelineState persistence.
 
     Returns:
-        Full architecture comment text (options + optional Confluence URL).
+        Final architecture comment text posted to Jira.
     """
     logger.info("Architecture pipeline started for ticket %s", issue_key)
 
-    # Step 1: Generate architecture options via LLM
-    # T-04-01: prompt contains only issue_key/summary/description — no token values
-    prompt = _build_prompt(issue_key, issue_summary, issue_description)
-    route_result = route_request("architecture", prompt)
-    llm_output = route_result.content
+    # Step 1: Create PipelineState row immediately (status="running") so the
+    # webhook idempotency guard can detect a duplicate before scheduling a
+    # second background task.
+    state_row = PipelineState(
+        project_id=project.id,
+        ticket_key=issue_key,
+        stage="architecture",
+        status="running",
+    )
+    db.add(state_row)
+    db.commit()
 
-    # Step 2: Parse options from LLM output
-    options = _parse_options(llm_output)
+    try:
+        # Step 2: Classify the ticket complexity.
+        complexity, rationale = classify_complexity(
+            issue_key, issue_summary, issue_description, db, project.id
+        )
+        state_row.complexity = complexity
+        state_row.complexity_rationale = rationale
+        db.commit()
 
-    # Step 3: Generate drawio diagrams for each option
-    # connections=[] for MVP — component relationships not parsed from LLM output
-    diagram_xmls: list[str] = []
-    for opt in options:
-        xml = generate_diagram(opt["name"], opt["components"], [])
-        diagram_xmls.append(xml)
+        logger.info(
+            "Ticket %s classified as %r — %s", issue_key, complexity, rationale
+        )
 
-    # Step 4: Build full architecture text for comment and Confluence
-    options_text = "\n\n".join(
-        f"*Option {i + 1}: {opt['name']}*\n"
-        f"{opt['description']}\n"
-        f"Components: {', '.join(opt['components']) if opt['components'] else 'N/A'}\n"
-        f"Trade-offs:\n{opt['trade_offs']}"
-        for i, opt in enumerate(options)
+        if complexity == "complex":
+            comment_text = await _run_complex(
+                project, issue_key, issue_summary, issue_description
+            )
+        else:
+            comment_text = await _run_simple(
+                project, issue_key, issue_summary, issue_description
+            )
+
+        # Step 4: Finalise the state row.
+        state_row.status = "complete"
+        state_row.draft_content = comment_text
+        db.commit()
+
+    except Exception:
+        state_row.status = "failed"
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
+
+    logger.info("Architecture pipeline complete for ticket %s", issue_key)
+    return comment_text
+
+
+async def _run_complex(
+    project: Project,
+    issue_key: str,
+    issue_summary: str,
+    issue_description: str,
+) -> str:
+    """Execute the complex-ticket branch of the architecture pipeline.
+
+    Requests six labelled sections from the LLM, generates a drawio diagram,
+    and publishes to Confluence with is_complex=True.
+
+    T-04-01: only issue_key/summary/description are included in the prompt.
+
+    Returns:
+        Human-readable Jira comment text.
+    """
+    # Build prompt for complex architecture.
+    prompt = (
+        "You are a software architect. Generate ONE recommended architecture for "
+        "the following Jira ticket. Do NOT generate multiple options.\n\n"
+        f"Ticket: {issue_key}\n"
+        f"Summary: {issue_summary}\n"
+        f"Description: {issue_description}\n\n"
+        "Respond with exactly these six labelled sections in this order:\n\n"
+        "## Summary\n"
+        "[1-2 sentence overview of the recommended architecture]\n\n"
+        "## Approach\n"
+        "[Technical approach and key design patterns]\n\n"
+        "## Component Breakdown\n"
+        "[Comma-separated or newline-separated list of components/services involved]\n\n"
+        "## Integration Points\n"
+        "[Key integration points and interfaces between components]\n\n"
+        "## Key Decisions\n"
+        "[Important architectural decisions and their rationale]\n\n"
+        "## Risks\n"
+        "[Key risks and mitigation strategies]"
     )
 
-    # Step 5: Publish to Confluence (graceful degradation on any failure)
-    # T-04-03: all exceptions caught here; pipeline continues without URL
+    section_names = [
+        "Summary",
+        "Approach",
+        "Component Breakdown",
+        "Integration Points",
+        "Key Decisions",
+        "Risks",
+    ]
+
+    route_result = route_request("architecture", prompt)
+    sections = _parse_sections(route_result.content, section_names)
+
+    summary = sections["Summary"]
+    approach = sections["Approach"]
+    component_breakdown = sections["Component Breakdown"]
+    integration_points = sections["Integration Points"]
+    key_decisions = sections["Key Decisions"]
+    risks = sections["Risks"]
+
+    # Extract component names for the diagram (split on commas and newlines).
+    component_list: list[str] = [
+        c.strip()
+        for line in component_breakdown.replace(",", "\n").splitlines()
+        for c in [line.strip()]
+        if c and not c.startswith("#")
+    ]
+    if not component_list:
+        component_list = ["Component"]
+
+    # Generate the drawio diagram (mxGraph XML + viewer URL).
+    diagram_xml = generate_diagram(
+        title=f"Architecture: {issue_key}",
+        components=component_list,
+        connections=[],
+    )
+    viewer_url = generate_viewer_url(diagram_xml)
+
+    # Publish to Confluence (graceful degradation on failure — T-04-03).
+    page_url = ""
     try:
         page_url = await publish_architecture(
-            project, issue_key, options_text, diagram_xmls
+            project,
+            issue_key,
+            summary,
+            approach,
+            key_decisions,
+            risks,
+            is_complex=True,
+            component_breakdown=component_breakdown,
+            integration_points=integration_points,
+            diagram_xml=diagram_xml,
+            viewer_url=viewer_url,
         )
     except Exception as exc:
         logger.warning(
             "Confluence publishing failed for ticket %s: %s", issue_key, exc
         )
-        page_url = ""
 
-    # Step 6: Compose comment text
-    confluence_suffix = (
-        f"\n\nFull architecture document (with diagrams): {page_url}"
-        if page_url
-        else "\n\n(Confluence publishing unavailable — diagrams not attached)"
-    )
-    comment_text = (
-        f"*Architecture Options for {issue_key}*\n\n"
-        f"{options_text}"
-        f"{confluence_suffix}\n\n"
-        "Reply with 'approved [option name]' or 'approved @developer-name' to select "
-        "an option and assign to a developer."
+    if page_url:
+        comment_text = (
+            f"*Architecture for {issue_key}*\n\n"
+            f"{summary}\n\n"
+            f"Multi-component feature — diagram included.\n\n"
+            f"Confluence: {page_url}"
+        )
+    else:
+        comment_text = (
+            f"*Architecture for {issue_key}*\n\n"
+            f"{summary}\n\n"
+            f"Multi-component feature — diagram included.\n\n"
+            f"(Confluence publishing unavailable)"
+        )
+
+    return comment_text
+
+
+async def _run_simple(
+    project: Project,
+    issue_key: str,
+    issue_summary: str,
+    issue_description: str,
+) -> str:
+    """Execute the simple-ticket branch of the architecture pipeline.
+
+    Requests four labelled sections from the LLM. Does NOT call generate_diagram.
+    Publishes to Confluence with is_complex=False.
+
+    T-04-01: only issue_key/summary/description are included in the prompt.
+
+    Returns:
+        Human-readable Jira comment text.
+    """
+    # Build prompt for simple architecture.
+    prompt = (
+        "You are a software architect. Generate ONE recommended architecture for "
+        "the following Jira ticket. Do NOT generate multiple options.\n\n"
+        f"Ticket: {issue_key}\n"
+        f"Summary: {issue_summary}\n"
+        f"Description: {issue_description}\n\n"
+        "Respond with exactly these four labelled sections in this order:\n\n"
+        "## Summary\n"
+        "[1-2 sentence overview of the recommended architecture]\n\n"
+        "## Approach\n"
+        "[Technical approach and key design patterns]\n\n"
+        "## Key Decisions\n"
+        "[Important architectural decisions and their rationale]\n\n"
+        "## Risks\n"
+        "[Key risks and mitigation strategies]"
     )
 
-    # Step 7: Persist PipelineState for architect approval workflow
-    state_row = PipelineState(
-        project_id=project.id,
-        ticket_key=issue_key,
-        stage="architecture",
-        status="awaiting_approval",
-        draft_content=comment_text,
-    )
-    db.add(state_row)
-    db.commit()
+    section_names = ["Summary", "Approach", "Key Decisions", "Risks"]
 
-    logger.info(
-        "Architecture pipeline complete for ticket %s — awaiting approval", issue_key
-    )
+    route_result = route_request("architecture", prompt)
+    sections = _parse_sections(route_result.content, section_names)
+
+    summary = sections["Summary"]
+    approach = sections["Approach"]
+    key_decisions = sections["Key Decisions"]
+    risks = sections["Risks"]
+
+    # Publish to Confluence — text-only template (T-04-03: graceful degradation).
+    page_url = ""
+    try:
+        page_url = await publish_architecture(
+            project,
+            issue_key,
+            summary,
+            approach,
+            key_decisions,
+            risks,
+            is_complex=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Confluence publishing failed for ticket %s: %s", issue_key, exc
+        )
+
+    if page_url:
+        comment_text = (
+            f"*Architecture for {issue_key}*\n\n"
+            f"{summary}\n\n"
+            f"Simple change — text architecture.\n\n"
+            f"Confluence: {page_url}"
+        )
+    else:
+        comment_text = (
+            f"*Architecture for {issue_key}*\n\n"
+            f"{summary}\n\n"
+            f"Simple change — text architecture.\n\n"
+            f"(Confluence publishing unavailable)"
+        )
+
     return comment_text
