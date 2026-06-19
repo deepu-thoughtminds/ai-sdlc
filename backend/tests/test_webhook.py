@@ -1,6 +1,6 @@
 """Tests for POST /webhook/jira-comment endpoint.
 
-Tests (10 total):
+Tests (13 total):
 Existing (4, kept intact):
 1. test_valid_webhook_returns_200 - returns 200 + status received (project not found → ignored is also 200/received)
 2. test_missing_required_field_returns_422 - 422 on missing required field
@@ -16,6 +16,11 @@ New (4 from Phase 3):
 New (2 from Phase 4-02):
 9. test_architecture_mention_returns_action - @jarvis architecture → action=architecture, routed_to=freellmapi
 10. test_architecture_mention_schedules_pipeline - @jarvis architecture for known project → asyncio.create_task called
+
+New (3 from Phase 13-02): Idempotency guard
+11. test_architecture_duplicate_returns_ignored - second @jarvis architecture while active PipelineState running → action=ignored, reason=duplicate_pipeline
+12. test_architecture_failed_state_allows_new_run - existing PipelineState with status=failed does NOT block a new run
+13. test_architecture_creates_pipeline_state_before_task - new architecture run creates PipelineState(status=running) before scheduling task
 
 Uses StaticPool + same dependency override pattern from test_dashboard.py.
 Pipeline service calls are mocked at 'routers.webhook.*' import path.
@@ -443,3 +448,127 @@ async def test_native_jira_shaped_payload_returns_200():
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "received"
+
+
+# ---------------------------------------------------------------------------
+# New tests (Phase 13-02): Idempotency guard for architecture branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_architecture_duplicate_returns_ignored():
+    """Test 11: Second @jarvis architecture webhook for PROJ-1 while a PipelineState row
+    with stage='architecture' and status='running' exists → returns reason=duplicate_pipeline
+    with HTTP 200; asyncio.create_task is NOT called.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        # Pre-insert an active (running) PipelineState row
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="architecture",
+            status="running",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
+
+    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "received"
+    assert body["action"] == "ignored"
+    assert body["reason"] == "duplicate_pipeline"
+    # asyncio.create_task must NOT have been called
+    assert len(captured_coros) == 0
+
+
+@pytest.mark.asyncio
+async def test_architecture_failed_state_allows_new_run():
+    """Test 12: Existing PipelineState with status='failed' does NOT block a new run.
+    asyncio.create_task IS called.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        # Pre-insert a FAILED PipelineState row — must not block new run
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="architecture",
+            status="failed",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
+
+    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "architecture"
+    # asyncio.create_task should have been called once (new run allowed)
+    assert len(captured_coros) == 1
+
+
+@pytest.mark.asyncio
+async def test_architecture_creates_pipeline_state_before_task():
+    """Test 13: New architecture run creates a PipelineState row with status='running'
+    committed BEFORE asyncio.create_task is called.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        project_id = project.id
+    finally:
+        db.close()
+
+    pipeline_state_seen_in_db: list = []
+
+    def _check_db_then_close(coro):
+        # At the moment create_task is called, the PipelineState row must already be in DB
+        check_db = TestingSession()
+        try:
+            row = check_db.query(PipelineState).filter(
+                PipelineState.ticket_key == "PROJ-1",
+                PipelineState.stage == "architecture",
+                PipelineState.status == "running",
+            ).first()
+            pipeline_state_seen_in_db.append(row)
+        finally:
+            check_db.close()
+        coro.close()
+        return None
+
+    with patch("routers.webhook.asyncio.create_task", side_effect=_check_db_then_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
+
+    assert response.status_code == 200
+    assert response.json()["action"] == "architecture"
+    # Exactly one PipelineState row must have been found at create_task call time
+    assert len(pipeline_state_seen_in_db) == 1
+    assert pipeline_state_seen_in_db[0] is not None
