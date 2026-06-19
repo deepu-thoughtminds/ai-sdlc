@@ -1,6 +1,6 @@
 """TDD tests for approval_detector service.
 
-Tests (12 total):
+Tests (7 total, describe-only scope after Phase 13-02 architecture approval removal):
 1. test_is_approval_returns_true_for_approved
 2. test_is_approval_returns_true_for_lgtm
 3. test_is_approval_returns_true_for_plus_one
@@ -8,11 +8,10 @@ Tests (12 total):
 5. test_detect_and_apply_approval_updates_jira
 6. test_detect_and_apply_approval_noop_when_no_pending
 7. test_detect_and_apply_approval_noop_when_not_approval_text
-8. test_detect_and_apply_approval_architecture_stage_posts_comment (NEW)
-9. test_detect_and_apply_approval_architecture_with_developer_calls_assign (NEW)
-10. test_parse_developer_from_approval_returns_name (NEW)
-11. test_parse_developer_from_approval_returns_none_when_no_mention (NEW)
-12. test_architecture_approval_priority_over_describe (NEW)
+
+Architecture approval tests (8-12) removed in Phase 13-02: the architecture approval
+path was dead code after Plan 01 rewrote the pipeline to status=complete (never
+reaches awaiting_approval). The architecture block and helper functions are removed.
 
 Uses StaticPool + DB session + mocked hermes_client functions pattern.
 T-03-10: Token-based matching prevents substring false-positives (unapproved != approved).
@@ -259,164 +258,3 @@ async def test_detect_and_apply_approval_noop_when_not_approval_text():
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# New tests: architecture stage approval (Tests 8-12)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_detect_and_apply_approval_architecture_stage_posts_comment():
-    """Test 8: When a PipelineState row with stage='architecture' and
-    status='awaiting_approval' exists and comment is 'LGTM', detect_and_apply_approval
-    calls hermes_post_comment with draft_content and sets status='approved'.
-    """
-    from services.approval_detector import detect_and_apply_approval
-
-    db = TestingSession()
-    try:
-        project = _make_project(db)
-
-        # Insert awaiting_approval architecture pipeline state row
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="architecture",
-            status="awaiting_approval",
-            draft_content="Architecture options draft.",
-        )
-        db.add(ps)
-        db.commit()
-        db.refresh(ps)
-
-        event = _make_event(issue_key="PROJ-1", body="LGTM")
-
-        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
-             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_comment.return_value = {}
-
-            result = await detect_and_apply_approval(event, db, project)
-
-        assert result is True
-        assert mock_comment.called is True
-        # Check the draft content was passed to post_comment
-        call_args = mock_comment.call_args
-        assert "Architecture options draft." in call_args[0]
-
-        # Verify status was updated to approved
-        db.refresh(ps)
-        assert ps.status == "approved"
-    finally:
-        db.close()
-
-
-@pytest.mark.asyncio
-async def test_detect_and_apply_approval_architecture_with_developer_calls_assign():
-    """Test 9: When architecture approval comment includes @developer name,
-    detect_and_apply_approval calls assign_pipeline.run after posting the comment.
-    """
-    from services.approval_detector import detect_and_apply_approval
-
-    db = TestingSession()
-    try:
-        project = _make_project(db)
-
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="architecture",
-            status="awaiting_approval",
-            draft_content="Architecture options.",
-        )
-        db.add(ps)
-        db.commit()
-        db.refresh(ps)
-
-        event = _make_event(issue_key="PROJ-1", body="approved @john.doe")
-
-        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
-             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"), \
-             patch("services.approval_detector.assign_pipeline") as mock_assign_pipeline:
-            mock_comment.return_value = {}
-            mock_assign_pipeline.run = AsyncMock(return_value=None)
-
-            result = await detect_and_apply_approval(event, db, project)
-
-        assert result is True
-        mock_assign_pipeline.run.assert_called_once()
-        call_args = mock_assign_pipeline.run.call_args
-        # Verify @john.doe is in the call args
-        assert "@john.doe" in str(call_args)
-    finally:
-        db.close()
-
-
-def test_parse_developer_from_approval_returns_name():
-    """Test 10: _parse_developer_from_approval('lgtm @john.doe') returns 'john.doe'."""
-    from services.approval_detector import _parse_developer_from_approval
-    result = _parse_developer_from_approval("lgtm @john.doe")
-    assert result == "john.doe"
-
-
-def test_parse_developer_from_approval_returns_none_when_no_mention():
-    """Test 11: _parse_developer_from_approval('approved') returns None."""
-    from services.approval_detector import _parse_developer_from_approval
-    result = _parse_developer_from_approval("approved")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_architecture_approval_priority_over_describe():
-    """Test 12: When both architecture and describe rows are awaiting_approval,
-    architecture is handled first (priority rule).
-    """
-    from services.approval_detector import detect_and_apply_approval
-
-    db = TestingSession()
-    try:
-        project = _make_project(db)
-
-        # Insert BOTH architecture and describe awaiting_approval rows
-        arch_ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="architecture",
-            status="awaiting_approval",
-            draft_content="Arch draft.",
-        )
-        desc_ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="describe",
-            status="awaiting_approval",
-            draft_content="Desc draft.",
-        )
-        db.add(arch_ps)
-        db.add(desc_ps)
-        db.commit()
-        db.refresh(arch_ps)
-        db.refresh(desc_ps)
-
-        event = _make_event(issue_key="PROJ-1", body="LGTM")
-
-        with patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
-             patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_comment.return_value = {}
-            mock_put_desc.return_value = {}
-
-            result = await detect_and_apply_approval(event, db, project)
-
-        assert result is True
-        # Architecture approval uses hermes_post_comment, not hermes_put_description
-        assert mock_comment.called is True
-        mock_put_desc.assert_not_called()
-
-        # Architecture row is approved; describe row is unchanged
-        db.refresh(arch_ps)
-        db.refresh(desc_ps)
-        assert arch_ps.status == "approved"
-        assert desc_ps.status == "awaiting_approval"
-    finally:
-        db.close()

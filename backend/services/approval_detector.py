@@ -9,13 +9,17 @@ Approval keywords (APPROVAL_KEYWORDS):
     "unapproved" → False  (T-03-10: 'unapproved' is not in APPROVAL_KEYWORDS)
     "disapprove" → False  (T-03-10: 'disapprove' is not in APPROVAL_KEYWORDS)
 
+Scope: describe stage only.
+  The architecture approval path was removed in Phase 13-02. After Plan 01 rewrote
+  the architecture pipeline to run single-pass (status lifecycle: running → complete),
+  the architecture stage never reaches status='awaiting_approval', making the approval
+  block dead code. The dead code and its helpers are removed here.
+
 Threat mitigations:
   T-03-10: is_approval() uses token splitting (re.split) not substring matching;
            APPROVAL_KEYWORDS is a frozenset constant, not user-configurable.
   T-03-14: detect_and_apply_approval returns False immediately when is_approval()
            fails — single pass, no retries; DB query is a single indexed lookup.
-  T-04-08: Architecture approval posts draft_content via hermes_post_comment;
-           optional developer assignment via _parse_developer_from_approval + assign_pipeline.
   T-09-01: jira_token never logged; only issue_key logged at INFO via hermes_client.
 """
 
@@ -29,10 +33,8 @@ from sqlalchemy.orm import Session
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent
-from services import assign_pipeline
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment, put_description as hermes_put_description
-from services.mention_parser import MentionResult
 
 logger = logging.getLogger(__name__)
 
@@ -40,28 +42,16 @@ logger = logging.getLogger(__name__)
 # Approval keyword set (T-03-10: frozenset constant, not user-configurable)
 # ---------------------------------------------------------------------------
 
-# Must match AGENT_COMMENT_PREFIX in routers/webhook.py
+# Must match constants in routers/webhook.py
 AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
+
+# Plain-ASCII marker embedded in every agent comment body.
+# Jira reformats markdown (ADF) before delivering webhooks, so emoji/bold prefix
+# matching via startswith() is unreliable. This ASCII token survives ADF round-trips.
+AGENT_BODY_MARKER = "[jarvis-bot]"
 
 APPROVAL_KEYWORDS: frozenset[str] = frozenset({"approved", "lgtm", "approve", "+1"})
 
-
-def _parse_developer_from_approval(comment_body: str) -> str | None:
-    """Extract the first @mention from an approval comment body.
-
-    Used in the architecture approval flow to optionally assign the ticket to
-    a developer named in the approval comment (e.g. 'approved @john.doe').
-
-    Args:
-        comment_body: Raw approval comment text.
-
-    Returns:
-        The first @mention name (without '@' prefix), or None if no mention found.
-    """
-    match = re.search(r"@([\w.\-]+)", comment_body)
-    if match:
-        return match.group(1)
-    return None
 
 
 def is_approval(text: str) -> bool:
@@ -90,28 +80,22 @@ async def detect_and_apply_approval(
 ) -> bool:
     """Detect an approval comment and apply the stored draft to Jira.
 
-    Checks both 'architecture' and 'describe' stages (priority: architecture first).
-
-    Architecture approval flow:
+    Describe approval flow:
     1. Check is_approval(comment body) — return False immediately if not an approval.
-    2. Query DB for architecture stage row (ticket_key, stage='architecture', status='awaiting_approval').
-    3. If found: post draft_content as Jira comment via hermes_post_comment.
+    2. Query DB for describe stage row (ticket_key, stage='describe', status='awaiting_approval').
+    3. If found: call hermes_put_description with draft_content; post confirmation comment.
     4. Set row.status = 'approved'; commit.
-    5. If @developer in comment body: call assign_pipeline.run.
-    6. Return True.
+    5. Return True.
 
-    Describe approval flow (fallback if no architecture row found):
-    2b. Query DB for describe stage row (ticket_key, stage='describe', status='awaiting_approval').
-    3b. If found: call update_description with draft_content.
-    4b. Set row.status = 'approved'; commit.
-    5b. Return True.
-
-    Returns False if no approval keyword found or no matching pending row.
+    Returns False if no approval keyword found or no matching pending describe row.
 
     On any exception: log warning and return False — Jira errors must not crash the webhook.
 
-    T-03-14: Early return on non-approval text; single DB lookup per stage; no retries.
-    T-04-08: Architecture approval posts draft_content via add_comment, not update_description.
+    T-03-14: Early return on non-approval text; single DB lookup; no retries.
+
+    Note: The architecture approval path was removed in Phase 13-02. The architecture
+    pipeline now completes directly to status='complete' (never awaiting_approval), so
+    the architecture approval block was dead code after Plan 01's rewrite.
 
     Args:
         event: JiraCommentEvent with issue.key and comment.body.
@@ -121,15 +105,10 @@ async def detect_and_apply_approval(
     Returns:
         True if an approval was applied, False otherwise.
     """
-    # Skip hermes' own draft comments — prevents self-approval loop when Jira
-    # fires a webhook for the comment hermes just posted. The draft body starts
-    # with this fixed prefix; the instruction text also contains 'approved'
-    # which would otherwise match is_approval() via token splitting on "'".
-    if event.comment.body.startswith("*Draft description"):
-        return False
-
-    # Also skip any comment starting with the agent prefix (defense-in-depth).
-    if event.comment.body.startswith(AGENT_COMMENT_PREFIX):
+    # Skip any comment posted by the agent itself (defense-in-depth).
+    # AGENT_BODY_MARKER is a plain-ASCII token that survives Jira's ADF markdown
+    # reformatting, unlike AGENT_COMMENT_PREFIX which uses emoji/bold markup.
+    if AGENT_BODY_MARKER in event.comment.body:
         return False
 
     # Step 1: Early exit if comment is not an approval
@@ -137,49 +116,7 @@ async def detect_and_apply_approval(
         return False
 
     try:
-        # Step 2: Check architecture stage first (priority)
-        arch_row = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == event.issue.key,
-                PipelineState.stage == "architecture",
-                PipelineState.status == "awaiting_approval",
-            )
-            .order_by(PipelineState.created_at.desc())
-            .first()
-        )
-
-        if arch_row is not None:
-            # Architecture approval: post draft_content as Jira comment
-            # T-03-01: token is decrypted at runtime only; never logged
-            jira_token = decrypt_credential(project.jira_token)
-            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-            await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, AGENT_COMMENT_PREFIX + (arch_row.draft_content or ""))
-
-            # Mark state as approved
-            arch_row.status = "approved"
-            arch_row.updated_at = datetime.now(tz=timezone.utc)
-            db.commit()
-
-            logger.info(
-                "Architecture approval applied for ticket %s (pipeline_state_id=%s)",
-                event.issue.key,
-                arch_row.id,
-            )
-
-            # Optional: assign developer if @mention found in comment
-            developer = _parse_developer_from_approval(event.comment.body)
-            if developer:
-                mention_result = MentionResult(
-                    mention_target="jarvis",
-                    stage="assign",
-                    extra=f"@{developer}",
-                )
-                await assign_pipeline.run(event, project, mention_result)
-
-            return True
-
-        # Step 2b: Fallback — check describe stage
+        # Step 2: Check describe stage
         desc_row = (
             db.query(PipelineState)
             .filter(
@@ -202,7 +139,7 @@ async def detect_and_apply_approval(
         jira_token = decrypt_credential(project.jira_token)
         jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
         await hermes_put_description(project.jira_url, jira_email, jira_token, event.issue.key, desc_row.draft_content or "")
-        await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, AGENT_COMMENT_PREFIX + "✅ Description updated and applied to the Jira ticket.")
+        await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + "✅ Description updated and applied to the Jira ticket description.")
 
         # Mark state as approved
         desc_row.status = "approved"
