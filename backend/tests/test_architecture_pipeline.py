@@ -1,6 +1,6 @@
 """TDD tests for architecture_pipeline.run() — single-pass complexity-aware pipeline.
 
-Tests (6 total):
+Tests (7 total):
 1. test_run_complex_path — classify_complexity returns "complex"; generate_diagram called;
    publish_architecture called with is_complex=True; result contains "Multi-component feature"
 2. test_run_simple_path — classify_complexity returns "small"; generate_diagram NOT called;
@@ -12,9 +12,10 @@ Tests (6 total):
    no "https://conf" in result
 6. test_run_calls_llm_with_architecture_stage — route_request called with stage="architecture"
    and issue_summary in prompt
+7. test_run_posts_jira_comment — hermes_post_comment is called with the architecture comment body
 
 Uses StaticPool in-memory DB; unittest.mock.patch for LLM, classify_complexity, drawio,
-and Confluence dependencies.
+Confluence, and hermes_post_comment dependencies.
 
 Threat T-04-01: prompt must not contain token values — verified by checking args to route_request.
 """
@@ -160,6 +161,11 @@ async def test_run_complex_path():
                 new_callable=AsyncMock,
                 return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
             ) as mock_publish,
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
         ):
             from services.architecture_pipeline import run
 
@@ -210,6 +216,11 @@ async def test_run_simple_path():
                 new_callable=AsyncMock,
                 return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
             ) as mock_publish,
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
         ):
             from services.architecture_pipeline import run
 
@@ -275,6 +286,11 @@ async def test_run_draft_content_is_human_readable():
                 "services.architecture_pipeline.publish_architecture",
                 new_callable=AsyncMock,
                 return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
+            ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
             ),
         ):
             from services.architecture_pipeline import run
@@ -347,6 +363,11 @@ async def test_run_creates_pipeline_state_complete():
                 new_callable=AsyncMock,
                 return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
             ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
         ):
             from services.architecture_pipeline import run
 
@@ -395,6 +416,11 @@ async def test_run_graceful_on_confluence_failure():
                 new_callable=AsyncMock,
                 side_effect=Exception("network error"),
             ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
         ):
             from services.architecture_pipeline import run
 
@@ -439,6 +465,11 @@ async def test_run_calls_llm_with_architecture_stage():
                 new_callable=AsyncMock,
                 return_value="",
             ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
         ):
             from services.architecture_pipeline import run
 
@@ -460,5 +491,52 @@ async def test_run_calls_llm_with_architecture_stage():
         prompt = call_args[1]
         assert "jira-secret-token" not in prompt
         assert "conf-secret-token" not in prompt
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_posts_jira_comment():
+    """hermes_post_comment is called once with the architecture comment body.
+
+    Verifies CR-01: run() must actually post the result to Jira, not merely
+    return it. The 5th positional arg (body) must contain the issue key.
+    """
+    db = _make_db()
+    try:
+        with (
+            patch(
+                "services.architecture_pipeline.classify_complexity",
+                return_value=("small", "simple"),
+            ),
+            patch(
+                "services.architecture_pipeline.route_request",
+                return_value=_make_stub_llm_response_simple(),
+            ),
+            patch(
+                "services.architecture_pipeline.generate_diagram",
+                return_value="<mxGraphModel/>",
+            ),
+            patch(
+                "services.architecture_pipeline.generate_viewer_url",
+                return_value="https://diagrams.net/view",
+            ),
+            patch(
+                "services.architecture_pipeline.publish_architecture",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ) as mock_post,
+        ):
+            from services.architecture_pipeline import run
+            await run(_make_mock_project(), "PROJ-1", "Fix", "Small fix", db)
+
+        mock_post.assert_called_once()
+        call_body = mock_post.call_args[0][4]  # 5th positional arg is the comment body
+        assert "PROJ-1" in call_body, "comment body must reference the issue key"
     finally:
         db.close()

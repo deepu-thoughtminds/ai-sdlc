@@ -18,6 +18,7 @@ Threat mitigations:
 """
 
 import logging
+import os
 
 from sqlalchemy.orm import Session
 
@@ -25,10 +26,18 @@ from models.pipeline_state import PipelineState
 from models.project import Project
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
+from services.crypto import decrypt_credential
 from services.drawio_service import generate_diagram, generate_viewer_url
+from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
+
+# Prefix applied to all agent-generated Jira comments.
+AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
+
+# Plain-ASCII marker embedded in every agent comment body.
+AGENT_BODY_MARKER = "[jarvis-bot]"
 
 
 def _parse_sections(llm_output: str, section_names: list[str]) -> dict[str, str]:
@@ -128,6 +137,7 @@ async def run(
         db.add(state_row)
         db.commit()
 
+    comment_text = ""
     try:
         # Step 2: Classify the ticket complexity.
         complexity, rationale = classify_complexity(
@@ -150,18 +160,51 @@ async def run(
                 project, issue_key, issue_summary, issue_description
             )
 
-        # Step 4: Finalise the state row.
+        # Step 3: Post the architecture comment to Jira BEFORE finalising state.
+        # WR-01: posting first avoids a window where status="complete" but the
+        # user has not yet received the comment (e.g. if the Jira call fails
+        # after the commit, the idempotency guard would block any retry).
+        try:
+            jira_token = decrypt_credential(project.jira_token)
+            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+            await hermes_post_comment(
+                project.jira_url,
+                jira_email,
+                jira_token,
+                issue_key,
+                AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
+            )
+        except Exception as exc:
+            logger.warning("Failed to post architecture comment for ticket %s: %s", issue_key, exc)
+
+        # Step 4: Finalise the state row only after the Jira comment has been posted.
         state_row.status = "complete"
         state_row.draft_content = comment_text
         db.commit()
 
-    except Exception:
+    except Exception as exc:
         state_row.status = "failed"
         try:
             db.commit()
         except Exception:
             db.rollback()
-        raise
+        # WR-03: Notify user in Jira so the failure is visible without monitoring server logs.
+        try:
+            jira_token = decrypt_credential(project.jira_token)
+            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+            await hermes_post_comment(
+                project.jira_url,
+                jira_email,
+                jira_token,
+                issue_key,
+                AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n"
+                + "Architecture generation failed. Please retry with `@jarvis architecture`.",
+            )
+        except Exception:
+            pass
+        logger.exception("Architecture pipeline failed for ticket %s: %s", issue_key, exc)
+        # Do not re-raise — the background task has no outer exception handler,
+        # so re-raising would silently swallow the exception as an unhandled task exception.
 
     logger.info("Architecture pipeline complete for ticket %s", issue_key)
     return comment_text
