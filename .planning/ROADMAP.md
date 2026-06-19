@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Hermes MCP Client + Internal API** - HermesMCPClient with all 5 typed tool methods and 4 internal Jira HTTP endpoints that the backend will call
 - [ ] **Phase 9: Backend Migration** - All 5 JiraClient call sites in the backend replaced with hermes Jira API calls; jira_client.py removed
 - [x] **Phase 10: Complexity Classifier** - New complexity_classifier.py module with structured LLM classification call, explicit rubric, and boundary-focused unit tests (completed 2026-06-19)
-- [ ] **Phase 11: Enhanced Diagram Service** - drawio_service.py enhanced with validated mxGraph XML output, directional edges, typed-component placement, and diagrams.net viewer URL
+- [x] **Phase 11: Enhanced Diagram Service** - drawio_service.py enhanced with validated mxGraph XML output, directional edges, typed-component placement, and diagrams.net viewer URL (completed 2026-06-19)
 - [ ] **Phase 12: Structured Confluence Publishing** - confluence_client.py updated with two HTML templates (text-only and diagram+components), HTML-escaped content, idempotent find-or-update page logic, and graceful degradation
 - [ ] **Phase 13: Pipeline Orchestration & Integration** - architecture_pipeline.py rewritten to wire classifier → diagram → Confluence → Jira comment; webhook idempotency guard added; old multi-option flow removed
 
@@ -284,8 +284,14 @@ Plans:
   3. Before creating a new page, the client searches for an existing page titled `Architecture: {issue_key}` in the project space and updates it in place if found; a duplicate page is never created for the same ticket
   4. When Confluence publish fails for any reason, a Jira comment is posted with the architecture text inline and no page URL; the pipeline exits cleanly without an unhandled exception
 
-**Plans**: TBD
+**Plans**: 1 plan
 **UI hint**: no
+
+Plans:
+
+**Wave 1**
+
+- [ ] 12-01-PLAN.md — confluence_client.py: find_page/update_page idempotent lifecycle, two HTML templates (text-only, diagram+components), HTML-escaping of LLM text, graceful degradation (CONFPUB-01, CONFPUB-02, CONFPUB-03, CONFPUB-04)
 
 ### Phase 13: Pipeline Orchestration & Integration
 
@@ -322,6 +328,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Hermes MCP Client + Internal API | 0/? | Not started | - |
 | 9. Backend Migration | 0/? | Not started | - |
 | 10. Complexity Classifier | 2/2 | Complete   | 2026-06-19 |
-| 11. Enhanced Diagram Service | 0/? | Not started | - |
-| 12. Structured Confluence Publishing | 0/? | Not started | - |
+| 11. Enhanced Diagram Service | 1/1 | Complete   | 2026-06-19 |
+| 12. Structured Confluence Publishing | 0/1 | Not started | - |
 | 13. Pipeline Orchestration & Integration | 0/? | Not started | - |
