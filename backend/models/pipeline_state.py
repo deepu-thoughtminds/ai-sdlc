@@ -45,6 +45,9 @@ class PipelineState(Base):
     # status values: pending | processing | awaiting_approval | approved | failed
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     draft_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Added Phase 10 — requires DB recreation (docker compose down -v) upgrading prior schema
+    complexity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    complexity_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -66,6 +69,8 @@ class PipelineStateCreate(BaseModel):
     stage: str
     status: str = "pending"
     draft_content: str | None = None
+    complexity: str | None = None
+    complexity_rationale: str | None = None
 
 
 class PipelineStatePublic(BaseModel):
@@ -84,5 +89,7 @@ class PipelineStatePublic(BaseModel):
     stage: str
     status: str
     draft_content: str | None
+    complexity: str | None
+    complexity_rationale: str | None
     created_at: datetime
     updated_at: datetime
