@@ -48,14 +48,16 @@ services:
       - "8001:8001"
 
   mcp-atlassian:
-    image: sooperset/mcp-atlassian:latest
+    image: ghcr.io/sooperset/mcp-atlassian:latest
     environment:
-      - TRANSPORT=sse
+      - TRANSPORT=streamable-http
       - PORT=9000
-      # JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN intentionally omitted — their
-      # absence activates per-request (multi-user) credential mode. Setting them
-      # would lock the server to a single Jira instance and expose credentials
-      # in `docker inspect` output (T-07-01).
+      # Global Jira config required so mcp-atlassian loads a JiraConfig at startup.
+      # Per-request credentials (Authorization: Basic header from hermes) override
+      # username/api_token at call time — global config only provides the URL + SSL base.
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_ACCOUNT_EMAIL}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
     ports:
       - "9000:9000"
     networks:
