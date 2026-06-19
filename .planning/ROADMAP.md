@@ -76,9 +76,11 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
+
 **UI hint**: yes
 
 Plans:
@@ -103,6 +105,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
@@ -248,6 +251,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
@@ -272,6 +276,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
@@ -292,6 +297,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
@@ -333,10 +339,17 @@ Plans:
   5. All existing tests pass after the pipeline rewrite; an end-to-end test runs the new pipeline against mocked LLM, diagram, and Confluence calls and asserts that `PipelineState.draft_content` is a well-formed human-readable string (not a JSON blob)
 
 **Plans**: 3 plans
-
 Plans:
+**Wave 1**
+
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ---
