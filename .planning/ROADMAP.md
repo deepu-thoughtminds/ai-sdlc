@@ -73,7 +73,12 @@ Plans:
   3. Stored credentials are encrypted at rest; plaintext tokens are never returned by any API response or written to logs
   4. User can see which SDLC stage (description, architecture, dev, QA) each active ticket is currently at
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 **UI hint**: yes
 
 Plans:
@@ -95,7 +100,12 @@ Plans:
   4. User types an approval reply in the comment thread; agent detects it and updates the epic/story description field via Jira MCP
   5. Business user mentions `@hermes assign @architect-name` in a comment and the ticket is re-assigned to that team member in Jira
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 Plans:
 
@@ -235,7 +245,12 @@ Plans:
   4. `assign_pipeline.py` assigns issues via `POST /jira/assign` on the hermes service; the separate `lookup_user` + `assign_issue` JiraClient calls are replaced by the single endpoint
   5. `backend/services/jira_client.py` does not exist; `grep -r "JiraClient" backend/` returns no matches; all backend tests pass with hermes API mocks in place of the old JiraClient mock
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ---
 
@@ -254,7 +269,12 @@ Plans:
   3. Unit tests cover the boundary cases — a ticket at threshold-1, threshold, and threshold+1 — and the parse-to-branch logic is tested independently of the LLM call
   4. `complexity_classifier.py` can be imported and called with no database or Jira side effects, confirming it is independently testable
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ### Phase 11: Enhanced Diagram Service
 
@@ -269,7 +289,12 @@ Plans:
   3. The service returns a `diagrams.net` viewer URL (`https://app.diagrams.net/?xml=<url-encoded-xml>`) alongside the raw XML, allowing an architect to open and edit the diagram in a browser without the draw.io Confluence Marketplace plugin
   4. No new Python packages are introduced; the implementation is pure-Python string building on the existing mxGraph XML builder
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ### Phase 12: Structured Confluence Publishing
 
@@ -291,7 +316,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 12-01-PLAN.md — confluence_client.py: find_page/update_page idempotent lifecycle, two HTML templates (text-only, diagram+components), HTML-escaping of LLM text, graceful degradation (CONFPUB-01, CONFPUB-02, CONFPUB-03, CONFPUB-04)
+- [x] 12-01-PLAN.md — confluence_client.py: find_page/update_page idempotent lifecycle, two HTML templates (text-only, diagram+components), HTML-escaping of LLM text, graceful degradation (CONFPUB-01, CONFPUB-02, CONFPUB-03, CONFPUB-04)
 
 ### Phase 13: Pipeline Orchestration & Integration
 
@@ -307,7 +332,12 @@ Plans:
   4. If a second `@jarvis architecture` webhook fires for the same ticket while a pipeline is already active (status not `"failed"`), the webhook returns 200 immediately and the pipeline is not re-triggered
   5. All existing tests pass after the pipeline rewrite; an end-to-end test runs the new pipeline against mocked LLM, diagram, and Confluence calls and asserts that `PipelineState.draft_content` is a well-formed human-readable string (not a JSON blob)
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ---
 
