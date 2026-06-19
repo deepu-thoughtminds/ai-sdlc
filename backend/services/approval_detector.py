@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Must match AGENT_COMMENT_PREFIX in routers/webhook.py
-AGENT_COMMENT_PREFIX = "🤖 **Hermes:**\n\n"
+AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
 
 APPROVAL_KEYWORDS: frozenset[str] = frozenset({"approved", "lgtm", "approve", "+1"})
 
@@ -171,7 +171,7 @@ async def detect_and_apply_approval(
             developer = _parse_developer_from_approval(event.comment.body)
             if developer:
                 mention_result = MentionResult(
-                    mention_target="hermes",
+                    mention_target="jarvis",
                     stage="assign",
                     extra=f"@{developer}",
                 )

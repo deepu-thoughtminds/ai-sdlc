@@ -1,4 +1,4 @@
-"""Mention parser: extracts @hermes mentions from Jira comment text.
+"""Mention parser: extracts @jarvis mentions from Jira comment text.
 
 Threat mitigations applied:
 - T-02-02: Uses re.search with a bounded pattern; no eval or shell interpolation.
@@ -17,9 +17,9 @@ KNOWN_STAGES = {"describe", "architecture", "assign", "codegen", "testgen"}
 
 @dataclass
 class MentionResult:
-    """Result of a successful @hermes mention parse."""
+    """Result of a successful @jarvis mention parse."""
 
-    mention_target: str  # "hermes"
+    mention_target: str  # "jarvis"
     stage: str  # "describe" | "architecture" | "assign" | "codegen" | "testgen"
     extra: str = ""  # any trailing tokens after the stage keyword
 
@@ -27,7 +27,7 @@ class MentionResult:
 def parse_mention(comment_body: str) -> MentionResult | None:
     """Parse @<agent> <stage> [extra] from a comment body string.
 
-    Returns MentionResult if a valid @hermes mention with a known stage is
+    Returns MentionResult if a valid @jarvis mention with a known stage is
     found; returns None if no mention exists or the stage is unrecognised.
 
     Args:

@@ -1,6 +1,6 @@
 """Assign pipeline service — ASGN-01.
 
-Handles '@hermes assign @<name>' mentions by parsing the assignee display name,
+Handles '@jarvis assign @<name>' mentions by parsing the assignee display name,
 looking up their Jira account ID, assigning the ticket, and posting a confirmation.
 
 Threat mitigations:

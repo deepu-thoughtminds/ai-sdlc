@@ -2,11 +2,11 @@
 
 Receives POST /webhook/jira-comment from Jira Cloud, validates the webhook
 secret header, and orchestrates the full SDLC pipeline:
-  - @hermes describe → describe_pipeline → post draft comment → PipelineState awaiting_approval
-  - @hermes architecture → architecture_pipeline (background task) → PipelineState awaiting_approval
-  - @hermes assign @<name> → assign_pipeline → lookup_user + assign_issue + confirmation
-    ASGN-02: @hermes assign @developer-name (architect → dev)
-    ASGN-03: @hermes assign @qa-name (developer → QA)
+  - @jarvis describe → describe_pipeline → post draft comment → PipelineState awaiting_approval
+  - @jarvis architecture → architecture_pipeline (background task) → PipelineState awaiting_approval
+  - @jarvis assign @<name> → assign_pipeline → lookup_user + assign_issue + confirmation
+    ASGN-02: @jarvis assign @developer-name (architect → dev)
+    ASGN-03: @jarvis assign @qa-name (developer → QA)
     Both are satisfied by the existing stage-agnostic assign_pipeline.run() above.
   - Plain comment with approval keyword → approval_detector → update Jira description / post arch comment
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Prefix applied to all agent-generated Jira comments.
 # Webhook handler ignores any comment starting with this prefix to prevent
 # the agent's own comments from re-triggering the pipeline.
-AGENT_COMMENT_PREFIX = "🤖 **Hermes:**\n\n"
+AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
 
 router = APIRouter()
 
@@ -77,7 +77,7 @@ async def handle_jira_comment(
     1. Parse project_key from the issue key (e.g. "PROJ-1" → "PROJ").
     2. Look up the project in the DB by project_key.
     3. If no project: return {"status": "received", "action": "ignored", "reason": "project_not_found"}.
-    4. Parse @hermes mention from comment body.
+    4. Parse @jarvis mention from comment body.
     5a. stage == "describe": run describe_pipeline, post draft comment, save PipelineState.
     5b. stage == "architecture": schedule architecture_pipeline as asyncio background task.
     5c. stage == "assign": run assign_pipeline (ASGN-02 + ASGN-03 — stage-agnostic).
@@ -182,8 +182,8 @@ async def handle_jira_comment(
         }
 
     # Step 4c: Handle 'assign' stage
-    # ASGN-02: @hermes assign @developer-name (architect → dev)
-    # ASGN-03: @hermes assign @qa-name (developer → QA)
+    # ASGN-02: @jarvis assign @developer-name (architect → dev)
+    # ASGN-03: @jarvis assign @qa-name (developer → QA)
     # Both are satisfied by the existing stage-agnostic assign_pipeline.run() below.
     elif mention_result is not None and mention_result.stage == "assign":
         await assign_pipeline.run(event, project, mention_result)

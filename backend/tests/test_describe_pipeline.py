@@ -44,7 +44,7 @@ def _make_mock_event():
     event = MagicMock()
     event.issue.key = "PROJ-42"
     event.issue.fields = {"summary": "Add JWT authentication"}
-    event.comment.body = "@hermes describe Add JWT login with refresh tokens"
+    event.comment.body = "@jarvis describe Add JWT login with refresh tokens"
     return event
 
 

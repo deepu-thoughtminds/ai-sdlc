@@ -4,8 +4,8 @@ Tests (10 total):
 Existing (4, kept intact):
 1. test_valid_webhook_returns_200 - returns 200 + status received (project not found → ignored is also 200/received)
 2. test_missing_required_field_returns_422 - 422 on missing required field
-3. test_no_mention_returns_ignored - no @hermes mention → action=ignored
-4. test_hermes_mention_returns_action - @hermes describe with matching project → action=describe
+3. test_no_mention_returns_ignored - no @jarvis mention → action=ignored
+4. test_hermes_mention_returns_action - @jarvis describe with matching project → action=describe
 
 New (4 from Phase 3):
 5. test_describe_mention_creates_pipeline_state - describe → action=describe and PipelineState row created
@@ -14,8 +14,8 @@ New (4 from Phase 3):
 8. test_unknown_project_returns_ignored - unknown project key → action=ignored, reason=project_not_found
 
 New (2 from Phase 4-02):
-9. test_architecture_mention_returns_action - @hermes architecture → action=architecture, routed_to=freellmapi
-10. test_architecture_mention_schedules_pipeline - @hermes architecture for known project → asyncio.create_task called
+9. test_architecture_mention_returns_action - @jarvis architecture → action=architecture, routed_to=freellmapi
+10. test_architecture_mention_schedules_pipeline - @jarvis architecture for known project → asyncio.create_task called
 
 Uses StaticPool + same dependency override pattern from test_dashboard.py.
 Pipeline service calls are mocked at 'routers.webhook.*' import path.
@@ -121,7 +121,7 @@ def _create_project(db, key: str = "PROJ") -> Project:
 VALID_DESCRIBE_PAYLOAD = {
     "webhook_event": "comment_created",
     "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
-    "comment": {"id": "20001", "body": "@hermes describe", "author": "alice"},
+    "comment": {"id": "20001", "body": "@jarvis describe", "author": "alice"},
     "timestamp": 1718000000,
 }
 
@@ -134,14 +134,14 @@ NO_MENTION_PAYLOAD = {
 
 MISSING_FIELD_PAYLOAD = {
     "webhook_event": "comment_created",
-    "comment": {"id": "20003", "body": "@hermes describe", "author": "carol"},
+    "comment": {"id": "20003", "body": "@jarvis describe", "author": "carol"},
     "timestamp": 1718000002,
 }
 
 UNKNOWN_PROJECT_PAYLOAD = {
     "webhook_event": "comment_created",
     "issue": {"id": "99999", "key": "UNKNOWN-1", "summary": "Unknown"},
-    "comment": {"id": "20099", "body": "@hermes describe", "author": "dave"},
+    "comment": {"id": "20099", "body": "@jarvis describe", "author": "dave"},
     "timestamp": 1718000010,
 }
 
@@ -170,7 +170,7 @@ async def test_missing_required_field_returns_422():
 
 
 async def test_no_mention_returns_ignored():
-    """Test 3: POST where comment body has no @hermes mention returns action: ignored.
+    """Test 3: POST where comment body has no @jarvis mention returns action: ignored.
 
     No project in DB for PROJ-2 → returns project_not_found ignored.
     """
@@ -183,7 +183,7 @@ async def test_no_mention_returns_ignored():
 
 
 async def test_hermes_mention_returns_action():
-    """Test 4: POST with @hermes describe and a matching project returns action=describe.
+    """Test 4: POST with @jarvis describe and a matching project returns action=describe.
 
     Creates a PROJ project in the test DB and mocks describe_pipeline.run and hermes_post_comment
     so the handler completes without real API calls.
@@ -214,7 +214,7 @@ async def test_hermes_mention_returns_action():
 
 
 async def test_describe_mention_creates_pipeline_state():
-    """Test 5: POST with '@hermes describe' and matching project returns action=describe
+    """Test 5: POST with '@jarvis describe' and matching project returns action=describe
     and creates a PipelineState row with status='awaiting_approval'.
     """
     db = TestingSession()
@@ -256,7 +256,7 @@ async def test_describe_mention_creates_pipeline_state():
 
 
 async def test_assign_mention_calls_assign_pipeline():
-    """Test 6: POST with '@hermes assign @jane.smith' returns action=assign."""
+    """Test 6: POST with '@jarvis assign @jane.smith' returns action=assign."""
     db = TestingSession()
     try:
         _create_project(db, key="PROJ")
@@ -266,7 +266,7 @@ async def test_assign_mention_calls_assign_pipeline():
     assign_payload = {
         "webhook_event": "comment_created",
         "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
-        "comment": {"id": "20001", "body": "@hermes assign @jane.smith", "author": "alice"},
+        "comment": {"id": "20001", "body": "@jarvis assign @jane.smith", "author": "alice"},
         "timestamp": 1718000000,
     }
 
@@ -346,13 +346,13 @@ async def test_unknown_project_returns_ignored():
 ARCHITECTURE_PAYLOAD = {
     "webhook_event": "comment_created",
     "issue": {"id": "10001", "key": "PROJ-1", "summary": "New feature"},
-    "comment": {"id": "20001", "body": "@hermes architecture", "author": "architect"},
+    "comment": {"id": "20001", "body": "@jarvis architecture", "author": "architect"},
     "timestamp": 1718000020,
 }
 
 
 async def test_architecture_mention_returns_action():
-    """Test 9: POST with '@hermes architecture' and a matching project returns
+    """Test 9: POST with '@jarvis architecture' and a matching project returns
     status=received, action=architecture, routed_to=freellmapi.
     """
     db = TestingSession()
@@ -378,7 +378,7 @@ async def test_architecture_mention_returns_action():
 
 
 async def test_architecture_mention_schedules_pipeline():
-    """Test 10: POST with '@hermes architecture' for a known project calls
+    """Test 10: POST with '@jarvis architecture' for a known project calls
     asyncio.create_task once to schedule architecture_pipeline.run.
     """
     db = TestingSession()

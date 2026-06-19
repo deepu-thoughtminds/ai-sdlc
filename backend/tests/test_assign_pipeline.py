@@ -39,7 +39,7 @@ def _make_project() -> MagicMock:
     return project
 
 
-def _make_event(issue_key: str = "PROJ-1", body: str = "@hermes assign @john.doe") -> JiraCommentEvent:
+def _make_event(issue_key: str = "PROJ-1", body: str = "@jarvis assign @john.doe") -> JiraCommentEvent:
     """Build a minimal JiraCommentEvent for tests."""
     return JiraCommentEvent(
         webhook_event="comment_created",
