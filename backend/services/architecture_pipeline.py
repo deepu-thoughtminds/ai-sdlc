@@ -105,17 +105,28 @@ async def run(
     """
     logger.info("Architecture pipeline started for ticket %s", issue_key)
 
-    # Step 1: Create PipelineState row immediately (status="running") so the
-    # webhook idempotency guard can detect a duplicate before scheduling a
-    # second background task.
-    state_row = PipelineState(
-        project_id=project.id,
-        ticket_key=issue_key,
-        stage="architecture",
-        status="running",
+    # Step 1: Re-use the PipelineState row created by the webhook idempotency
+    # guard (webhook.py creates it with status="running" BEFORE scheduling this
+    # task). If no row found (e.g. direct call in tests), create one.
+    state_row = (
+        db.query(PipelineState)
+        .filter(
+            PipelineState.ticket_key == issue_key,
+            PipelineState.stage == "architecture",
+            PipelineState.status == "running",
+        )
+        .order_by(PipelineState.created_at.desc())
+        .first()
     )
-    db.add(state_row)
-    db.commit()
+    if state_row is None:
+        state_row = PipelineState(
+            project_id=project.id,
+            ticket_key=issue_key,
+            stage="architecture",
+            status="running",
+        )
+        db.add(state_row)
+        db.commit()
 
     try:
         # Step 2: Classify the ticket complexity.

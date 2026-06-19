@@ -3,7 +3,7 @@
 Receives POST /webhook/jira-comment from Jira Cloud, validates the webhook
 secret header, and orchestrates the full SDLC pipeline:
   - @jarvis describe → describe_pipeline → post draft comment → PipelineState awaiting_approval
-  - @jarvis architecture → architecture_pipeline (background task) → PipelineState awaiting_approval
+  - @jarvis architecture → idempotency guard (returns duplicate_pipeline if active) → architecture_pipeline (background task) → PipelineState running → complete
   - @jarvis assign @<name> → assign_pipeline → lookup_user + assign_issue + confirmation
     ASGN-02: @jarvis assign @developer-name (architect → dev)
     ASGN-03: @jarvis assign @qa-name (developer → QA)
@@ -39,9 +39,13 @@ from services.mention_parser import parse_mention
 logger = logging.getLogger(__name__)
 
 # Prefix applied to all agent-generated Jira comments.
-# Webhook handler ignores any comment starting with this prefix to prevent
-# the agent's own comments from re-triggering the pipeline.
 AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
+
+# Plain-ASCII marker embedded in every agent comment body.
+# Used to identify agent-generated comments in webhook payloads — more reliable
+# than AGENT_COMMENT_PREFIX because Jira reformats markdown (ADF conversion)
+# before delivering the webhook, so startswith() on emoji/bold markup is fragile.
+AGENT_BODY_MARKER = "[jarvis-bot]"
 
 router = APIRouter()
 
@@ -79,7 +83,7 @@ async def handle_jira_comment(
     3. If no project: return {"status": "received", "action": "ignored", "reason": "project_not_found"}.
     4. Parse @jarvis mention from comment body.
     5a. stage == "describe": run describe_pipeline, post draft comment, save PipelineState.
-    5b. stage == "architecture": schedule architecture_pipeline as asyncio background task.
+    5b. stage == "architecture": idempotency guard checks for active run; if none, creates PipelineState(status=running) then schedules architecture_pipeline as asyncio background task.
     5c. stage == "assign": run assign_pipeline (ASGN-02 + ASGN-03 — stage-agnostic).
     5d. No mention: check for approval keyword; call approval_detector.
     5e. Other known stages: route via llm_router (for future phases / backward compat).
@@ -102,7 +106,10 @@ async def handle_jira_comment(
         return {"status": "received", "action": "ignored", "reason": "project_not_found"}
 
     # Ignore comments posted by the agent itself — prevents self-triggering loops.
-    if event.comment.body.startswith(AGENT_COMMENT_PREFIX):
+    # Use AGENT_BODY_MARKER (plain ASCII) instead of startswith(AGENT_COMMENT_PREFIX)
+    # because Jira reformats markdown via ADF before delivering the webhook body,
+    # making emoji/bold prefix matching unreliable.
+    if AGENT_BODY_MARKER in event.comment.body:
         return {"status": "received", "action": "ignored", "reason": "agent_comment"}
 
     # Step 3: Parse the mention
@@ -143,7 +150,8 @@ async def handle_jira_comment(
                 jira_token,
                 event.issue.key,
                 AGENT_COMMENT_PREFIX
-                + "*Draft description — please review and reply* `approved` *to apply:*\n\n"
+                + AGENT_BODY_MARKER + "\n\n"
+                + "*Draft description — reply* `lgtm` *below to apply it to the ticket:*\n\n"
                 + description,
             )
         except Exception as exc:
@@ -165,6 +173,39 @@ async def handle_jira_comment(
 
     # Step 4b: Handle 'architecture' stage (background task — LLM call is heavy)
     elif mention_result is not None and mention_result.stage == "architecture":
+        # T-13-04 / ARCHINT-02: Idempotency guard — if an active (non-failed)
+        # PipelineState row already exists for this ticket+stage, return 200
+        # immediately without scheduling a second heavy LLM task.
+        existing = (
+            db.query(PipelineState)
+            .filter(
+                PipelineState.ticket_key == event.issue.key,
+                PipelineState.stage == "architecture",
+                PipelineState.status != "failed",
+            )
+            .first()
+        )
+        if existing is not None:
+            logger.info(
+                "Architecture pipeline already active for issue %s (state_id=%s) — ignoring duplicate",
+                event.issue.key,
+                existing.id,
+            )
+            return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
+
+        # Create PipelineState row with status="running" BEFORE scheduling the
+        # background task so the idempotency guard above can detect a near-
+        # simultaneous second webhook. The architecture_pipeline.run() will
+        # re-use this row instead of creating a second one.
+        state_row = PipelineState(
+            project_id=project.id,
+            ticket_key=event.issue.key,
+            stage="architecture",
+            status="running",
+        )
+        db.add(state_row)
+        db.commit()
+
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
         asyncio.create_task(
@@ -173,7 +214,9 @@ async def handle_jira_comment(
             )
         )
         logger.info(
-            "Architecture pipeline scheduled for issue %s", event.issue.key
+            "Architecture pipeline scheduled for issue %s (state_id=%s)",
+            event.issue.key,
+            state_row.id,
         )
         return {
             "status": "received",
