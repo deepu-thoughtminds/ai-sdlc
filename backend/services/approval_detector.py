@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 # Approval keyword set (T-03-10: frozenset constant, not user-configurable)
 # ---------------------------------------------------------------------------
 
+# Must match AGENT_COMMENT_PREFIX in routers/webhook.py
+AGENT_COMMENT_PREFIX = "🤖 **Hermes:**\n\n"
+
 APPROVAL_KEYWORDS: frozenset[str] = frozenset({"approved", "lgtm", "approve", "+1"})
 
 
@@ -125,6 +128,10 @@ async def detect_and_apply_approval(
     if event.comment.body.startswith("*Draft description"):
         return False
 
+    # Also skip any comment starting with the agent prefix (defense-in-depth).
+    if event.comment.body.startswith(AGENT_COMMENT_PREFIX):
+        return False
+
     # Step 1: Early exit if comment is not an approval
     if not is_approval(event.comment.body):
         return False
@@ -147,7 +154,7 @@ async def detect_and_apply_approval(
             # T-03-01: token is decrypted at runtime only; never logged
             jira_token = decrypt_credential(project.jira_token)
             jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-            await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, arch_row.draft_content or "")
+            await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, AGENT_COMMENT_PREFIX + (arch_row.draft_content or ""))
 
             # Mark state as approved
             arch_row.status = "approved"
@@ -195,7 +202,7 @@ async def detect_and_apply_approval(
         jira_token = decrypt_credential(project.jira_token)
         jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
         await hermes_put_description(project.jira_url, jira_email, jira_token, event.issue.key, desc_row.draft_content or "")
-        await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, "Description updated...")
+        await hermes_post_comment(project.jira_url, jira_email, jira_token, event.issue.key, AGENT_COMMENT_PREFIX + "✅ Description updated and applied to the Jira ticket.")
 
         # Mark state as approved
         desc_row.status = "approved"

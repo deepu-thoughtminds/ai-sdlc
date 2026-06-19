@@ -38,6 +38,11 @@ from services.mention_parser import parse_mention
 
 logger = logging.getLogger(__name__)
 
+# Prefix applied to all agent-generated Jira comments.
+# Webhook handler ignores any comment starting with this prefix to prevent
+# the agent's own comments from re-triggering the pipeline.
+AGENT_COMMENT_PREFIX = "🤖 **Hermes:**\n\n"
+
 router = APIRouter()
 
 
@@ -96,11 +101,24 @@ async def handle_jira_comment(
         )
         return {"status": "received", "action": "ignored", "reason": "project_not_found"}
 
+    # Ignore comments posted by the agent itself — prevents self-triggering loops.
+    if event.comment.body.startswith(AGENT_COMMENT_PREFIX):
+        return {"status": "received", "action": "ignored", "reason": "agent_comment"}
+
     # Step 3: Parse the mention
     mention_result = parse_mention(event.comment.body)
 
     # Step 4a: Handle 'describe' stage
     if mention_result is not None and mention_result.stage == "describe":
+        # Expire any previous awaiting_approval describe states for this ticket
+        # so stale states from earlier failed runs don't get processed later.
+        db.query(PipelineState).filter(
+            PipelineState.ticket_key == event.issue.key,
+            PipelineState.stage == "describe",
+            PipelineState.status == "awaiting_approval",
+        ).update({"status": "superseded"})
+        db.flush()
+
         # Create initial PipelineState row with status="processing"
         state_row = PipelineState(
             project_id=project.id,
@@ -124,11 +142,9 @@ async def handle_jira_comment(
                 jira_email,
                 jira_token,
                 event.issue.key,
-                (
-                    "*Draft description (awaiting your approval):*\n\n"
-                    f"{description}\n\n"
-                    "Reply with 'approved', 'LGTM', or '+1' to apply this description to the ticket."
-                ),
+                AGENT_COMMENT_PREFIX
+                + "*Draft description — please review and reply* `approved` *to apply:*\n\n"
+                + description,
             )
         except Exception as exc:
             logger.warning(
