@@ -77,8 +77,8 @@ Plans:
 
 Plans:
 
-- [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 **UI hint**: yes
@@ -107,7 +107,7 @@ Plans:
 Plans:
 
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 Plans:
@@ -253,7 +253,7 @@ Plans:
 Plans:
 
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ---
@@ -278,7 +278,7 @@ Plans:
 Plans:
 
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ### Phase 11: Enhanced Diagram Service
@@ -299,7 +299,7 @@ Plans:
 Plans:
 
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 - [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ### Phase 12: Structured Confluence Publishing
@@ -346,7 +346,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
+- [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -373,4 +373,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. Complexity Classifier | 2/2 | Complete   | 2026-06-19 |
 | 11. Enhanced Diagram Service | 1/1 | Complete   | 2026-06-19 |
 | 12. Structured Confluence Publishing | 0/1 | Not started | - |
-| 13. Pipeline Orchestration & Integration | 0/? | Not started | - |
+| 13. Pipeline Orchestration & Integration | 1/3 | In Progress|  |

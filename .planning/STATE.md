@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Smart Architecture & Confluence Publishing
 status: executing
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-06-19T09:42:02.618Z"
-last_activity: 2026-06-19 -- Phase 12 execution started
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-06-19T10:42:00.000Z"
+last_activity: 2026-06-19 -- Phase 13 Plan 02 executed (idempotency guard + approval cleanup)
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 4
-  completed_plans: 4
-  percent: 75
+  total_plans: 7
+  completed_plans: 6
+  percent: 86
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 12 — Structured Confluence Publishing
+**Current focus:** Phase 13 — pipeline-orchestration-integration
 
 ## Current Position
 
-Phase: 12 (Structured Confluence Publishing) — EXECUTING
-Plan: 1 of 1
-Status: Ready to execute
-Last activity: 2026-06-19 -- Phase 12 execution started
+Phase: 13 (pipeline-orchestration-integration) — EXECUTING
+Plan: 3 of 3
+Status: Ready to execute Plan 03
+Last activity: 2026-06-19 -- Phase 13 Plan 02 executed (idempotency guard + approval cleanup)
 
 ## Milestone History
 
@@ -75,6 +75,8 @@ Last activity: 2026-06-19 -- Phase 12 execution started
 | Phase 10 P01 | 2min | 3 tasks | 3 files |
 | Phase 11 P01 | 2min | 2 tasks | 2 files |
 | Phase 12-structured-confluence-publishing P01 | 18 min | 1 tasks | 2 files |
+| Phase 13 P01 | 8 | 1 tasks | 1 files |
+| Phase 13 P02 | 9min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -122,6 +124,11 @@ Recent decisions affecting current work:
 - [Phase ?]: Typed shapes use keyword matching (case-insensitive) in _component_style — matches LLM-generated component name patterns without schema changes
 - [Phase ?]: validate_xml catches ET.ParseError plus bare Exception — returns False, never raises (T-11-03 mitigation)
 - [Phase 12-structured-confluence-publishing]: Confluence page title standardized to 'Architecture: {issue_key}' for consistent find_page lookups — Enables find-or-update idempotency: same title used by find_page CQL search before create/update
+- [Phase ?]: Single-pass complexity-aware architecture pipeline replaces multi-option flow (ARCHGEN-01, ARCHINT-03)
+- [Phase ?]: PipelineState.status lifecycle: running to complete, not awaiting_approval
+- [Phase 13-02]: Webhook idempotency guard: status != 'failed' allows retry; active runs (running/complete) block duplicate task scheduling
+- [Phase 13-02]: Webhook creates PipelineState(status=running) before asyncio.create_task; pipeline re-uses existing row
+- [Phase 13-02]: Architecture approval path removed from approval_detector — dead code after Plan 01 changed lifecycle to running→complete
 
 ### Pending Todos
 
@@ -142,7 +149,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-19T07:10:04.519Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-06-19T10:42:00.000Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
-Next action: Run `/gsd-plan-phase 10` to plan Phase 10 (Complexity Classifier)
+Next action: Execute 13-03-PLAN.md (replace architecture pipeline tests + add idempotency test)
