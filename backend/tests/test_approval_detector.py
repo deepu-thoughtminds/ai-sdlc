@@ -1,24 +1,18 @@
-"""TDD tests for approval_detector service.
+"""Tests for approval_detector.detect_and_apply_approval().
 
-Tests (7 total, describe-only scope after Phase 13-02 architecture approval removal):
-1. test_is_approval_returns_true_for_approved
-2. test_is_approval_returns_true_for_lgtm
-3. test_is_approval_returns_true_for_plus_one
-4. test_is_approval_returns_false_for_random
-5. test_detect_and_apply_approval_updates_jira
-6. test_detect_and_apply_approval_noop_when_no_pending
-7. test_detect_and_apply_approval_noop_when_not_approval_text
+Approval is now entirely mention-based — is_approval() and APPROVAL_KEYWORDS
+have been removed. detect_and_apply_approval receives the sub-command directly
+from mention_parser via the webhook router.
 
-Architecture approval tests (8-12) removed in Phase 13-02: the architecture approval
-path was dead code after Plan 01 rewrote the pipeline to status=complete (never
-reaches awaiting_approval). The architecture block and helper functions are removed.
-
-Uses StaticPool + DB session + mocked hermes_client functions pattern.
-T-03-10: Token-based matching prevents substring false-positives (unapproved != approved).
+Tests:
+1. test_detect_and_apply_approval_story_description_updates_jira
+2. test_detect_and_apply_approval_noop_when_no_pending
+3. test_detect_and_apply_approval_noop_for_wrong_stage
+4. test_detect_and_apply_approval_skips_agent_comment
 """
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -26,15 +20,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Set env vars BEFORE importing any app modules.
+# Set env vars BEFORE importing app modules.
 _TEST_KEY = Fernet.generate_key().decode()
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-
-# ---------------------------------------------------------------------------
-# Set up a shared in-memory SQLite engine using StaticPool so all connections
-# see the same database.
-# ---------------------------------------------------------------------------
 
 TEST_ENGINE = create_engine(
     "sqlite:///:memory:",
@@ -42,42 +31,22 @@ TEST_ENGINE = create_engine(
     poolclass=StaticPool,
 )
 
-# Import app modules after setting env vars.
+# Import app modules after env vars are set.
 from database import Base  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.project import Project  # noqa: E402
+import models.ticket_status  # noqa: E402,F401
 from models.pipeline_state import PipelineState  # noqa: E402
-from models.webhook import JiraCommentEvent, JiraIssue, JiraComment  # noqa: E402
+from models.project import Project  # noqa: E402
+from models.webhook import JiraComment, JiraCommentEvent, JiraIssue  # noqa: E402
+from services.crypto import encrypt_credential  # noqa: E402
 
-# Create tables on our StaticPool-backed engine.
 Base.metadata.create_all(TEST_ENGINE)
-
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
-
-
-@pytest.fixture(autouse=True)
-def reset_tables():
-    """Drop and recreate all tables before each test for full isolation."""
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
+TestingSession = sessionmaker(bind=TEST_ENGINE, autoflush=False, autocommit=False)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_project(db) -> Project:
-    """Insert a Project row and return the ORM object."""
-    from services.crypto import encrypt_credential
+def _make_project(db, project_key="PROJ"):
     project = Project(
         name="Test Project",
-        project_key="PROJ",
+        project_key=project_key,
         jira_url="https://test.atlassian.net",
         confluence_url="https://test.atlassian.net/wiki",
         jira_token=encrypt_credential("fake-jira-token"),
@@ -90,8 +59,7 @@ def _make_project(db) -> Project:
     return project
 
 
-def _make_event(issue_key: str = "PROJ-1", body: str = "LGTM") -> JiraCommentEvent:
-    """Build a minimal JiraCommentEvent for tests."""
+def _make_event(issue_key: str = "PROJ-1", body: str = "@jarvis approve story description") -> JiraCommentEvent:
     return JiraCommentEvent(
         webhook_event="comment_created",
         issue=JiraIssue(id="1", key=issue_key),
@@ -99,65 +67,14 @@ def _make_event(issue_key: str = "PROJ-1", body: str = "LGTM") -> JiraCommentEve
     )
 
 
-# ---------------------------------------------------------------------------
-# is_approval tests
-# ---------------------------------------------------------------------------
-
-
-def test_is_approval_returns_true_for_approved():
-    """is_approval('Approved!') returns True (case-insensitive token match)."""
-    from services.approval_detector import is_approval
-    assert is_approval("Approved!") is True
-
-
-def test_is_approval_returns_true_for_lgtm():
-    """is_approval('LGTM') returns True."""
-    from services.approval_detector import is_approval
-    assert is_approval("LGTM") is True
-
-
-def test_is_approval_returns_true_for_plus_one():
-    """is_approval('+1 looks good') returns True."""
-    from services.approval_detector import is_approval
-    assert is_approval("+1 looks good") is True
-
-
-def test_is_approval_returns_false_for_random():
-    """is_approval('What about the edge case?') returns False."""
-    from services.approval_detector import is_approval
-    assert is_approval("What about the edge case?") is False
-
-
-def test_is_approval_returns_false_for_unapproved():
-    """is_approval('unapproved') returns False - T-03-10: no substring match."""
-    from services.approval_detector import is_approval
-    assert is_approval("unapproved") is False
-
-
-def test_is_approval_returns_false_for_disapprove():
-    """is_approval('I disapprove of this') returns False - T-03-10: no substring match."""
-    from services.approval_detector import is_approval
-    assert is_approval("I disapprove of this") is False
-
-
-# ---------------------------------------------------------------------------
-# detect_and_apply_approval tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_detect_and_apply_approval_updates_jira():
-    """When a PipelineState row with status='awaiting_approval' exists and comment is 'LGTM',
-    detect_and_apply_approval calls hermes_put_description with draft_content and
-    sets status='approved'.
-    """
+async def test_detect_and_apply_approval_story_description_updates_jira():
+    """approve_subcmd='story description' + awaiting_approval row -> put_description called, status='approved'."""
     from services.approval_detector import detect_and_apply_approval
 
     db = TestingSession()
     try:
         project = _make_project(db)
-
-        # Insert awaiting_approval pipeline state row
         ps = PipelineState(
             project_id=project.id,
             ticket_key="PROJ-1",
@@ -169,22 +86,18 @@ async def test_detect_and_apply_approval_updates_jira():
         db.commit()
         db.refresh(ps)
 
-        event = _make_event(issue_key="PROJ-1", body="LGTM")
+        event = _make_event(issue_key="PROJ-1")
 
-        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put, \
+             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock), \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-            mock_put_desc.return_value = {}
-
-            result = await detect_and_apply_approval(event, db, project)
+            mock_put.return_value = {}
+            result = await detect_and_apply_approval(event, db, project, "story description")
 
         assert result is True
-        mock_put_desc.assert_called_once()
-        # Verify the draft_content was passed
-        call_args = mock_put_desc.call_args
-        assert "Elaborated description." in call_args[0]
-
-        # Verify status was updated
+        mock_put.assert_called_once()
+        put_args = mock_put.call_args[0]
+        assert "Elaborated description." in put_args
         db.refresh(ps)
         assert ps.status == "approved"
     finally:
@@ -193,68 +106,68 @@ async def test_detect_and_apply_approval_updates_jira():
 
 @pytest.mark.asyncio
 async def test_detect_and_apply_approval_noop_when_no_pending():
-    """When no PipelineState row with status='awaiting_approval' exists, returns False
-    and hermes_put_description is NOT called.
-    """
+    """No awaiting_approval row -> returns False, hermes_put_description not called."""
     from services.approval_detector import detect_and_apply_approval
 
     db = TestingSession()
     try:
-        project = _make_project(db)
-        # No PipelineState rows inserted
+        project = _make_project(db, project_key="PROJ99")
+        event = _make_event(issue_key="PROJ-99")
 
-        event = _make_event(issue_key="PROJ-1", body="LGTM")
-
-        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-
-            result = await detect_and_apply_approval(event, db, project)
+            result = await detect_and_apply_approval(event, db, project, "story description")
 
         assert result is False
-        mock_put_desc.assert_not_called()
+        mock_put.assert_not_called()
     finally:
         db.close()
 
 
 @pytest.mark.asyncio
-async def test_detect_and_apply_approval_noop_when_not_approval_text():
-    """When a PipelineState row exists but comment text is not an approval keyword,
-    returns False and the row status remains unchanged.
-    """
+async def test_detect_and_apply_approval_noop_for_wrong_stage():
+    """approve_subcmd='architecture' with awaiting_approval describe row -> returns False (stage mismatch)."""
     from services.approval_detector import detect_and_apply_approval
 
     db = TestingSession()
     try:
-        project = _make_project(db)
-
-        # Insert awaiting_approval row
+        project = _make_project(db, project_key="PROJ2")
         ps = PipelineState(
             project_id=project.id,
-            ticket_key="PROJ-1",
+            ticket_key="PROJ-2",
             stage="describe",
             status="awaiting_approval",
-            draft_content="Some draft.",
+            draft_content="Some description.",
         )
         db.add(ps)
         db.commit()
-        db.refresh(ps)
 
-        event = _make_event(issue_key="PROJ-1", body="Can you change the wording?")
+        event = _make_event(issue_key="PROJ-2")
 
-        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put_desc, \
-             patch("services.approval_detector.hermes_post_comment", new_callable=AsyncMock) as mock_comment, \
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put, \
              patch("services.approval_detector.decrypt_credential", return_value="plaintext-token"):
-
-            result = await detect_and_apply_approval(event, db, project)
+            result = await detect_and_apply_approval(event, db, project, "architecture")
 
         assert result is False
-        mock_put_desc.assert_not_called()
-
-        # Row status unchanged
-        db.refresh(ps)
-        assert ps.status == "awaiting_approval"
+        mock_put.assert_not_called()
     finally:
         db.close()
 
 
+@pytest.mark.asyncio
+async def test_detect_and_apply_approval_skips_agent_comment():
+    """Comment body containing [jarvis-bot] marker -> returns False (no self-trigger)."""
+    from services.approval_detector import detect_and_apply_approval
+
+    db = TestingSession()
+    try:
+        project = _make_project(db, project_key="PROJSKIP")
+        event = _make_event(issue_key="PROJ-1", body="[jarvis-bot] @jarvis approve story description")
+
+        with patch("services.approval_detector.hermes_put_description", new_callable=AsyncMock) as mock_put:
+            result = await detect_and_apply_approval(event, db, project, "story description")
+
+        assert result is False
+        mock_put.assert_not_called()
+    finally:
+        db.close()

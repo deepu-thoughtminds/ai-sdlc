@@ -188,10 +188,8 @@ async def test_no_mention_returns_ignored():
 
 
 async def test_hermes_mention_returns_action():
-    """Test 4: POST with @jarvis describe and a matching project returns action=describe.
-
-    Creates a PROJ project in the test DB and mocks describe_pipeline.run and hermes_post_comment
-    so the handler completes without real API calls.
+    """Test 4: POST with @jarvis describe (legacy, removed) and a matching project
+    now returns action=ignored — auto-trigger on Story creation is primary.
     """
     db = TestingSession()
     try:
@@ -199,18 +197,13 @@ async def test_hermes_mention_returns_action():
     finally:
         db.close()
 
-    with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
-         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post_comment:
-        mock_run.return_value = "Draft text."
-        mock_post_comment.return_value = {}
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "received"
-    assert body.get("action") == "describe"
+    assert body.get("action") == "ignored"
 
 
 # ---------------------------------------------------------------------------
@@ -229,13 +222,25 @@ async def test_describe_mention_creates_pipeline_state():
     finally:
         db.close()
 
+    story_created_payload = {
+        "webhook_event": "jira:issue_created",
+        "issue": {
+            "id": "10001",
+            "key": "PROJ-1",
+            "summary": "Feature X",
+            "issue_type": "Story",
+        },
+        "timestamp": 1718000000,
+    }
+
     with patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
-         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post_comment:
+         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post_comment, \
+         patch("routers.webhook.decrypt_credential", return_value="plaintext-token"):
         mock_run.return_value = "Draft text."
         mock_post_comment.return_value = {}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
+            response = await client.post("/webhook/jira-issue", json=story_created_payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -258,6 +263,73 @@ async def test_describe_mention_creates_pipeline_state():
         assert row.draft_content == "Draft text."
     finally:
         check_db.close()
+
+
+async def test_issue_created_ignores_non_story():
+    """POST /webhook/jira-issue with issue_type='Bug' returns ignored/not_a_story."""
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    bug_created_payload = {
+        "webhook_event": "jira:issue_created",
+        "issue": {
+            "id": "10002",
+            "key": "PROJ-2",
+            "summary": "Bug Y",
+            "issue_type": "Bug",
+        },
+        "timestamp": 1718000001,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhook/jira-issue", json=bug_created_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "ignored"
+    assert body["reason"] == "not_a_story"
+
+
+async def test_issue_created_duplicate_returns_ignored():
+    """Second jira:issue_created for a ticket with an active describe PipelineState
+    returns action=ignored, reason=duplicate_pipeline.
+    """
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        existing = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-3",
+            stage="describe",
+            status="awaiting_approval",
+            draft_content="Already drafted.",
+        )
+        db.add(existing)
+        db.commit()
+    finally:
+        db.close()
+
+    story_created_payload = {
+        "webhook_event": "jira:issue_created",
+        "issue": {
+            "id": "10003",
+            "key": "PROJ-3",
+            "summary": "Feature Z",
+            "issue_type": "Story",
+        },
+        "timestamp": 1718000002,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhook/jira-issue", json=story_created_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "ignored"
+    assert body["reason"] == "duplicate_pipeline"
 
 
 async def test_assign_mention_calls_assign_pipeline():
@@ -311,7 +383,7 @@ async def test_approval_comment_triggers_approval():
     approval_payload = {
         "webhook_event": "comment_created",
         "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
-        "comment": {"id": "20050", "body": "LGTM", "author": "alice"},
+        "comment": {"id": "20050", "body": "@jarvis approve story description", "author": "alice"},
         "timestamp": 1718000005,
     }
 
