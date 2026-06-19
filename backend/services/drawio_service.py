@@ -10,6 +10,7 @@ Threat mitigations:
            (no user-exec path); XML is embedded in Confluence <pre> blocks, not executed.
 """
 
+import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -42,10 +43,14 @@ def generate_diagram(
     Returns:
         Full mxGraph XML string (no extra dependencies — stdlib string formatting).
     """
-    # Build cell_ids dict: component_name → integer cell id (starting at 2)
-    cell_ids: dict[str, int] = {}
+    # Build cell_ids list: positional index → integer cell id (starting at 2).
+    # Keyed by index (not name) so duplicate component names still get unique
+    # mxCell ids. name_to_id resolves connections (which reference components
+    # by name) to the *first* occurrence of that name.
+    cell_ids: list[int] = [idx + 2 for idx in range(len(components))]  # id=0/1 reserved
+    name_to_id: dict[str, int] = {}
     for idx, name in enumerate(components):
-        cell_ids[name] = idx + 2  # id=0 and id=1 are reserved
+        name_to_id.setdefault(name, cell_ids[idx])
 
     # --- Assemble XML via string building ---
     cells: list[str] = []
@@ -62,7 +67,7 @@ def generate_diagram(
 
     # Component vertex cells — grid layout: 3 per row
     for idx, name in enumerate(components):
-        cell_id = cell_ids[name]
+        cell_id = cell_ids[idx]
         col = idx % 3
         row = idx // 3
         x = 40 + col * 200
@@ -80,12 +85,12 @@ def generate_diagram(
     # Edge cells — sequential id starting at len(components) + 2
     edge_id_start = len(components) + 2
     for edge_idx, (src_label, dst_label) in enumerate(connections):
-        if src_label not in cell_ids or dst_label not in cell_ids:
+        if src_label not in name_to_id or dst_label not in name_to_id:
             # Skip edges where either endpoint is not a known component
             continue
         edge_id = edge_id_start + edge_idx
-        src_id = cell_ids[src_label]
-        dst_id = cell_ids[dst_label]
+        src_id = name_to_id[src_label]
+        dst_id = name_to_id[dst_label]
         cells.append(
             f'<mxCell id="{edge_id}" value="" edge="1" '
             f'style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;" '
@@ -121,6 +126,8 @@ def validate_xml(xml: str) -> bool:
 
 def generate_viewer_url(xml: str) -> str:
     """Return a diagrams.net viewer URL for the given mxGraph XML."""
+    if not isinstance(xml, str):
+        raise TypeError(f"generate_viewer_url expects str, got {type(xml).__name__}")
     encoded = urllib.parse.quote(xml, safe="")
     return f"https://app.diagrams.net/?xml={encoded}"
 
@@ -145,7 +152,8 @@ def _component_style(name: str) -> str:
     - anything else            → rounded rectangle (default service style)
     """
     lower = name.lower()
-    if any(kw in lower for kw in ("database", "db", "storage")):
+    tokens = re.findall(r"[a-z0-9]+", lower)
+    if "db" in tokens or any(kw in lower for kw in ("database", "storage")):
         return "shape=mxgraph.flowchart.database;whiteSpace=wrap;html=1;"
     if any(kw in lower for kw in ("external", "client", "api gateway")):
         return "rhombus;whiteSpace=wrap;html=1;"

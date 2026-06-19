@@ -1,6 +1,6 @@
 """TDD tests for drawio_service — generate_diagram, validate_xml, generate_viewer_url.
 
-Tests (12 total):
+Tests (15 total):
  Original 4:
   1. test_generate_diagram_returns_xml_string - returns str with mxGraphModel and mxCell tags
   2. test_generate_diagram_contains_component_names - component names appear in XML
@@ -17,12 +17,23 @@ Tests (12 total):
  11. test_typed_shape_external - "External System" component uses rhombus shape style
  12. test_directional_edge_in_xml - edges include endArrow=block in style
 
+ Regression tests for code review fixes (3) — WR-01, WR-02, WR-03:
+ 13. test_component_style_db_substring_false_positive - "db" substring inside
+     unrelated word (e.g. "Webdb Frontend") must NOT trigger database shape.
+ 14. test_generate_diagram_duplicate_component_names - duplicate component
+     names must still produce unique mxCell ids.
+ 15. test_generate_viewer_url_none_raises_typeerror - non-str input raises a
+     clear TypeError instead of an opaque stdlib error.
+
 No external dependencies — drawio_service uses Python stdlib only.
 """
+
+import re
 
 import pytest
 
 from services.drawio_service import (
+    _component_style,
     generate_diagram,
     generate_viewer_url,
     validate_xml,
@@ -133,3 +144,46 @@ def test_directional_edge_in_xml():
     """Edge cells produced by generate_diagram include endArrow=block in style."""
     result = generate_diagram("T", ["A", "B"], [("A", "B")])
     assert "endArrow=block" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for code review fixes (3): WR-01, WR-02, WR-03
+# ---------------------------------------------------------------------------
+
+
+def test_component_style_db_substring_false_positive():
+    """'db' as a substring inside an unrelated word must not trigger database shape.
+
+    Regression test for WR-01: _component_style previously used a raw
+    substring check ("db" in lower), which misclassified names like
+    "Webdb Frontend" as a database component. Token-boundary matching
+    fixes this while keeping "database"/"storage" substring matches.
+    """
+    style = _component_style("Webdb Frontend")
+    assert "shape=mxgraph.flowchart.database" not in style
+    assert style == "rounded=1;whiteSpace=wrap;html=1;"
+
+
+def test_generate_diagram_duplicate_component_names():
+    """Duplicate component names must not produce duplicate mxCell ids.
+
+    Regression test for WR-02: cell_ids was previously keyed by component
+    name, so duplicate names collapsed to one id while the vertex-emitting
+    loop still emitted multiple <mxCell> elements with that same id.
+    """
+    xml = generate_diagram(
+        "T", ["Auth Service", "Auth Service"], [("Auth Service", "Auth Service")]
+    )
+    ids = re.findall(r'<mxCell id="(\d+)"', xml)
+    assert len(ids) == len(set(ids)), "mxCell ids must be unique"
+
+
+def test_generate_viewer_url_none_raises_typeerror():
+    """generate_viewer_url(None) raises a clear TypeError, not an opaque stdlib error.
+
+    Regression test for WR-03: previously urllib.parse.quote(None, ...)
+    raised an unhandled TypeError with a confusing stdlib message,
+    inconsistent with validate_xml's "never raises" defensive pattern.
+    """
+    with pytest.raises(TypeError):
+        generate_viewer_url(None)
