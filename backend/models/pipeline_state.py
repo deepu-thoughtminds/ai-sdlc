@@ -21,7 +21,7 @@ Threat mitigations:
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -48,6 +48,14 @@ class PipelineState(Base):
     # Added Phase 10 — requires DB recreation (docker compose down -v) upgrading prior schema
     complexity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     complexity_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "complexity IN ('small', 'complex') OR complexity IS NULL",
+            name="ck_pipeline_state_complexity",
+        ),
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

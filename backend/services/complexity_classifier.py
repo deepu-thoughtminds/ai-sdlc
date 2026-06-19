@@ -103,7 +103,7 @@ def classify_complexity(
         parsed = json.loads(route_result.content)
         raw_classification = parsed["classification"]
         rationale = parsed.get("rationale", "")
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
             "classify_complexity: failed to parse LLM response for %s: %s — defaulting to small",
             issue_key,
@@ -132,7 +132,15 @@ def classify_complexity(
     if state is not None:
         state.complexity = complexity
         state.complexity_rationale = rationale
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning(
+                "classify_complexity: failed to persist result for issue_key=%s; "
+                "returning result anyway",
+                issue_key,
+            )
     else:
         logger.debug(
             "classify_complexity: no PipelineState row found for project_id=%s issue_key=%s; "
