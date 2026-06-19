@@ -3,7 +3,7 @@ import os
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from hermes.mcp_client import HermesMCPClient, JiraCredentials
+from hermes.mcp_client import HermesMCPClient, JiraCredentials, ConfluenceCredentials
 
 # Module-level singleton — tests override via app.dependency_overrides
 _mcp_client = HermesMCPClient()
@@ -86,3 +86,76 @@ async def post_assign(req: AssignIssueRequest, client: HermesMCPClient = Depends
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"account_id": account_id}
+
+
+# ---------------------------------------------------------------------------
+# Confluence endpoints
+# ---------------------------------------------------------------------------
+
+
+class CreateConfluencePageRequest(BaseModel):
+    confluence_url: str
+    confluence_email: str
+    confluence_token: str
+    space_key: str
+    title: str
+    body_html: str
+
+
+class UpdateConfluencePageRequest(BaseModel):
+    confluence_url: str
+    confluence_email: str
+    confluence_token: str
+    title: str
+    body_html: str
+    version: int
+
+
+@app.post("/confluence/page")
+async def post_confluence_page(req: CreateConfluencePageRequest, client: HermesMCPClient = Depends(get_mcp_client)):
+    creds = ConfluenceCredentials(
+        confluence_url=req.confluence_url,
+        confluence_email=req.confluence_email,
+        confluence_token=req.confluence_token,
+    )
+    try:
+        result = await client.create_confluence_page(req.space_key, req.title, req.body_html, creds)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return result
+
+
+@app.put("/confluence/page/{page_id}")
+async def put_confluence_page(page_id: str, req: UpdateConfluencePageRequest, client: HermesMCPClient = Depends(get_mcp_client)):
+    creds = ConfluenceCredentials(
+        confluence_url=req.confluence_url,
+        confluence_email=req.confluence_email,
+        confluence_token=req.confluence_token,
+    )
+    try:
+        result = await client.update_confluence_page(page_id, req.title, req.body_html, req.version, creds)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return result
+
+
+@app.get("/confluence/search")
+async def get_confluence_search(
+    space_key: str,
+    title: str,
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    client: HermesMCPClient = Depends(get_mcp_client),
+):
+    creds = ConfluenceCredentials(
+        confluence_url=confluence_url,
+        confluence_email=confluence_email,
+        confluence_token=confluence_token,
+    )
+    try:
+        result = await client.find_confluence_page(space_key, title, creds)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    # Return {} (empty dict) when not found — the hermes "not found" sentinel
+    return result if result is not None else {}

@@ -18,6 +18,14 @@ class JiraCredentials:
     jira_token: str
 
 
+@dataclasses.dataclass
+class ConfluenceCredentials:
+    """Per-request Confluence credentials for mcp-atlassian tool calls."""
+    confluence_url: str
+    confluence_email: str
+    confluence_token: str
+
+
 class HermesMCPClient:
     """Typed async wrapper over the MCP SDK for mcp-atlassian Jira operations.
 
@@ -37,6 +45,20 @@ class HermesMCPClient:
         return {
             "Authorization": f"Basic {token}",
             "x-atlassian-jira-url": credentials.jira_url,
+        }
+
+    def _confluence_cred_headers(self, credentials: ConfluenceCredentials) -> dict[str, str]:
+        """Build HTTP headers for mcp-atlassian Confluence per-request authentication.
+
+        Uses x-atlassian-confluence-url (distinct from x-atlassian-jira-url — T-Q01-01)
+        so mcp-atlassian does not conflate Jira and Confluence credential sets.
+        """
+        token = base64.b64encode(
+            f"{credentials.confluence_email}:{credentials.confluence_token}".encode()
+        ).decode()
+        return {
+            "Authorization": f"Basic {token}",
+            "x-atlassian-confluence-url": credentials.confluence_url,
         }
 
     async def add_comment(
@@ -112,3 +134,86 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 await session.call_tool("jira_update_issue", args)
+
+    # ---------------------------------------------------------------------------
+    # Confluence MCP methods
+    # ---------------------------------------------------------------------------
+
+    async def create_confluence_page(
+        self, space_key: str, title: str, body_html: str, credentials: ConfluenceCredentials
+    ) -> dict:
+        """Create a new Confluence page via MCP tool confluence_create_page.
+
+        Opens a fresh per-request connection — stateless, no stored session.
+
+        Args:
+            space_key: Confluence space key (e.g. "PROJ").
+            title: Page title.
+            body_html: HTML content for the page body (storage format).
+            credentials: Per-request Confluence credentials.
+
+        Returns:
+            Parsed dict from MCP tool result (must include "id").
+        """
+        args = {"space_key": space_key, "title": title, "content": body_html}
+        async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool("confluence_create_page", args)
+        return json.loads(result.content[0].text)
+
+    async def find_confluence_page(
+        self, space_key: str, title: str, credentials: ConfluenceCredentials
+    ) -> dict | None:
+        """Search for a Confluence page by space and title via MCP tool confluence_search.
+
+        Uses CQL-style query with limit=1 to bound the result set (T-12-04).
+        Opens a fresh per-request connection — stateless, no stored session.
+
+        Args:
+            space_key: Confluence space key.
+            title: Exact page title to search for.
+            credentials: Per-request Confluence credentials.
+
+        Returns:
+            The first matching result dict if found, else None.
+        """
+        args = {
+            "query": f'space = "{space_key}" AND title = "{title}"',
+            "limit": 1,
+        }
+        async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool("confluence_search", args)
+        parsed = json.loads(result.content[0].text)
+        # parsed is expected to be a list of results or empty
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return parsed[0]
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
+    async def update_confluence_page(
+        self, page_id: str, title: str, body_html: str, version: int, credentials: ConfluenceCredentials
+    ) -> dict:
+        """Update an existing Confluence page via MCP tool confluence_update_page.
+
+        Opens a fresh per-request connection — stateless, no stored session.
+
+        Args:
+            page_id: Confluence page id to update.
+            title: Page title.
+            body_html: New HTML content for the page body (storage format).
+            version: New version number (must be current version + 1).
+            credentials: Per-request Confluence credentials.
+
+        Returns:
+            Parsed dict from MCP tool result.
+        """
+        args = {"page_id": page_id, "title": title, "content": body_html, "version": version}
+        async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool("confluence_update_page", args)
+        return json.loads(result.content[0].text)

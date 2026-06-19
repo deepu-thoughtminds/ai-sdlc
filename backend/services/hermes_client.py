@@ -116,3 +116,95 @@ async def post_assign(
         resp = await client.post(f"{HERMES_BASE_URL}/jira/assign", json=payload)
     resp.raise_for_status()
     return str(resp.json()["account_id"])
+
+
+# ---------------------------------------------------------------------------
+# Confluence functions
+# ---------------------------------------------------------------------------
+
+
+async def create_confluence_page(
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    space_key: str,
+    title: str,
+    body_html: str,
+) -> dict:
+    """Create a new Confluence page via hermes. Returns the response dict (includes "id").
+
+    T-04-05: confluence_token is never logged; only space_key and title are logged.
+    """
+    logger.info("Creating Confluence page in space %s: %s", space_key, title)
+    payload = {
+        "confluence_url": confluence_url,
+        "confluence_email": confluence_email,
+        "confluence_token": confluence_token,
+        "space_key": space_key,
+        "title": title,
+        "body_html": body_html,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f"{HERMES_BASE_URL}/confluence/page", json=payload)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def update_confluence_page(
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    page_id: str,
+    title: str,
+    body_html: str,
+    version: int,
+) -> dict:
+    """Update an existing Confluence page via hermes. Returns the response dict.
+
+    T-04-05: confluence_token is never logged; only page_id and title are logged.
+    """
+    logger.info("Updating Confluence page %s: %s", page_id, title)
+    payload = {
+        "confluence_url": confluence_url,
+        "confluence_email": confluence_email,
+        "confluence_token": confluence_token,
+        "title": title,
+        "body_html": body_html,
+        "version": version,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.put(f"{HERMES_BASE_URL}/confluence/page/{page_id}", json=payload)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def find_confluence_page(
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    space_key: str,
+    title: str,
+) -> dict | None:
+    """Search for a Confluence page by space and title via hermes.
+
+    Returns the page dict if found, or None if not found.
+    Translates the hermes-layer empty-dict convention ({}) back to None.
+
+    T-04-05: confluence_token is never logged; only space_key and title are logged.
+    """
+    logger.info("Searching for Confluence page in space %s: %s", space_key, title)
+    params = {
+        "confluence_url": confluence_url,
+        "confluence_email": confluence_email,
+        "confluence_token": confluence_token,
+        "space_key": space_key,
+        "title": title,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(f"{HERMES_BASE_URL}/confluence/search", params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    # Hermes returns {} when not found — translate back to None
+    if data == {}:
+        return None
+    return data
