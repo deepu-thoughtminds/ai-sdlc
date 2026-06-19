@@ -26,7 +26,7 @@ import os
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_db, SessionLocal
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent
@@ -173,15 +173,17 @@ async def handle_jira_comment(
 
     # Step 4b: Handle 'architecture' stage (background task — LLM call is heavy)
     elif mention_result is not None and mention_result.stage == "architecture":
-        # T-13-04 / ARCHINT-02: Idempotency guard — if an active (non-failed)
+        # T-13-04 / ARCHINT-02: Idempotency guard — if an active (running)
         # PipelineState row already exists for this ticket+stage, return 200
         # immediately without scheduling a second heavy LLM task.
+        # "complete" and "failed" states allow re-triggering so users can rerun
+        # after a ticket changes substantially or a previous run failed.
         existing = (
             db.query(PipelineState)
             .filter(
                 PipelineState.ticket_key == event.issue.key,
                 PipelineState.stage == "architecture",
-                PipelineState.status != "failed",
+                PipelineState.status.in_(["running"]),
             )
             .first()
         )
@@ -208,11 +210,24 @@ async def handle_jira_comment(
 
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
-        asyncio.create_task(
-            architecture_pipeline.run(
-                project, event.issue.key, issue_summary, issue_description, db
-            )
-        )
+        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
+        # FastAPI closes the session when the handler returns (via get_db's finally block),
+        # so the background task would receive an already-closed session. Instead, capture
+        # only primitive values (project_id, strings) and open a fresh SessionLocal()
+        # inside the background coroutine.
+        project_id = project.id
+
+        async def _run_architecture_background() -> None:
+            bg_db = SessionLocal()
+            try:
+                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                await architecture_pipeline.run(
+                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+                )
+            finally:
+                bg_db.close()
+
+        asyncio.create_task(_run_architecture_background())
         logger.info(
             "Architecture pipeline scheduled for issue %s (state_id=%s)",
             event.issue.key,
