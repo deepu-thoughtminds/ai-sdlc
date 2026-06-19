@@ -12,7 +12,10 @@ text. ADF parsing ships in Phase 3.
 import re
 from dataclasses import dataclass, field
 
-KNOWN_STAGES = {"describe", "architecture", "assign", "codegen", "testgen"}
+KNOWN_STAGES = {"architecture", "assign", "approve", "codegen", "testgen"}
+
+# Valid sub-commands for the 'approve' stage (T-o0v-03: unknown sub-commands return None)
+APPROVE_SUBCMDS: frozenset[str] = frozenset({"story description", "architecture"})
 
 
 @dataclass
@@ -46,5 +49,9 @@ def parse_mention(comment_body: str) -> MentionResult | None:
 
     if stage_raw not in KNOWN_STAGES:
         return None  # silently ignore unknown commands (T-02-05)
+
+    # T-o0v-03: validate approve sub-command against frozenset; unknown → None (ignored)
+    if stage_raw == "approve" and extra.lower().strip() not in APPROVE_SUBCMDS:
+        return None
 
     return MentionResult(mention_target=mention_target, stage=stage_raw, extra=extra)
