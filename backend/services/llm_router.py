@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 # "describe" added in phase 03-01 — routes to freellmapi/Ollama for
 # codebase-aware description elaboration.
-HEAVY_STAGES = {"describe", "architecture", "codegen", "testgen"}
+# "classify" added in Phase 10 — routes complexity classification to freellmapi
+# for deterministic JSON-structured LLM judgment (CLASSIFY-01, CLASSIFY-02).
+HEAVY_STAGES = {"describe", "architecture", "codegen", "testgen", "classify"}
 
 
 @dataclass
