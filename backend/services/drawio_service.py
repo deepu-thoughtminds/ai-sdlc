@@ -10,6 +10,9 @@ Threat mitigations:
            (no user-exec path); XML is embedded in Confluence <pre> blocks, not executed.
 """
 
+import urllib.parse
+import xml.etree.ElementTree as ET
+
 
 def generate_diagram(
     title: str,
@@ -27,6 +30,9 @@ def generate_diagram(
       120px vertical spacing, starting at x=40, y=40.
     - Connections are (src_label, dst_label) tuples; edges skipped when either
       end label is not in the component list.
+    - Edge cells include directional arrowhead (endArrow=block).
+    - Component shapes vary by keyword: database/db/storage → cylinder;
+      external/client/api gateway → rhombus; others → rounded rectangle.
 
     Args:
         title: Diagram title — rendered as a label cell above the grid.
@@ -62,9 +68,10 @@ def generate_diagram(
         x = 40 + col * 200
         y = 40 + row * 120
         name_escaped = _escape_xml(name)
+        style = _component_style(name)
         cells.append(
             f'<mxCell id="{cell_id}" value="{name_escaped}" '
-            f'style="rounded=1;whiteSpace=wrap;html=1;" '
+            f'style="{style}" '
             f'vertex="1" parent="1">'
             f'<mxGeometry x="{x}" y="{y}" width="160" height="60" as="geometry"/>'
             f'</mxCell>'
@@ -81,6 +88,7 @@ def generate_diagram(
         dst_id = cell_ids[dst_label]
         cells.append(
             f'<mxCell id="{edge_id}" value="" edge="1" '
+            f'style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;" '
             f'source="{src_id}" target="{dst_id}" parent="1">'
             f'<mxGeometry relative="1" as="geometry"/>'
             f'</mxCell>'
@@ -100,6 +108,23 @@ def generate_diagram(
     return xml
 
 
+def validate_xml(xml: str) -> bool:
+    """Return True if xml is well-formed mxGraph XML; False otherwise."""
+    try:
+        ET.fromstring(xml)
+        return True
+    except ET.ParseError:
+        return False
+    except Exception:
+        return False
+
+
+def generate_viewer_url(xml: str) -> str:
+    """Return a diagrams.net viewer URL for the given mxGraph XML."""
+    encoded = urllib.parse.quote(xml, safe="")
+    return f"https://app.diagrams.net/?xml={encoded}"
+
+
 def _escape_xml(text: str) -> str:
     """Escape special characters for use in XML attribute values."""
     return (
@@ -109,3 +134,19 @@ def _escape_xml(text: str) -> str:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def _component_style(name: str) -> str:
+    """Return an mxGraph style string based on the component name keywords.
+
+    Keyword groups (matched case-insensitively):
+    - database / db / storage  → cylinder/database shape
+    - external / client / api gateway → rhombus (actor/external) shape
+    - anything else            → rounded rectangle (default service style)
+    """
+    lower = name.lower()
+    if any(kw in lower for kw in ("database", "db", "storage")):
+        return "shape=mxgraph.flowchart.database;whiteSpace=wrap;html=1;"
+    if any(kw in lower for kw in ("external", "client", "api gateway")):
+        return "rhombus;whiteSpace=wrap;html=1;"
+    return "rounded=1;whiteSpace=wrap;html=1;"
