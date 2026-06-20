@@ -401,7 +401,10 @@ Plans:
   4. Given a Jira story description, Confluence architecture content, and cloned codebase context, the agent calls freellmapi to produce code changes and applies them, commits to a new branch named `jarvis/issue-{key}`, pushes the branch, and opens a PR against main via the GitHub API
   5. Each dev pipeline module (clone, code-gen, PR creation) can be tested in isolation with mocked GitHub API and freellmapi responses
 
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 15-01-PLAN.md — Encrypted github_repo config: model column, schemas, router encrypt/decrypt, onboarding form field, dashboard column
+- [ ] 15-02-PLAN.md — Dev pipeline foundation modules: repo_clone.py, code_generator.py, pr_creator.py (clone, LLM codegen, commit/push/PR)
 **UI hint**: yes
 
 ### Phase 16: Dev Pipeline Integration
