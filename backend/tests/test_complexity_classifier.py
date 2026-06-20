@@ -87,6 +87,7 @@ def _insert_project(db) -> int:
         confluence_url="https://conf.example.com",
         confluence_token=encrypt_credential("ctok"),
         github_token=encrypt_credential("gh-tok"),
+        github_repo=encrypt_credential("acme/my-app"),
     )
     db.add(p)
     db.commit()

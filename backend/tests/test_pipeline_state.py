@@ -70,6 +70,7 @@ def _make_project(db) -> int:
         jira_token="enc_jira",
         github_token="enc_github",
         confluence_token="enc_confluence",
+        github_repo="enc_github_repo",
     )
     db.add(project)
     db.commit()

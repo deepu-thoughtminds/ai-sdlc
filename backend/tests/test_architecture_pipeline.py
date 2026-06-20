@@ -257,6 +257,7 @@ async def test_run_draft_content_is_human_readable():
             jira_token=encrypt_credential("jira-token"),
             github_token=encrypt_credential("github-token"),
             confluence_token=encrypt_credential("conf-token"),
+            github_repo=encrypt_credential("acme/my-app"),
         )
         db.add(project_row)
         db.commit()
@@ -333,6 +334,7 @@ async def test_run_creates_pipeline_state_complete():
             jira_token=encrypt_credential("jira-token"),
             github_token=encrypt_credential("github-token"),
             confluence_token=encrypt_credential("conf-token"),
+            github_repo=encrypt_credential("acme/my-app"),
         )
         db.add(project_row)
         db.commit()

@@ -52,6 +52,7 @@ def _make_project(db, project_key="PROJ"):
         jira_token=encrypt_credential("fake-jira-token"),
         github_token=encrypt_credential("fake-github-token"),
         confluence_token=encrypt_credential("fake-confluence-token"),
+        github_repo=encrypt_credential("acme/my-app"),
     )
     db.add(project)
     db.commit()
