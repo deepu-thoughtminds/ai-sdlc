@@ -76,18 +76,21 @@ def _run_git(args: list[str], cwd: str, github_token: str = "") -> subprocess.Co
     )
 
     if result.returncode != 0:
-        # Scrub token from output before logging (T-07-01)
+        # Scrub token from stderr AND from the args representation before logging (T-07-01).
+        # args[1] for `git push` is the authenticated URL containing the token.
         safe_stderr = result.stderr
+        safe_args_repr = " ".join(args[:2])
         if github_token:
             safe_stderr = safe_stderr.replace(github_token, "***")
+            safe_args_repr = safe_args_repr.replace(github_token, "***")
         logger.warning(
             "git %s failed (exit=%d): %s",
-            " ".join(args[:2]),
+            safe_args_repr,
             result.returncode,
             safe_stderr,
         )
         raise RuntimeError(
-            f"git {' '.join(args[:2])} failed with exit code {result.returncode}"
+            f"git {safe_args_repr} failed with exit code {result.returncode}"
         )
 
     return result
@@ -180,12 +183,20 @@ def apply_commit_push_and_open_pr(
     _run_git(["checkout", "-b", branch_name], cwd=workspace_path, github_token=github_token)
     logger.info("Created branch %s in workspace %s", branch_name, workspace_path)
 
+    if not file_changes:
+        raise ValueError("file_changes must not be empty — nothing to commit")
+
     # Step 3: Write each FileChange to disk
+    workspace_root = pathlib.Path(workspace_path).resolve()
     for change in file_changes:
-        file_path = pathlib.Path(workspace_path) / change.path
-        # Create parent directories if needed
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(change.content, encoding="utf-8")
+        # Resolve to catch `..` traversal and absolute-path overrides (T-15-06)
+        resolved = (workspace_root / change.path).resolve()
+        if not str(resolved).startswith(str(workspace_root) + "/") and resolved != workspace_root:
+            raise ValueError(
+                f"FileChange path escapes workspace: '{change.path}' resolves to '{resolved}'"
+            )
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(change.content, encoding="utf-8")
         logger.info("Applied change to: %s", change.path)
 
     # Step 4: Stage all changes

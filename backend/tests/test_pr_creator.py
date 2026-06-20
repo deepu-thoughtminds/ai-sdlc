@@ -120,7 +120,7 @@ def test_branch_name_uses_jarvis_convention(tmp_path):
             github_repo=GITHUB_REPO,
             github_token=GITHUB_TOKEN,
             issue_key=ISSUE_KEY,
-            file_changes=[],
+            file_changes=[FileChange(path="src/hello.py", content="print(123)")],
         )
 
     assert result.branch == "jarvis/issue-PROJ-42"
@@ -144,7 +144,7 @@ def test_git_config_set_before_commit(tmp_path):
             github_repo=GITHUB_REPO,
             github_token=GITHUB_TOKEN,
             issue_key=ISSUE_KEY,
-            file_changes=[],
+            file_changes=[FileChange(path="src/hello.py", content="print(123)")],
         )
 
     all_cmds = [c[0][0] for c in mock_run.call_args_list]
@@ -177,7 +177,7 @@ def test_github_api_pr_payload(tmp_path):
             github_repo=GITHUB_REPO,
             github_token=GITHUB_TOKEN,
             issue_key=ISSUE_KEY,
-            file_changes=[],
+            file_changes=[FileChange(path="src/hello.py", content="print(123)")],
             pr_title="Custom PR title",
         )
 
@@ -203,7 +203,7 @@ def test_nonzero_exit_raises(tmp_path):
                 github_repo=GITHUB_REPO,
                 github_token=GITHUB_TOKEN,
                 issue_key=ISSUE_KEY,
-                file_changes=[],
+                file_changes=[FileChange(path="src/hello.py", content="print(123)")],
             )
 
 
@@ -221,7 +221,7 @@ def test_github_api_failure_raises(tmp_path):
                 github_repo=GITHUB_REPO,
                 github_token=GITHUB_TOKEN,
                 issue_key=ISSUE_KEY,
-                file_changes=[],
+                file_changes=[FileChange(path="src/hello.py", content="print(123)")],
             )
 
 
@@ -234,7 +234,7 @@ def test_invalid_repo_slug_raises(tmp_path):
                 github_repo="not-a-slug",
                 github_token=GITHUB_TOKEN,
                 issue_key=ISSUE_KEY,
-                file_changes=[],
+                file_changes=[FileChange(path="src/hello.py", content="print(123)")],
             )
 
     mock_run.assert_not_called()
@@ -263,7 +263,7 @@ def test_token_not_logged_on_git_failure(tmp_path, caplog):
                 github_repo=GITHUB_REPO,
                 github_token=GITHUB_TOKEN,
                 issue_key=ISSUE_KEY,
-                file_changes=[],
+                file_changes=[FileChange(path="src/hello.py", content="print(123)")],
             )
 
     all_log_text = " ".join(record.getMessage() for record in caplog.records)

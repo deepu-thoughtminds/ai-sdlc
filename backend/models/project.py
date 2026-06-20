@@ -87,7 +87,7 @@ class ProjectCreate(BaseModel):
     github_token: str = Field(..., min_length=1, max_length=500)
     confluence_token: str = Field(..., min_length=1, max_length=500)
     # Owner/repo slug (e.g. "acme/my-app") — stored encrypted per GITHUBCFG-01
-    github_repo: str = Field(..., min_length=1, max_length=500, pattern=r"^[\w.-]+/[\w.-]+$")
+    github_repo: str = Field(..., min_length=1, max_length=500, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class ProjectPublic(BaseModel):
