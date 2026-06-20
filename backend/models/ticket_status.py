@@ -101,6 +101,7 @@ class ProjectWithTickets(BaseModel):
 
     Threat T-02-08: deliberately excludes all token fields from the Project join.
     Never add jira_token, github_token, or confluence_token here.
+    github_repo is intentionally included (decrypted) per GITHUBCFG-02.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -110,5 +111,6 @@ class ProjectWithTickets(BaseModel):
     project_key: str
     jira_url: str
     confluence_url: str
+    github_repo: str
     created_at: datetime
     ticket_statuses: list[TicketStatusPublic]
