@@ -8,6 +8,7 @@ Threat mitigations applied:
   T-02-08: Response schema is ProjectWithTickets which excludes all token fields
   T-02-09: TicketStatusCreate.@field_validator rejects invalid pipeline_stage (422 returned)
   T-02-10: db.get(Project, project_id) check before upsert — 404 if project not found
+  T-15-02: github_repo decrypted at response-construction time; never returned as ciphertext
 """
 
 import logging
@@ -20,24 +21,54 @@ from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from models.project import Project
 from models.ticket_status import ProjectWithTickets, TicketStatus, TicketStatusCreate, TicketStatusPublic
+from services.crypto import decrypt_credential
 
 logger = logging.getLogger("backend.dashboard")
 
 router = APIRouter()
 
 
+def _project_to_with_tickets(project: Project) -> ProjectWithTickets:
+    """Build a ProjectWithTickets response, decrypting github_repo from ciphertext.
+
+    Constructs the response manually to ensure github_repo is decrypted.
+    Token fields (jira_token, github_token, confluence_token) are excluded per T-02-08.
+    T-15-02: github_repo decrypted only here — never logged, never returned as ciphertext.
+    """
+    ticket_statuses = [
+        TicketStatusPublic(
+            id=ts.id,
+            ticket_key=ts.ticket_key,
+            pipeline_stage=ts.pipeline_stage,
+            updated_at=ts.updated_at,
+        )
+        for ts in project.ticket_statuses
+    ]
+    return ProjectWithTickets(
+        id=project.id,
+        name=project.name,
+        project_key=project.project_key,
+        jira_url=project.jira_url,
+        confluence_url=project.confluence_url,
+        github_repo=decrypt_credential(project.github_repo),
+        created_at=project.created_at,
+        ticket_statuses=ticket_statuses,
+    )
+
+
 @router.get("/dashboard/projects", response_model=list[ProjectWithTickets])
-def list_projects_with_tickets(db: Session = Depends(get_db)) -> list[Project]:
+def list_projects_with_tickets(db: Session = Depends(get_db)) -> list[ProjectWithTickets]:
     """Return all projects with their nested ticket statuses.
 
     Uses selectinload to eagerly load ticket_statuses in a single extra query,
     avoiding N+1 queries when there are many projects.
 
     Threat T-02-08: Response schema ProjectWithTickets excludes all token fields.
+    T-15-02: github_repo decrypted via _project_to_with_tickets before returning.
     """
     stmt = select(Project).options(selectinload(Project.ticket_statuses))
     projects = db.execute(stmt).scalars().all()
-    return list(projects)
+    return [_project_to_with_tickets(p) for p in projects]
 
 
 @router.post(

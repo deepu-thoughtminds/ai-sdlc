@@ -99,7 +99,7 @@ def reset_tables():
 # ---------------------------------------------------------------------------
 
 
-def _create_project(key: str = "TESTPROJ") -> dict:
+def _create_project(key: str = "TESTPROJ", github_repo: str = "acme/my-app") -> dict:
     """Create a project via POST /api/projects and return the response JSON."""
     resp = client.post(
         "/api/projects",
@@ -107,10 +107,12 @@ def _create_project(key: str = "TESTPROJ") -> dict:
             "name": "Test",
             "project_key": key,
             "jira_url": "https://x.atlassian.net",
+            "jira_email": "test@example.com",
             "jira_token": "t",
             "github_token": "g",
             "confluence_url": "https://x.atlassian.net/wiki",
             "confluence_token": "c",
+            "github_repo": github_repo,
         },
     )
     assert resp.status_code == 201, f"_create_project failed: {resp.text}"
@@ -257,3 +259,23 @@ def test_upsert_ticket_unknown_project() -> None:
         json={"ticket_key": "NOPROJECT-1", "pipeline_stage": "description"},
     )
     assert response.status_code == 404, response.text
+
+
+def test_dashboard_projects_includes_github_repo() -> None:
+    """GET /api/dashboard/projects returns decrypted github_repo per project (GITHUBCFG-02)."""
+    _create_project("GITHUBREPOPROJ", github_repo="acme/my-app")
+
+    response = client.get("/api/dashboard/projects")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data) >= 1
+    item = data[0]
+    assert "github_repo" in item, "github_repo missing from dashboard response"
+    assert item["github_repo"] == "acme/my-app", (
+        f"Expected decrypted 'acme/my-app', got: {item['github_repo']!r}"
+    )
+    # Token fields must still be excluded (T-02-08)
+    for token_field in TOKEN_FIELD_NAMES:
+        assert token_field not in item, (
+            f"Token field '{token_field}' found in dashboard response"
+        )

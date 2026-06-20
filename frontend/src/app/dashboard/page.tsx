@@ -65,6 +65,7 @@ export default function DashboardPage() {
                 <th style={{ padding: "10px 12px", textAlign: "left", border: "1px solid #dee2e6" }}>Project Name</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", border: "1px solid #dee2e6" }}>Project Key</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", border: "1px solid #dee2e6" }}>Jira URL</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", border: "1px solid #dee2e6" }}>GitHub Repo</th>
                 <th style={{ padding: "10px 12px", textAlign: "right", border: "1px solid #dee2e6" }}>Active Tickets</th>
                 <th style={{ padding: "10px 12px", textAlign: "left", border: "1px solid #dee2e6" }}>Last Updated</th>
               </tr>
@@ -81,6 +82,11 @@ export default function DashboardPage() {
                     <td style={{ padding: "10px 12px", border: "1px solid #dee2e6" }}>
                       <a href={project.jira_url} target="_blank" rel="noreferrer" style={{ color: "#0070f3" }}>
                         {project.jira_url}
+                      </a>
+                    </td>
+                    <td style={{ padding: "10px 12px", border: "1px solid #dee2e6" }}>
+                      <a href={`https://github.com/${project.github_repo}`} target="_blank" rel="noreferrer" style={{ color: "#0070f3" }}>
+                        {project.github_repo}
                       </a>
                     </td>
                     <td style={{ padding: "10px 12px", border: "1px solid #dee2e6", textAlign: "right" }}>{activeCount}</td>

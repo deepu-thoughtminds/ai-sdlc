@@ -18,6 +18,7 @@ export interface ProjectCreatePayload {
   jira_email: string
   jira_token: string
   github_token: string
+  github_repo: string
   confluence_url: string
   confluence_token: string
 }
@@ -28,6 +29,7 @@ export interface ProjectPublic {
   project_key: string
   jira_url: string
   confluence_url: string
+  github_repo: string
   created_at: string
 }
 
@@ -87,6 +89,7 @@ export interface ProjectWithTickets {
   project_key: string
   jira_url: string
   confluence_url: string
+  github_repo: string
   created_at: string
   ticket_statuses: TicketStatusPublic[]
 }

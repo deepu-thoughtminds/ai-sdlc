@@ -1,6 +1,6 @@
 """TDD tests for the project API endpoints.
 
-Tests (8 total):
+Tests (11 total):
 1. test_create_project_returns_201 - POST returns 201 with "id" key
 2. test_create_project_response_omits_tokens - POST response has no token fields
 3. test_create_project_persists_encrypted - DB row stores ciphertext, not plaintext
@@ -9,6 +9,9 @@ Tests (8 total):
 6. test_get_project_by_id - GET /api/projects/{id} returns correct project_key
 7. test_get_project_by_id_omits_tokens - GET by id response has no token fields
 8. test_create_project_missing_required_field - missing project_key returns 422
+9. test_create_project_includes_github_repo - POST response includes decrypted github_repo
+10. test_create_project_github_repo_persists_encrypted - DB row stores github_repo as Fernet ciphertext
+11. test_get_project_includes_github_repo - GET /api/projects/{id} returns decrypted github_repo
 
 Implementation note on SQLite in-memory and connection pools:
 SQLAlchemy's default pool creates multiple connections; each `sqlite:///:memory:`
@@ -19,6 +22,7 @@ sqlite3 connection object, keeping the in-memory database alive and consistent.
 
 import os
 
+import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -47,6 +51,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 # Import app modules after setting env vars.
 from database import Base, get_db  # noqa: E402
 import models.project  # noqa: E402 — ensures Project is registered on Base.metadata
+import models.ticket_status  # noqa: E402 — ensures TicketStatus is registered on Base.metadata
 from main import app  # noqa: E402
 
 # Create tables on our StaticPool-backed engine.
@@ -70,12 +75,35 @@ from fastapi.testclient import TestClient  # noqa: E402
 client = TestClient(app)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fixtures
 # ---------------------------------------------------------------------------
 
 TOKEN_FIELD_NAMES = {"jira_token", "github_token", "confluence_token"}
 
 _project_counter = 0
+
+
+@pytest.fixture(autouse=True)
+def reset_tables():
+    """Drop and recreate all tables before each test for full isolation.
+
+    Also re-registers this module's override_get_db for the duration of
+    each test, then restores the prior override. This prevents cross-test
+    contamination when test_dashboard.py or other test modules install their
+    own dependency overrides (test collection order is not guaranteed).
+    """
+    prior_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = override_get_db
+    Base.metadata.drop_all(TEST_ENGINE)
+    Base.metadata.create_all(TEST_ENGINE)
+    yield
+    Base.metadata.drop_all(TEST_ENGINE)
+    Base.metadata.create_all(TEST_ENGINE)
+    # Restore the prior override (or remove ours if there was none)
+    if prior_override is not None:
+        app.dependency_overrides[get_db] = prior_override
+    else:
+        app.dependency_overrides.pop(get_db, None)
 
 
 def _unique_payload() -> dict:
@@ -86,10 +114,12 @@ def _unique_payload() -> dict:
         "name": f"Test Project {_project_counter}",
         "project_key": f"TESTPROJ{_project_counter}",
         "jira_url": "https://test.atlassian.net",
+        "jira_email": "test@example.com",
         "jira_token": "plaintext-jira-token",
         "github_token": "plaintext-github-token",
         "confluence_url": "https://test.atlassian.net/wiki",
         "confluence_token": "plaintext-confluence-token",
+        "github_repo": "acme/my-app",
     }
 
 
@@ -216,3 +246,68 @@ def test_create_project_missing_required_field() -> None:
     del payload["project_key"]
     response = client.post("/api/projects", json=payload)
     assert response.status_code == 422, response.text
+
+
+def test_create_project_includes_github_repo() -> None:
+    """POST /api/projects response body must include decrypted github_repo (GITHUBCFG-02)."""
+    payload = _unique_payload()
+    payload["github_repo"] = "acme/my-app"
+    response = client.post("/api/projects", json=payload)
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert "github_repo" in data, "github_repo missing from POST response"
+    assert data["github_repo"] == "acme/my-app", (
+        f"Expected decrypted 'acme/my-app', got: {data['github_repo']!r}"
+    )
+
+
+def test_create_project_github_repo_persists_encrypted() -> None:
+    """After POST, the DB row must store github_repo as Fernet ciphertext (GITHUBCFG-01)."""
+    payload = _unique_payload()
+    payload["github_repo"] = "acme/my-app"
+    response = client.post("/api/projects", json=payload)
+    assert response.status_code == 201, response.text
+    project_id = response.json()["id"]
+
+    db = TestingSession()
+    try:
+        from models.project import Project
+        row = db.get(Project, project_id)
+        assert row is not None
+        stored_repo = row.github_repo
+        assert stored_repo != "acme/my-app", "github_repo must not be stored as plaintext"
+        assert "acme/my-app" not in stored_repo
+        # Fernet ciphertext always starts with "gAAAAA"
+        assert stored_repo.startswith("gAAAAA"), (
+            f"Expected Fernet ciphertext (starts with 'gAAAAA'), got: {stored_repo[:20]!r}"
+        )
+    finally:
+        db.close()
+
+
+def test_create_project_missing_github_repo_returns_422() -> None:
+    """POST without required field 'github_repo' must return 422 Unprocessable Entity."""
+    payload = _unique_payload()
+    del payload["github_repo"]
+    response = client.post("/api/projects", json=payload)
+    assert response.status_code == 422, response.text
+
+
+def test_get_project_includes_github_repo() -> None:
+    """GET /api/projects/{id} response must include decrypted github_repo (GITHUBCFG-02)."""
+    payload = _unique_payload()
+    payload["github_repo"] = "acme/my-app"
+    post_response = client.post("/api/projects", json=payload)
+    assert post_response.status_code == 201
+    project_id = post_response.json()["id"]
+
+    get_response = client.get(f"/api/projects/{project_id}")
+    assert get_response.status_code == 200, get_response.text
+    data = get_response.json()
+    assert "github_repo" in data, "github_repo missing from GET response"
+    assert data["github_repo"] == "acme/my-app", (
+        f"Expected decrypted 'acme/my-app', got: {data['github_repo']!r}"
+    )
+    # Token fields must still be excluded
+    for token_field in TOKEN_FIELD_NAMES:
+        assert token_field not in data, f"Token field '{token_field}' found in GET response"
