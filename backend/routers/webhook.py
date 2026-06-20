@@ -132,8 +132,8 @@ async def handle_jira_comment(
     # Step 3: Parse the mention
     mention_result = parse_mention(event.comment.body)
 
-    # Step 4a: Handle 'describe' stage
-    if mention_result is not None and mention_result.stage == "describe":
+    # Step 4a: Handle 'describe' action
+    if mention_result is not None and mention_result.action == "describe":
         # Expire any previous awaiting_approval describe states for this ticket
         # so stale states from earlier failed runs don't get processed later.
         db.query(PipelineState).filter(
@@ -188,8 +188,8 @@ async def handle_jira_comment(
         )
         return {"status": "received", "action": "describe", "ticket": event.issue.key}
 
-    # Step 4b: Handle 'architecture' stage (background task — LLM call is heavy)
-    elif mention_result is not None and mention_result.stage == "architecture":
+    # Step 4b: Handle 'architecture' action (background task — LLM call is heavy)
+    elif mention_result is not None and mention_result.action == "architecture":
         # T-13-04 / ARCHINT-02: Idempotency guard — if an active (running)
         # PipelineState row already exists for this ticket+stage, return 200
         # immediately without scheduling a second heavy LLM task.
@@ -256,20 +256,19 @@ async def handle_jira_comment(
             "routed_to": "freellmapi",
         }
 
-    # Step 4c: Handle 'assign' stage
+    # Step 4c: Handle 'assign' action
     # ASGN-02: @jarvis assign @developer-name (architect → dev)
     # ASGN-03: @jarvis assign @qa-name (developer → QA)
     # Both are satisfied by the existing stage-agnostic assign_pipeline.run() below.
-    elif mention_result is not None and mention_result.stage == "assign":
+    elif mention_result is not None and mention_result.action == "assign":
         await assign_pipeline.run(event, project, mention_result)
         logger.info("Assign pipeline complete for issue %s", event.issue.key)
         return {"status": "received", "action": "assign", "ticket": event.issue.key}
 
-    # Step 4d: Handle 'approve' stage — mention-based approval (@jarvis approve <subcmd>)
-    # T-o0v-03: sub-command already validated against APPROVE_SUBCMDS in mention_parser;
-    # unknown sub-commands return None and never reach this branch.
-    elif mention_result is not None and mention_result.stage == "approve":
-        approve_subcmd = mention_result.extra.lower().strip()
+    # Step 4d: Handle 'approve' action — mention-based approval (@jarvis approve <subcmd>)
+    # T-o0v-03: sub-command is from LLM entities or extra text; unknown intents return None.
+    elif mention_result is not None and mention_result.action == "approve":
+        approve_subcmd = mention_result.entities.get("target", mention_result.extra).lower().strip()
         applied = await approval_detector.detect_and_apply_approval(
             event, db, project, approve_subcmd
         )
@@ -281,24 +280,63 @@ async def handle_jira_comment(
             }
         return {"status": "received", "action": "ignored", "reason": "no_pending_approval"}
 
-    # Step 4e: No recognized mention — ignored (keyword-based approvals removed;
-    # approval now requires explicit @jarvis approve <subcmd> mention)
+    # Step 4e: Stub handler for 'start_coding' — Phase 16 wires the real pipeline
+    elif mention_result is not None and mention_result.action == "start_coding":
+        logger.info("Issue %s: start_coding stub (Phase 16 pending)", event.issue.key)
+        return {"status": "received", "action": "start_coding", "routed_to": "pending_phase_16"}
+
+    # Step 4f: Stub handler for 'merge_pr' — Phase 17 wires the real pipeline
+    elif mention_result is not None and mention_result.action == "merge_pr":
+        logger.info("Issue %s: merge_pr stub (Phase 17 pending)", event.issue.key)
+        return {"status": "received", "action": "merge_pr", "routed_to": "pending_phase_17"}
+
+    # Step 4g: No recognized mention.
+    # If @jarvis appears in the body but intent is unrecognized, post a help comment
+    # (INTENT-02). If there's no @jarvis at all, return the ignored response silently.
     elif mention_result is None:
+        if "@jarvis" in event.comment.body.lower():
+            _help_body = (
+                AGENT_COMMENT_PREFIX
+                + AGENT_BODY_MARKER + "\n\n"
+                + "I didn't understand that command. Try one of:\n\n"
+                + "- `@jarvis describe` — elaborate the ticket description\n"
+                + "- `@jarvis architecture` — generate architecture diagram\n"
+                + "- `@jarvis start coding` — begin implementation\n"
+                + "- `@jarvis merge pr` — merge the open PR\n"
+                + "- `@jarvis assign @name` — assign the ticket to someone\n"
+                + "- `@jarvis approve story description` — apply the draft description\n"
+                + "- `@jarvis approve architecture` — proceed with the architecture\n"
+            )
+            try:
+                jira_token = decrypt_credential(project.jira_token)
+                jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+                await hermes_post_comment(
+                    project.jira_url,
+                    jira_email,
+                    jira_token,
+                    event.issue.key,
+                    _help_body,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to post help comment for ticket %s: %s", event.issue.key, exc
+                )
+            logger.info("Issue %s: unrecognized @jarvis intent — help comment posted", event.issue.key)
+            return {"status": "received", "action": "intent_unknown", "reason": "help_comment_posted"}
         return {"status": "received", "action": "ignored"}
 
-    # Step 4f: Other stages (codegen, testgen — future phases)
-    # Keep llm_router routing for backward compatibility with existing tests
+    # Step 4h: Other actions (codegen, testgen — future phases)
     else:
-        route_result = route_request(mention_result.stage, event.comment.body)
+        route_result = route_request(mention_result.action, event.comment.body)
         logger.info(
-            "Issue %s: stage=%s routed to %s",
+            "Issue %s: action=%s routed to %s",
             event.issue.key,
-            mention_result.stage,
+            mention_result.action,
             route_result.provider,
         )
         return {
             "status": "received",
-            "action": mention_result.stage,
+            "action": mention_result.action,
             "routed_to": route_result.provider,
         }
 

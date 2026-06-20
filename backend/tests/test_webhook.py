@@ -54,6 +54,7 @@ TEST_ENGINE = create_engine(
 )
 
 from database import Base, get_db  # noqa: E402
+from services.mention_parser import MentionResult  # noqa: E402
 import models.project  # noqa: E402
 import models.ticket_status  # noqa: E402
 import models.pipeline_state  # noqa: E402
@@ -188,8 +189,8 @@ async def test_no_mention_returns_ignored():
 
 
 async def test_hermes_mention_returns_action():
-    """Test 4: POST with @jarvis describe (legacy, removed) and a matching project
-    now returns action=ignored — auto-trigger on Story creation is primary.
+    """Test 4: POST with @jarvis describe and a matching project returns action=describe.
+    With LLM classification describe is now a valid action (LLM mocked).
     """
     db = TestingSession()
     try:
@@ -197,13 +198,19 @@ async def test_hermes_mention_returns_action():
     finally:
         db.close()
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
+    _describe_result = MentionResult(mention_target="jarvis", action="describe", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_describe_result), \
+         patch("routers.webhook.describe_pipeline.run", new_callable=AsyncMock) as mock_run, \
+         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock), \
+         patch("routers.webhook.decrypt_credential", return_value="token"):
+        mock_run.return_value = "Draft."
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=VALID_DESCRIBE_PAYLOAD)
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "received"
-    assert body.get("action") == "ignored"
+    assert body.get("action") == "describe"
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +354,9 @@ async def test_assign_mention_calls_assign_pipeline():
         "timestamp": 1718000000,
     }
 
-    with patch("routers.webhook.assign_pipeline.run", new_callable=AsyncMock) as mock_run:
+    _assign_result = MentionResult(mention_target="jarvis", action="assign", extra="@jane.smith", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_assign_result), \
+         patch("routers.webhook.assign_pipeline.run", new_callable=AsyncMock) as mock_run:
         mock_run.return_value = None
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -387,10 +396,9 @@ async def test_approval_comment_triggers_approval():
         "timestamp": 1718000005,
     }
 
-    with patch(
-        "routers.webhook.approval_detector.detect_and_apply_approval",
-        new_callable=AsyncMock,
-    ) as mock_detect:
+    _approve_result = MentionResult(mention_target="jarvis", action="approve", extra="story description", entities={"target": "story description"})
+    with patch("routers.webhook.parse_mention", return_value=_approve_result), \
+         patch("routers.webhook.approval_detector.detect_and_apply_approval", new_callable=AsyncMock) as mock_detect:
         mock_detect.return_value = True
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -438,10 +446,9 @@ async def test_architecture_mention_returns_action():
     finally:
         db.close()
 
-    # Patch asyncio.create_task to prevent real background coroutine from running.
-    # Patch architecture_pipeline.run to return a completed coroutine (not AsyncMock,
-    # which creates unawaited coroutine warnings when create_task is also mocked).
-    with patch("routers.webhook.asyncio.create_task") as mock_create_task:
+    _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_arch_result), \
+         patch("routers.webhook.asyncio.create_task") as mock_create_task:
         mock_create_task.return_value = None
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -474,7 +481,9 @@ async def test_architecture_mention_schedules_pipeline():
         coro.close()  # prevent "never awaited" ResourceWarning
         return None
 
-    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+    _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_arch_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
 
@@ -555,7 +564,9 @@ async def test_architecture_duplicate_returns_ignored():
         coro.close()
         return None
 
-    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+    _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_arch_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
 
@@ -595,7 +606,9 @@ async def test_architecture_failed_state_allows_new_run():
         coro.close()
         return None
 
-    with patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+    _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_arch_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
 
@@ -635,7 +648,9 @@ async def test_architecture_creates_pipeline_state_before_task():
         coro.close()
         return None
 
-    with patch("routers.webhook.asyncio.create_task", side_effect=_check_db_then_close):
+    _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
+    with patch("routers.webhook.parse_mention", return_value=_arch_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_check_db_then_close):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/webhook/jira-comment", json=ARCHITECTURE_PAYLOAD)
 
@@ -644,3 +659,121 @@ async def test_architecture_creates_pipeline_state_before_task():
     # Exactly one PipelineState row must have been found at create_task call time
     assert len(pipeline_state_seen_in_db) == 1
     assert pipeline_state_seen_in_db[0] is not None
+
+
+# ---------------------------------------------------------------------------
+# New tests (Phase 14-02): unrecognized-intent help comment + stub handlers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_unknown_intent_posts_help_comment():
+    """When @jarvis appears in body but parse_mention returns None → help comment posted."""
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+        "comment": {"id": "20099", "body": "@jarvis do something weird", "author": "alice"},
+        "timestamp": 1718000100,
+    }
+
+    with patch("routers.webhook.parse_mention", return_value=None), \
+         patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post, \
+         patch("routers.webhook.decrypt_credential", return_value="plaintext-token"):
+        mock_post.return_value = {}
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "intent_unknown"
+    mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_webhook_no_jarvis_mention_does_not_post_help_comment():
+    """When body has no @jarvis at all and parse_mention returns None → silent ignored."""
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-2", "summary": "Feature Y"},
+        "comment": {"id": "20100", "body": "just a plain comment", "author": "bob"},
+        "timestamp": 1718000101,
+    }
+
+    with patch("routers.webhook.hermes_post_comment", new_callable=AsyncMock) as mock_post:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "ignored"
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_start_coding_routes_to_stub():
+    """@jarvis start coding → action=start_coding, routed_to=pending_phase_16."""
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+        "comment": {"id": "20101", "body": "@jarvis start coding", "author": "alice"},
+        "timestamp": 1718000102,
+    }
+
+    stub_result = MentionResult(mention_target="jarvis", action="start_coding", extra="start coding", entities={})
+    with patch("routers.webhook.parse_mention", return_value=stub_result):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "start_coding"
+    assert body["routed_to"] == "pending_phase_16"
+
+
+@pytest.mark.asyncio
+async def test_webhook_merge_pr_routes_to_stub():
+    """@jarvis merge pr → action=merge_pr, routed_to=pending_phase_17."""
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        _create_project(db, key="PROJ")
+    finally:
+        db.close()
+
+    payload = {
+        "webhook_event": "comment_created",
+        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+        "comment": {"id": "20102", "body": "@jarvis merge pr", "author": "alice"},
+        "timestamp": 1718000103,
+    }
+
+    stub_result = MentionResult(mention_target="jarvis", action="merge_pr", extra="merge pr", entities={})
+    with patch("routers.webhook.parse_mention", return_value=stub_result):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "merge_pr"
+    assert body["routed_to"] == "pending_phase_17"
