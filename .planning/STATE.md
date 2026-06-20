@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Smart Architecture & Confluence Publishing
-status: executing
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-06-19T10:42:00.000Z"
-last_activity: 2026-06-19 -- Phase 13 Plan 02 executed (idempotency guard + approval cleanup)
+status: complete
+stopped_at: Completed quick task 260619-hlp (Confluence MCP migration)
+last_updated: "2026-06-19T15:00:00.000Z"
+last_activity: 2026-06-19 -- Quick task 260619-hlp executed (route Confluence publishing through MCP/hermes)
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 7
-  completed_plans: 6
-  percent: 86
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 
 ## Current Position
 
-Phase: 13 (pipeline-orchestration-integration) — EXECUTING
-Plan: 3 of 3
-Status: Ready to execute Plan 03
-Last activity: 2026-06-19 -- Phase 13 Plan 02 executed (idempotency guard + approval cleanup)
+Phase: 13 (pipeline-orchestration-integration) — COMPLETE
+Plan: 3 of 3 (all done) + quick task 260619-hlp (Confluence MCP migration)
+Status: Milestone v1.4 complete
+Last activity: 2026-06-19 -- Quick task 260619-hlp executed (route Confluence publishing through MCP/hermes)
 
 ## Milestone History
 
@@ -38,7 +38,7 @@ Last activity: 2026-06-19 -- Phase 13 Plan 02 executed (idempotency guard + appr
 | v1.1 freellmapi | 1 (Phase 5) | 2 | Complete | 2026-06-18 |
 | v1.2 hermes-freellmapi | 1 (Phase 6) | 2 | Complete | 2026-06-18 |
 | v1.3 hermes-mcp-agent | 3 (Phases 7-9) | 3 | Complete | 2026-06-19 |
-| v1.4 smart-architecture | 4 (Phases 10-13) | TBD | In progress | - |
+| v1.4 smart-architecture | 4 (Phases 10-13) | 2026-06-19 | Complete | All 13 phases, all 24 plans done |
 
 ## Performance Metrics
 
@@ -132,7 +132,14 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None — awaiting `/gsd-plan-phase 10` to begin Phase 10 planning.
+None — milestone v1.4 complete; Confluence MCP migration done as quick task 260619-hlp; description-generation auto-trigger + mention-based approvals done as quick task 260619-o0v; ready for v1.5 planning.
+
+### Quick Tasks Completed
+
+| ID | Description | Date |
+|----|--------------|------|
+| 260619-hlp | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | 2026-06-19 |
+| 260619-o0v | Auto-trigger description generation on Story creation (jira:issue_created webhook); replace keyword-based approval detection with `@jarvis approve story description` / `@jarvis approve architecture` mentions; remove `@jarvis describe` comment trigger | 2026-06-19 |
 
 ### Blockers/Concerns
 
@@ -145,11 +152,11 @@ None.
 | v1.4.x | Hybrid rule-based pre-filter before LLM classification (keyword/component-count guardrail) | Deferred | v1.4 planning |
 | v1.4.x | Override trigger @jarvis architecture force-complex / force-simple | Deferred | v1.4 planning |
 | v1.5 | Auto-chain architecture generation after @jarvis describe approval | Deferred | v1.4 planning |
-| v1.5 | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | Deferred | v1.4 planning |
+| v1.5 | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | **Done** (quick task 260619-hlp, 2026-06-19) | v1.4 planning |
 
 ## Session Continuity
 
-Last session: 2026-06-19T10:42:00.000Z
-Stopped at: Completed 13-02-PLAN.md
+Last session: 2026-06-19T15:00:00.000Z
+Stopped at: Quick task 260619-hlp complete (Confluence MCP migration)
 Resume file: None
-Next action: Execute 13-03-PLAN.md (replace architecture pipeline tests + add idempotency test)
+Next action: Begin v1.5 milestone planning — `/gsd-new-milestone` or `/gsd-plan-phase` for next phase

@@ -12,6 +12,8 @@ Phases 7-9 (milestone v1.3) replace all direct Jira REST calls in the platform w
 
 Phases 10-13 (milestone v1.4) replace the multi-option architecture flow with a single complexity-aware pipeline. Phase 10 introduces an isolated complexity classifier module. Phase 11 enhances the diagram service with validated mxGraph XML output and a diagrams.net viewer URL. Phase 12 updates the Confluence client with two structured HTML templates and idempotent page management. Phase 13 rewires the full pipeline in architecture_pipeline.py, adds a webhook idempotency guard, and removes the old multi-option approval flow.
 
+Phases 14-17 (milestone v1.5) deliver the GitHub developer pipeline and replace the hardcoded mention-parser keyword whitelist with an LLM-based intent router. Phase 14 replaces KNOWN_STAGES with a free-text LLM intent classifier. Phase 15 adds the GitHub repo field to the project model and web app and implements the clone → code-generate → PR creation foundation. Phase 16 wires the end-to-end `@jarvis start coding` trigger that reads the Confluence architecture from comment history and posts the resulting PR link back to Jira. Phase 17 delivers the `@jarvis merge pr` trigger that merges the open PR via GitHub API and updates the Jira story status.
+
 ## Phases
 
 **Phase Numbering:**
@@ -34,6 +36,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 11: Enhanced Diagram Service** - drawio_service.py enhanced with validated mxGraph XML output, directional edges, typed-component placement, and diagrams.net viewer URL (completed 2026-06-19)
 - [ ] **Phase 12: Structured Confluence Publishing** - confluence_client.py updated with two HTML templates (text-only and diagram+components), HTML-escaped content, idempotent find-or-update page logic, and graceful degradation
 - [ ] **Phase 13: Pipeline Orchestration & Integration** - architecture_pipeline.py rewritten to wire classifier → diagram → Confluence → Jira comment; webhook idempotency guard added; old multi-option flow removed
+- [ ] **Phase 14: LLM Intent Router** - Replace KNOWN_STAGES whitelist in mention_parser.py with LLM-based free-text intent extraction; unrecognized intents post a helpful Jira comment listing valid commands
+- [ ] **Phase 15: GitHub Config & Dev Pipeline Foundation** - Add github_repo field to project DB and web app form; implement clone → code-generate → PR creation pipeline modules
+- [ ] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira
+- [ ] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment
 
 ## Phase Details
 
@@ -354,10 +360,83 @@ Plans:
 
 ---
 
+## Milestone v1.5: GitHub Dev Pipeline & LLM Intent Routing
+
+### Phase 14: LLM Intent Router
+
+**Goal**: Free-text `@jarvis` mentions are understood by an LLM classifier instead of a hardcoded keyword whitelist, so developers and team members can trigger actions using natural language; unknown intents surface a helpful reply instead of being silently dropped
+**Depends on**: Phase 13
+**Milestone**: v1.5 — github-dev-pipeline
+**Requirements**: INTENT-01, INTENT-02
+**Success Criteria** (what must be TRUE):
+
+  1. A `@jarvis start coding` comment mention is correctly classified by the LLM intent router and routes to the developer coding pipeline handler — the KNOWN_STAGES string-match whitelist in `mention_parser.py` no longer exists
+  2. A `@jarvis merge pr to main branch` comment mention is classified as the merge-PR intent and routes to the PR merge handler — natural phrasing variants (e.g. "merge the PR", "merge pr") also resolve to the same intent
+  3. When a `@jarvis` comment carries an unrecognized or low-confidence intent, the agent posts a Jira comment listing valid commands (e.g. "`@jarvis start coding`", "`@jarvis merge pr`", "`@jarvis assign @name`") rather than silently dropping the event
+  4. Unit tests cover recognized intents, unrecognized intent fallback, and LLM call failure degradation — all without live API keys
+
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 14-01-PLAN.md — Create intent_router.py + rewrite mention_parser.py: remove KNOWN_STAGES, wire LLM classifier (INTENT-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 14-02-PLAN.md — Update webhook.py: use result.action, post help comment for unrecognized intents + unit tests (INTENT-01, INTENT-02)
+
+### Phase 15: GitHub Config & Dev Pipeline Foundation
+
+**Goal**: Projects can store a GitHub repo slug and the agent can autonomously clone the repo, generate code changes via freellmapi, commit them to a new branch, and open a PR — the pipeline modules exist and are independently testable before end-to-end wiring
+**Depends on**: Phase 14
+**Milestone**: v1.5 — github-dev-pipeline
+**Requirements**: GITHUBCFG-01, GITHUBCFG-02, DEVPIPE-02, DEVPIPE-03, DEVPIPE-04
+**Success Criteria** (what must be TRUE):
+
+  1. User can enter a `github_repo` owner/repo slug (e.g. `acme/my-app`) in the project onboarding form and it is saved encrypted in the project DB record alongside the existing credentials
+  2. The project dashboard list displays the configured `github_repo` value for each onboarded project
+  3. The agent can clone a project's configured GitHub repo to a temporary workspace directory using the stored (decrypted) GitHub token
+  4. Given a Jira story description, Confluence architecture content, and cloned codebase context, the agent calls freellmapi to produce code changes and applies them, commits to a new branch named `jarvis/issue-{key}`, pushes the branch, and opens a PR against main via the GitHub API
+  5. Each dev pipeline module (clone, code-gen, PR creation) can be tested in isolation with mocked GitHub API and freellmapi responses
+
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 16: Dev Pipeline Integration
+
+**Goal**: A developer can type `@jarvis start coding` on a Jira story and the agent reads the Confluence architecture page linked in the comment history, runs the dev pipeline, and posts the resulting PR URL back as a new Jira comment — the full trigger-to-PR flow works end-to-end
+**Depends on**: Phase 15
+**Milestone**: v1.5 — github-dev-pipeline
+**Requirements**: DEVPIPE-01, DEVPIPE-05
+**Success Criteria** (what must be TRUE):
+
+  1. When the `start_coding` intent is detected, the agent searches the ticket's Jira comment history for the most recent Confluence architecture page URL and fetches the page content via the Hermes Confluence MCP client
+  2. After the dev pipeline completes, a new Jira comment on the originating story contains the GitHub PR URL so the developer can navigate directly to the PR from Jira
+
+**Plans**: TBD
+
+### Phase 17: PR Merge Pipeline
+
+**Goal**: A developer can type `@jarvis merge pr` on a Jira story and the agent finds the open PR by branch pattern, merges it via the GitHub API, updates the Jira story status, and posts the merge commit SHA back as a Jira comment
+**Depends on**: Phase 16
+**Milestone**: v1.5 — github-dev-pipeline
+**Requirements**: PRMERGE-01, PRMERGE-02
+**Success Criteria** (what must be TRUE):
+
+  1. When the `merge_pr` intent is detected, the agent locates the open PR for the story by branch name (`jarvis/issue-{key}`) or PR title match and merges it to main via the GitHub API using the stored project token
+  2. After a successful merge, the Jira story status is updated via Hermes/Jira MCP and a new Jira comment contains the merge commit SHA confirming the merge
+  3. If no open PR is found for the story, the agent posts an informative Jira comment explaining what was searched and that no PR was found — the pipeline does not raise an unhandled exception
+
+**Plans**: TBD
+
+---
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -373,4 +452,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. Complexity Classifier | 2/2 | Complete   | 2026-06-19 |
 | 11. Enhanced Diagram Service | 1/1 | Complete   | 2026-06-19 |
 | 12. Structured Confluence Publishing | 0/1 | Not started | - |
-| 13. Pipeline Orchestration & Integration | 1/3 | In Progress|  |
+| 13. Pipeline Orchestration & Integration | 1/3 | In Progress | - |
+| 14. LLM Intent Router | 0/? | Not started | - |
+| 15. GitHub Config & Dev Pipeline Foundation | 0/? | Not started | - |
+| 16. Dev Pipeline Integration | 0/? | Not started | - |
+| 17. PR Merge Pipeline | 0/? | Not started | - |
