@@ -36,7 +36,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 11: Enhanced Diagram Service** - drawio_service.py enhanced with validated mxGraph XML output, directional edges, typed-component placement, and diagrams.net viewer URL (completed 2026-06-19)
 - [ ] **Phase 12: Structured Confluence Publishing** - confluence_client.py updated with two HTML templates (text-only and diagram+components), HTML-escaped content, idempotent find-or-update page logic, and graceful degradation
 - [ ] **Phase 13: Pipeline Orchestration & Integration** - architecture_pipeline.py rewritten to wire classifier → diagram → Confluence → Jira comment; webhook idempotency guard added; old multi-option flow removed
-- [ ] **Phase 14: LLM Intent Router** - Replace KNOWN_STAGES whitelist in mention_parser.py with LLM-based free-text intent extraction; unrecognized intents post a helpful Jira comment listing valid commands
+- [x] **Phase 14: LLM Intent Router** - Replace KNOWN_STAGES whitelist in mention_parser.py with LLM-based free-text intent extraction; unrecognized intents post a helpful Jira comment listing valid commands (completed 2026-06-20)
 - [ ] **Phase 15: GitHub Config & Dev Pipeline Foundation** - Add github_repo field to project DB and web app form; implement clone → code-generate → PR creation pipeline modules
 - [ ] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira
 - [ ] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment
@@ -381,11 +381,11 @@ Plans:
 
 **Wave 1**
 
-- [ ] 14-01-PLAN.md — Create intent_router.py + rewrite mention_parser.py: remove KNOWN_STAGES, wire LLM classifier (INTENT-01)
+- [x] 14-01-PLAN.md — Create intent_router.py + rewrite mention_parser.py: remove KNOWN_STAGES, wire LLM classifier (INTENT-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 14-02-PLAN.md — Update webhook.py: use result.action, post help comment for unrecognized intents + unit tests (INTENT-01, INTENT-02)
+- [x] 14-02-PLAN.md — Update webhook.py: use result.action, post help comment for unrecognized intents + unit tests (INTENT-01, INTENT-02)
 
 ### Phase 15: GitHub Config & Dev Pipeline Foundation
 
@@ -453,7 +453,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 11. Enhanced Diagram Service | 1/1 | Complete   | 2026-06-19 |
 | 12. Structured Confluence Publishing | 0/1 | Not started | - |
 | 13. Pipeline Orchestration & Integration | 1/3 | In Progress | - |
-| 14. LLM Intent Router | 0/? | Not started | - |
+| 14. LLM Intent Router | 2/2 | Complete   | 2026-06-20 |
 | 15. GitHub Config & Dev Pipeline Foundation | 0/? | Not started | - |
 | 16. Dev Pipeline Integration | 0/? | Not started | - |
 | 17. PR Merge Pipeline | 0/? | Not started | - |

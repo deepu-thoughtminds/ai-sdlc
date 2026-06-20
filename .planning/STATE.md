@@ -1,34 +1,38 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: Smart Architecture & Confluence Publishing
-status: complete
-stopped_at: Completed quick task 260619-hlp (Confluence MCP migration)
-last_updated: "2026-06-19T15:00:00.000Z"
-last_activity: 2026-06-19 -- Quick task 260619-hlp executed (route Confluence publishing through MCP/hermes)
+milestone: v1.5
+milestone_name: GitHub Dev Pipeline & LLM Intent Routing
+status: executing
+stopped_at: context exhaustion at 76% (2026-06-20)
+last_updated: "2026-06-20T12:19:26.076Z"
+last_activity: 2026-06-20 -- Phase 14 execution started
 progress:
   total_phases: 4
-  completed_phases: 4
-  total_plans: 7
-  completed_plans: 7
-  percent: 100
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-19)
+See: .planning/PROJECT.md (updated 2026-06-20)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 13 — pipeline-orchestration-integration
+**Current focus:** Phase 14 — llm-intent-router
 
 ## Current Position
 
-Phase: 13 (pipeline-orchestration-integration) — COMPLETE
-Plan: 3 of 3 (all done) + quick task 260619-hlp (Confluence MCP migration)
-Status: Milestone v1.4 complete
-Last activity: 2026-06-19 -- Quick task 260619-hlp executed (route Confluence publishing through MCP/hermes)
+Phase: 14 (llm-intent-router) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 14
+Last activity: 2026-06-20 -- Phase 14 execution started
+
+```
+v1.5 progress: [          ] 0% (0/4 phases)
+```
 
 ## Milestone History
 
@@ -39,6 +43,7 @@ Last activity: 2026-06-19 -- Quick task 260619-hlp executed (route Confluence pu
 | v1.2 hermes-freellmapi | 1 (Phase 6) | 2 | Complete | 2026-06-18 |
 | v1.3 hermes-mcp-agent | 3 (Phases 7-9) | 3 | Complete | 2026-06-19 |
 | v1.4 smart-architecture | 4 (Phases 10-13) | 2026-06-19 | Complete | All 13 phases, all 24 plans done |
+| v1.5 github-dev-pipeline | 4 (Phases 14-17) | TBD | In Progress | — |
 
 ## Performance Metrics
 
@@ -129,10 +134,16 @@ Recent decisions affecting current work:
 - [Phase 13-02]: Webhook idempotency guard: status != 'failed' allows retry; active runs (running/complete) block duplicate task scheduling
 - [Phase 13-02]: Webhook creates PipelineState(status=running) before asyncio.create_task; pipeline re-uses existing row
 - [Phase 13-02]: Architecture approval path removed from approval_detector — dead code after Plan 01 changed lifecycle to running→complete
+- [v1.5 roadmap]: KNOWN_STAGES whitelist in mention_parser.py replaced by LLM intent classifier — free-text @jarvis mentions supported without hardcoded keyword enumeration (Phase 14)
+- [v1.5 roadmap]: Unrecognized intents post a helpful Jira comment listing valid commands rather than silently dropping the event (INTENT-02, Phase 14)
+- [v1.5 roadmap]: github_repo stored encrypted alongside existing project credentials; displayed in dashboard (GITHUBCFG-01, GITHUBCFG-02, Phase 15)
+- [v1.5 roadmap]: Dev pipeline branch name convention is jarvis/issue-{key}; PR opened against main via GitHub API with stored token (DEVPIPE-04, Phase 15)
+- [v1.5 roadmap]: DEVPIPE-01 reads Confluence architecture URL from ticket comment history (posted by architecture pipeline); fetches page via Hermes Confluence MCP client (Phase 16)
+- [v1.5 roadmap]: PRMERGE-01 locates PR by branch pattern jarvis/issue-{key} or PR title match; merges to main; posts merge commit SHA to Jira comment (Phase 17)
 
 ### Pending Todos
 
-None — milestone v1.4 complete; Confluence MCP migration done as quick task 260619-hlp; description-generation auto-trigger + mention-based approvals done as quick task 260619-o0v; ready for v1.5 planning.
+None — v1.5 roadmap created; ready to begin Phase 14 planning.
 
 ### Quick Tasks Completed
 
@@ -156,7 +167,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-19T15:00:00.000Z
-Stopped at: Quick task 260619-hlp complete (Confluence MCP migration)
+Last session: 2026-06-20T12:19:26.070Z
+Stopped at: context exhaustion at 76% (2026-06-20)
 Resume file: None
-Next action: Begin v1.5 milestone planning — `/gsd-new-milestone` or `/gsd-plan-phase` for next phase
+Next action: `/gsd-plan-phase 14` — plan Phase 14: LLM Intent Router
