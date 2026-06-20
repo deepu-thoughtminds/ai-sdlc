@@ -14,6 +14,7 @@ interface FormState {
   jira_email: string
   jira_token: string
   github_token: string
+  github_repo: string
   confluence_url: string
   confluence_token: string
 }
@@ -25,6 +26,7 @@ const emptyForm: FormState = {
   jira_email: "",
   jira_token: "",
   github_token: "",
+  github_repo: "",
   confluence_url: "",
   confluence_token: "",
 }
@@ -52,6 +54,7 @@ export default function OnboardPage() {
         jira_email: form.jira_email,
         jira_token: form.jira_token,
         github_token: form.github_token,
+        github_repo: form.github_repo,
         confluence_url: form.confluence_url,
         confluence_token: form.confluence_token,
       }
@@ -224,6 +227,25 @@ export default function OnboardPage() {
             onChange={handleChange}
             style={inputStyle}
           />
+        </div>
+
+        <div style={fieldStyle}>
+          <label htmlFor="github_repo" style={labelStyle}>
+            GitHub Repository
+          </label>
+          <input
+            id="github_repo"
+            name="github_repo"
+            type="text"
+            required
+            placeholder="acme/my-app"
+            value={form.github_repo}
+            onChange={handleChange}
+            style={inputStyle}
+          />
+          <small style={{ color: "#666", fontSize: "12px" }}>
+            Owner/repo slug, e.g. acme/my-app
+          </small>
         </div>
 
         <div style={fieldStyle}>
