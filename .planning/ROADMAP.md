@@ -420,7 +420,10 @@ Plans:
   1. When the `start_coding` intent is detected, the agent searches the ticket's Jira comment history for the most recent Confluence architecture page URL and fetches the page content via the Hermes Confluence MCP client
   2. After the dev pipeline completes, a new Jira comment on the originating story contains the GitHub PR URL so the developer can navigate directly to the PR from Jira
 
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 16-01-PLAN.md — Comment/Confluence read-path: hermes MCP client + server endpoints + backend hermes_client wrappers + confluence_url_finder utility
+- [ ] 16-02-PLAN.md — dev_pipeline.py orchestrator wiring read-path through clone/codegen/PR to Jira comment, plus webhook start_coding branch rewire
 
 ### Phase 17: PR Merge Pipeline
 
