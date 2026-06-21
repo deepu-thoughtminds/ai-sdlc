@@ -208,3 +208,80 @@ async def find_confluence_page(
     if data == {}:
         return None
     return data
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 Plan 01: Comment and Confluence page content fetch functions
+# ---------------------------------------------------------------------------
+
+
+async def get_comments(
+    jira_url: str,
+    jira_email: str,
+    jira_token: str,
+    issue_key: str,
+) -> list[dict]:
+    """Fetch comment history for a Jira issue via hermes POST /jira/comments.
+
+    Returns [] on any error — DEVPIPE-01 requires the pipeline to not crash
+    if comment history is unavailable. The caller should post an informative
+    Jira comment if no architecture URL is found after degradation.
+
+    T-09-01: jira_token is never logged; only issue_key is logged at INFO.
+    """
+    try:
+        logger.info("Fetching comments for issue %s", issue_key)
+        payload = {
+            "jira_url": jira_url,
+            "jira_email": jira_email,
+            "jira_token": jira_token,
+            "issue_key": issue_key,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{HERMES_BASE_URL}/jira/comments", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning(
+            "get_comments failed for issue %s: %s — returning []",
+            issue_key,
+            exc,
+        )
+        return []
+
+
+async def get_confluence_page_content(
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    page_id: str,
+) -> str:
+    """Fetch the body content of a Confluence page by page ID via hermes.
+
+    Returns "" on any error — degrades gracefully so the dev pipeline can
+    proceed with an empty architecture context rather than crashing.
+
+    T-04-05: confluence_token is never logged; only page_id is logged at INFO.
+    """
+    try:
+        logger.info("Fetching Confluence page content for page %s", page_id)
+        params = {
+            "confluence_url": confluence_url,
+            "confluence_email": confluence_email,
+            "confluence_token": confluence_token,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{HERMES_BASE_URL}/confluence/page/{page_id}", params=params
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        # Hermes wraps body in {"body": "<content string>"}
+        return data.get("body", "") if isinstance(data, dict) else ""
+    except Exception as exc:
+        logger.warning(
+            "get_confluence_page_content failed for page %s: %s — returning ''",
+            page_id,
+            exc,
+        )
+        return ""

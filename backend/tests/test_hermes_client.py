@@ -12,6 +12,8 @@ from services.hermes_client import (
     create_confluence_page,
     update_confluence_page,
     find_confluence_page,
+    get_comments,
+    get_confluence_page_content,
 )
 import services.hermes_client as _hermes_client_mod
 
@@ -144,3 +146,100 @@ async def test_find_confluence_page_returns_none_when_hermes_returns_empty_dict(
         "https://conf.example.com", "u@x.com", "tok", "PROJ", "My Page"
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_comments (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_comments_returns_list():
+    """get_comments() returns list of comment dicts from hermes."""
+    comments = [{"id": "c1", "body": "A comment", "author": {"displayName": "Alice"}}]
+    respx.post(f"{BASE}/jira/comments").mock(
+        return_value=httpx.Response(200, json=comments)
+    )
+    result = await get_comments("https://x.atlassian.net", "u@x.com", "tok", "TS-1")
+    assert result == comments
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_comments_returns_empty_on_connect_error():
+    """get_comments() degrades to [] on network error — DEVPIPE-01 must not crash pipeline."""
+    respx.post(f"{BASE}/jira/comments").mock(
+        side_effect=httpx.ConnectError("refused")
+    )
+    result = await get_comments("https://x.atlassian.net", "u@x.com", "tok", "TS-1")
+    assert result == []
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_comments_returns_empty_on_http_500():
+    """get_comments() degrades to [] on HTTP 500 — DEVPIPE-01 must not crash pipeline."""
+    respx.post(f"{BASE}/jira/comments").mock(
+        return_value=httpx.Response(500, json={"error": "fail"})
+    )
+    result = await get_comments("https://x.atlassian.net", "u@x.com", "tok", "TS-1")
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# get_confluence_page_content (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_confluence_page_content_returns_string():
+    """get_confluence_page_content() returns the page body string."""
+    body_text = "<p>Architecture content</p>"
+    respx.get(f"{BASE}/confluence/page/42").mock(
+        return_value=httpx.Response(200, json={"body": body_text})
+    )
+    result = await get_confluence_page_content(
+        "https://conf.example.com", "u@x.com", "tok", "42"
+    )
+    assert result == body_text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_confluence_page_content_returns_empty_string_when_hermes_returns_none_body():
+    """get_confluence_page_content() returns '' when hermes body field is empty."""
+    respx.get(f"{BASE}/confluence/page/42").mock(
+        return_value=httpx.Response(200, json={"body": ""})
+    )
+    result = await get_confluence_page_content(
+        "https://conf.example.com", "u@x.com", "tok", "42"
+    )
+    assert result == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_confluence_page_content_returns_empty_on_connect_error():
+    """get_confluence_page_content() degrades to '' on network error."""
+    respx.get(f"{BASE}/confluence/page/42").mock(
+        side_effect=httpx.ConnectError("refused")
+    )
+    result = await get_confluence_page_content(
+        "https://conf.example.com", "u@x.com", "tok", "42"
+    )
+    assert result == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_confluence_page_content_returns_empty_on_http_500():
+    """get_confluence_page_content() degrades to '' on HTTP 500."""
+    respx.get(f"{BASE}/confluence/page/42").mock(
+        return_value=httpx.Response(500, json={"error": "fail"})
+    )
+    result = await get_confluence_page_content(
+        "https://conf.example.com", "u@x.com", "tok", "42"
+    )
+    assert result == ""
