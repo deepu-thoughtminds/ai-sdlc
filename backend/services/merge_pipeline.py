@@ -143,6 +143,16 @@ async def run(
             )
             return comment_text
 
+        # CR-04 fix: verify that the GitHub API actually merged the PR.
+        # A 200 response with merged=False is possible in edge cases (e.g.
+        # some GitHub Enterprise configurations or race conditions). Without
+        # this check the pipeline would post a false "PR merged" confirmation.
+        if not merge_result.merged:
+            raise RuntimeError(
+                f"GitHub reported PR #{merge_result.pr_number} was not merged "
+                f"(merged=False in API response)"
+            )
+
         # Step 4: PR found and merged — decrypt Jira credentials for status update.
         jira_token = decrypt_credential(project.jira_token)
         jira_email = (
@@ -192,16 +202,19 @@ async def run(
         except Exception:
             db.rollback()
 
-        # WR-03: Notify the user in Jira so the failure is visible without
-        # monitoring server logs. Wrapped in its own try/except to prevent
-        # notification errors from masking the original exception.
+        # WR-02 fix: Do not interpolate the exception message into the Jira
+        # comment. The raw exception string may contain internal URLs, stack
+        # details, or credential-adjacent data from httpx transport errors.
+        # Log the full exception server-side for debugging; show only a generic
+        # message to Jira viewers.
         try:
             notify_token = decrypt_credential(project.jira_token)
             notify_email = (
                 getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
             )
             failure_body = (
-                f"Merge pipeline failed for {issue_key}: {exc}"
+                f"Merge pipeline failed for {issue_key}. "
+                f"Check server logs for details."
             )
             await hermes_post_comment(
                 project.jira_url,
