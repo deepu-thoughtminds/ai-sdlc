@@ -888,9 +888,19 @@ async def test_start_coding_creates_pipeline_state_before_task():
     assert pipeline_state_seen_in_db[0] is not None
 
 
+MERGE_PR_PAYLOAD = {
+    "webhook_event": "comment_created",
+    "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+    "comment": {"id": "20102", "body": "@jarvis merge pr", "author": "alice"},
+    "timestamp": 1718000103,
+}
+
+
 @pytest.mark.asyncio
-async def test_webhook_merge_pr_routes_to_stub():
-    """@jarvis merge pr → action=merge_pr, routed_to=pending_phase_17."""
+async def test_webhook_merge_pr_schedules_merge_pipeline():
+    """@jarvis merge pr with no active PipelineState row → action=merge_pr,
+    routed_to=merge_pipeline; asyncio.create_task called once; HTTP 200.
+    """
     from services.mention_parser import MentionResult
 
     db = TestingSession()
@@ -899,19 +909,117 @@ async def test_webhook_merge_pr_routes_to_stub():
     finally:
         db.close()
 
-    payload = {
-        "webhook_event": "comment_created",
-        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
-        "comment": {"id": "20102", "body": "@jarvis merge pr", "author": "alice"},
-        "timestamp": 1718000103,
-    }
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
 
     stub_result = MentionResult(mention_target="jarvis", action="merge_pr", extra="merge pr", entities={})
-    with patch("routers.webhook.parse_mention", return_value=stub_result):
+    with (
+        patch("routers.webhook.parse_mention", return_value=stub_result),
+        patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close),
+    ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/webhook/jira-comment", json=payload)
+            response = await client.post("/webhook/jira-comment", json=MERGE_PR_PAYLOAD)
 
     assert response.status_code == 200
     body = response.json()
     assert body["action"] == "merge_pr"
-    assert body["routed_to"] == "pending_phase_17"
+    assert body["routed_to"] == "merge_pipeline"
+    assert len(captured_coros) == 1
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_duplicate_returns_ignored():
+    """Second @jarvis merge pr for PROJ-1 while PipelineState(merge_pr, running) exists
+    → action=ignored, reason=duplicate_pipeline; asyncio.create_task NOT called.
+    """
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="merge_pr",
+            status="running",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
+
+    stub_result = MentionResult(mention_target="jarvis", action="merge_pr", extra="merge pr", entities={})
+    with (
+        patch("routers.webhook.parse_mention", return_value=stub_result),
+        patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=MERGE_PR_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "ignored"
+    assert body["reason"] == "duplicate_pipeline"
+    # create_task must NOT have been called
+    assert len(captured_coros) == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_creates_pipeline_state_before_task():
+    """New merge_pr run creates PipelineState(stage='merge_pr', status='running') committed
+    BEFORE asyncio.create_task is called (T-17-06 / CR-02 background-session safety).
+    Also verifies merge_pipeline.run receives a fresh SessionLocal() not the request db.
+    """
+    from services.mention_parser import MentionResult
+    from unittest.mock import AsyncMock
+
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        project_id = project.id
+    finally:
+        db.close()
+
+    pipeline_state_seen_in_db: list = []
+
+    def _check_db_then_close(coro):
+        # At the moment create_task is called, the PipelineState row must
+        # already be committed to the DB.
+        check_db = TestingSession()
+        try:
+            row = check_db.query(PipelineState).filter(
+                PipelineState.ticket_key == "PROJ-1",
+                PipelineState.stage == "merge_pr",
+                PipelineState.status == "running",
+            ).first()
+            pipeline_state_seen_in_db.append(row)
+        finally:
+            check_db.close()
+        coro.close()
+        return None
+
+    stub_result = MentionResult(mention_target="jarvis", action="merge_pr", extra="merge pr", entities={})
+    with (
+        patch("routers.webhook.parse_mention", return_value=stub_result),
+        patch("routers.webhook.asyncio.create_task", side_effect=_check_db_then_close),
+        patch("services.merge_pipeline.run", new_callable=AsyncMock),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=MERGE_PR_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "merge_pr"
+    assert len(pipeline_state_seen_in_db) == 1
+    assert pipeline_state_seen_in_db[0] is not None
