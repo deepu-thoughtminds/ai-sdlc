@@ -80,7 +80,7 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
                 f"{freellmapi_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {freellmapi_api_key}"},
                 json=payload,
-                timeout=30.0,
+                timeout=90.0,
             )
             resp.raise_for_status()
             data = resp.json()

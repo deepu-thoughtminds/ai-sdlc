@@ -58,6 +58,12 @@ services:
       - JIRA_URL=${JIRA_URL}
       - JIRA_USERNAME=${JIRA_ACCOUNT_EMAIL}
       - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      # Global Confluence config — same Atlassian Cloud instance as Jira, so we reuse
+      # JIRA_URL and JIRA_API_TOKEN. Required for mcp-atlassian to load ConfluenceConfig
+      # at startup; per-request credentials from hermes headers override auth at call time.
+      - CONFLUENCE_URL=${JIRA_URL}
+      - CONFLUENCE_USERNAME=${JIRA_ACCOUNT_EMAIL}
+      - CONFLUENCE_API_TOKEN=${JIRA_API_TOKEN}
     ports:
       - "9000:9000"
     networks:

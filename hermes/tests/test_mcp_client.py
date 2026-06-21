@@ -41,7 +41,7 @@ def make_mcp_patches(call_tool_return_text: str):
     write_mock = AsyncMock()
 
     @asynccontextmanager
-    async def fake_streamable(url):
+    async def fake_streamable(url, **kwargs):
         yield read_mock, write_mock, None
 
     # ClientSession async context manager: __aenter__ returns mock_session
@@ -280,7 +280,8 @@ async def test_find_confluence_page_returns_first_result():
         client = HermesMCPClient(mcp_url="http://fake:9000/sse")
         result = await client.find_confluence_page("PROJ", "My Page", TEST_CONFLUENCE_CREDS)
 
-    assert result == page
+    # find_confluence_page returns only {"id"} — version is not needed (update_page auto-manages it)
+    assert result == {"id": "9999"}
     tool_name, args = mock_session.call_tool.call_args[0]
     assert tool_name == "confluence_search"
     assert "PROJ" in args["query"]
@@ -319,7 +320,7 @@ async def test_update_confluence_page_calls_correct_tool():
     tool_name, args = mock_session.call_tool.call_args[0]
     assert tool_name == "confluence_update_page"
     assert args["page_id"] == "9999"
-    assert args["version"] == 4
+    assert "version" not in args  # tool auto-manages version; not forwarded
 
 
 @pytest.mark.asyncio

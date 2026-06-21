@@ -145,6 +145,8 @@ class HermesMCPClient:
         """Create a new Confluence page via MCP tool confluence_create_page.
 
         Opens a fresh per-request connection — stateless, no stored session.
+        content_format="storage" is required because body_html is Confluence storage
+        format HTML, not the tool's default markdown.
 
         Args:
             space_key: Confluence space key (e.g. "PROJ").
@@ -155,12 +157,19 @@ class HermesMCPClient:
         Returns:
             Parsed dict from MCP tool result (must include "id").
         """
-        args = {"space_key": space_key, "title": title, "content": body_html}
+        args = {
+            "space_key": space_key,
+            "title": title,
+            "content": body_html,
+            "content_format": "storage",
+        }
         async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("confluence_create_page", args)
-        return json.loads(result.content[0].text)
+        parsed = json.loads(result.content[0].text)
+        # Tool returns {"message": "...", "page": {"id": ..., ...}}; normalise to {"id": ...}
+        return parsed.get("page", parsed)
 
     async def find_confluence_page(
         self, space_key: str, title: str, credentials: ConfluenceCredentials
@@ -168,15 +177,8 @@ class HermesMCPClient:
         """Search for a Confluence page by space and title via MCP tool confluence_search.
 
         Uses CQL-style query with limit=1 to bound the result set (T-12-04).
-        Opens a fresh per-request connection — stateless, no stored session.
-
-        Args:
-            space_key: Confluence space key.
-            title: Exact page title to search for.
-            credentials: Per-request Confluence credentials.
-
-        Returns:
-            The first matching result dict if found, else None.
+        Returns a normalised dict with shape {"id": str} if found, else None.
+        The version field is not included because confluence_update_page auto-manages versions.
         """
         args = {
             "query": f'space = "{space_key}" AND title = "{title}"',
@@ -187,12 +189,14 @@ class HermesMCPClient:
                 await session.initialize()
                 result = await session.call_tool("confluence_search", args)
         parsed = json.loads(result.content[0].text)
-        # parsed is expected to be a list of results or empty
-        if isinstance(parsed, list) and len(parsed) > 0:
-            return parsed[0]
-        if isinstance(parsed, dict) and parsed:
-            return parsed
-        return None
+        if isinstance(parsed, list) and parsed:
+            hit = parsed[0]
+        elif isinstance(parsed, dict) and parsed.get("id"):
+            hit = parsed
+        else:
+            return None
+        page_id = hit.get("id", "")
+        return {"id": page_id} if page_id else None
 
     async def update_confluence_page(
         self, page_id: str, title: str, body_html: str, version: int, credentials: ConfluenceCredentials
@@ -200,18 +204,27 @@ class HermesMCPClient:
         """Update an existing Confluence page via MCP tool confluence_update_page.
 
         Opens a fresh per-request connection — stateless, no stored session.
+        The tool auto-manages the version number; `version` is accepted for API
+        compatibility with callers but is NOT forwarded to the MCP tool.
+        content_format="storage" is required because body_html is Confluence storage
+        format HTML, not the tool's default markdown.
 
         Args:
             page_id: Confluence page id to update.
             title: Page title.
             body_html: New HTML content for the page body (storage format).
-            version: New version number (must be current version + 1).
+            version: Accepted for API compatibility; not forwarded (tool auto-manages).
             credentials: Per-request Confluence credentials.
 
         Returns:
             Parsed dict from MCP tool result.
         """
-        args = {"page_id": page_id, "title": title, "content": body_html, "version": version}
+        args = {
+            "page_id": page_id,
+            "title": title,
+            "content": body_html,
+            "content_format": "storage",
+        }
         async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
