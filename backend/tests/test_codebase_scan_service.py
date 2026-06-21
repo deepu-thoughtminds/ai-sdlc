@@ -345,3 +345,61 @@ async def test_run_put_403_raises():
     db = MagicMock()
     with pytest.raises(Exception):
         await run("org/repo", "ghp_token", 1, db)
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage — 18-02: max-files budget, sha idempotency, Next.js
+# ---------------------------------------------------------------------------
+
+
+def test_select_key_files_max_budget():
+    """30 eligible paths produces exactly MAX_FILES (25) entries."""
+    paths = [f"src/file_{i}.py" for i in range(30)]
+    selected = _select_key_files(paths)
+    assert len(selected) == 25
+
+
+def test_detect_tech_stack_nextjs():
+    """Detects Next.js when 'next' appears in package.json content."""
+    paths = ["package.json"]
+    manifest_contents = {"package.json": '{"dependencies": {"next": "13.0"}}'}
+    stack = _detect_tech_stack(paths, manifest_contents)
+    names = " ".join(stack).lower()
+    assert "next.js" in names
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_idempotent_put_includes_sha():
+    """When .hermes/codebase.md already exists (200 + sha), PUT body includes that sha."""
+    respx.get("https://api.github.com/repos/org/repo").mock(
+        return_value=httpx.Response(200, json={"default_branch": "main"})
+    )
+    respx.get("https://api.github.com/repos/org/repo/git/trees/HEAD").mock(
+        return_value=httpx.Response(
+            200,
+            json={"tree": [{"path": "README.md", "type": "blob"}], "truncated": False},
+        )
+    )
+    readme_b64 = base64.b64encode(b"# Hello").decode()
+    respx.get("https://api.github.com/repos/org/repo/contents/README.md").mock(
+        return_value=httpx.Response(200, json={"content": readme_b64, "sha": None})
+    )
+    old_b64 = base64.b64encode(b"old content").decode()
+    respx.get("https://api.github.com/repos/org/repo/contents/.hermes/codebase.md").mock(
+        return_value=httpx.Response(200, json={"sha": "abc123", "content": old_b64})
+    )
+    put_route = respx.put("https://api.github.com/repos/org/repo/contents/.hermes/codebase.md").mock(
+        return_value=httpx.Response(200, json={"content": {"sha": "newsha"}})
+    )
+
+    db = MagicMock()
+    await run("org/repo", "ghp_token", 1, db)
+
+    assert put_route.called
+    put_request = put_route.calls.last.request
+    import json as _json
+
+    put_body = _json.loads(put_request.content)
+    assert put_body.get("sha") == "abc123"
+    assert put_body.get("message") == "chore: update codebase snapshot [jarvis-scan]"
