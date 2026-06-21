@@ -505,3 +505,43 @@ async def test_get_confluence_page_uses_confluence_cred_headers():
 
     assert "x-atlassian-confluence-url" in headers_used
     assert "x-atlassian-jira-url" not in headers_used
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 Plan 01: transition_issue tests (PRMERGE-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transition_issue_calls_correct_tool():
+    """transition_issue() calls jira_transition_issue with issue_key and status."""
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(
+        json.dumps({"result": "ok"})
+    )
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.transition_issue("PROJ-1", "Done", TEST_CREDS)
+
+    assert result is True
+    mock_session.call_tool.assert_called_once()
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "jira_transition_issue"
+    assert args["issue_key"] == "PROJ-1"
+    assert args["status"] == "Done"
+
+
+@pytest.mark.asyncio
+async def test_transition_issue_returns_false_on_exception():
+    """transition_issue() catches any exception from call_tool and returns False."""
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(
+        json.dumps({"result": "ok"})
+    )
+    mock_session.call_tool = AsyncMock(side_effect=Exception("invalid transition"))
+
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.transition_issue("PROJ-1", "InvalidStatus", TEST_CREDS)
+
+    assert result is False
