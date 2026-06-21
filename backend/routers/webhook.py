@@ -47,7 +47,7 @@ from database import get_db, SessionLocal
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent, JiraIssueCreatedEvent
-from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline
+from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
@@ -280,10 +280,65 @@ async def handle_jira_comment(
             }
         return {"status": "received", "action": "ignored", "reason": "no_pending_approval"}
 
-    # Step 4e: Stub handler for 'start_coding' — Phase 16 wires the real pipeline
+    # Step 4e: Handle 'start_coding' action (background task — codegen/PR is heavy)
     elif mention_result is not None and mention_result.action == "start_coding":
-        logger.info("Issue %s: start_coding stub (Phase 16 pending)", event.issue.key)
-        return {"status": "received", "action": "start_coding", "routed_to": "pending_phase_16"}
+        # T-16-09: Idempotency guard — same pattern as the architecture branch
+        # above. "complete" and "failed" states allow re-triggering.
+        existing = (
+            db.query(PipelineState)
+            .filter(
+                PipelineState.ticket_key == event.issue.key,
+                PipelineState.stage == "dev_pipeline",
+                PipelineState.status.in_(["running"]),
+            )
+            .first()
+        )
+        if existing is not None:
+            logger.info(
+                "Dev pipeline already active for issue %s (state_id=%s) — ignoring duplicate",
+                event.issue.key,
+                existing.id,
+            )
+            return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
+
+        # Create PipelineState row with status="running" BEFORE scheduling the
+        # background task so the idempotency guard above can detect a near-
+        # simultaneous second webhook. dev_pipeline.run() re-uses this row.
+        state_row = PipelineState(
+            project_id=project.id,
+            ticket_key=event.issue.key,
+            stage="dev_pipeline",
+            status="running",
+        )
+        db.add(state_row)
+        db.commit()
+
+        issue_summary = event.issue.summary
+        issue_description = getattr(event.issue, "description", "") or ""
+        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
+        project_id = project.id
+
+        async def _run_dev_pipeline_background() -> None:
+            bg_db = SessionLocal()
+            try:
+                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                await dev_pipeline.run(
+                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+                )
+            finally:
+                bg_db.close()
+
+        asyncio.create_task(_run_dev_pipeline_background())
+        logger.info(
+            "Dev pipeline scheduled for issue %s (state_id=%s)",
+            event.issue.key,
+            state_row.id,
+        )
+        return {
+            "status": "received",
+            "action": "start_coding",
+            "routed_to": "dev_pipeline",
+        }
 
     # Step 4f: Stub handler for 'merge_pr' — Phase 17 wires the real pipeline
     elif mention_result is not None and mention_result.action == "merge_pr":

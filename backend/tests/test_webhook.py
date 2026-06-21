@@ -722,9 +722,19 @@ async def test_webhook_no_jarvis_mention_does_not_post_help_comment():
     mock_post.assert_not_called()
 
 
+START_CODING_PAYLOAD = {
+    "webhook_event": "comment_created",
+    "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
+    "comment": {"id": "20101", "body": "@jarvis start coding", "author": "alice"},
+    "timestamp": 1718000102,
+}
+
+
 @pytest.mark.asyncio
-async def test_webhook_start_coding_routes_to_stub():
-    """@jarvis start coding → action=start_coding, routed_to=pending_phase_16."""
+async def test_webhook_start_coding_schedules_dev_pipeline():
+    """@jarvis start coding → action=start_coding, routed_to=dev_pipeline;
+    asyncio.create_task called once to schedule dev_pipeline.run.
+    """
     from services.mention_parser import MentionResult
 
     db = TestingSession()
@@ -733,22 +743,149 @@ async def test_webhook_start_coding_routes_to_stub():
     finally:
         db.close()
 
-    payload = {
-        "webhook_event": "comment_created",
-        "issue": {"id": "10001", "key": "PROJ-1", "summary": "Feature X"},
-        "comment": {"id": "20101", "body": "@jarvis start coding", "author": "alice"},
-        "timestamp": 1718000102,
-    }
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
 
     stub_result = MentionResult(mention_target="jarvis", action="start_coding", extra="start coding", entities={})
-    with patch("routers.webhook.parse_mention", return_value=stub_result):
+    with patch("routers.webhook.parse_mention", return_value=stub_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/webhook/jira-comment", json=payload)
+            response = await client.post("/webhook/jira-comment", json=START_CODING_PAYLOAD)
 
     assert response.status_code == 200
     body = response.json()
     assert body["action"] == "start_coding"
-    assert body["routed_to"] == "pending_phase_16"
+    assert body["routed_to"] == "dev_pipeline"
+    assert len(captured_coros) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_coding_duplicate_returns_ignored():
+    """Second @jarvis start coding webhook for PROJ-1 while a PipelineState row
+    with stage='dev_pipeline' and status='running' exists → returns
+    reason=duplicate_pipeline with HTTP 200; asyncio.create_task is NOT called.
+    """
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="dev_pipeline",
+            status="running",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
+
+    stub_result = MentionResult(mention_target="jarvis", action="start_coding", extra="start coding", entities={})
+    with patch("routers.webhook.parse_mention", return_value=stub_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=START_CODING_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "received"
+    assert body["action"] == "ignored"
+    assert body["reason"] == "duplicate_pipeline"
+    assert len(captured_coros) == 0
+
+
+@pytest.mark.asyncio
+async def test_start_coding_failed_state_allows_new_run():
+    """Existing PipelineState with status='failed' does NOT block a new run.
+    asyncio.create_task IS called.
+    """
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        ps = PipelineState(
+            project_id=project.id,
+            ticket_key="PROJ-1",
+            stage="dev_pipeline",
+            status="failed",
+        )
+        db.add(ps)
+        db.commit()
+    finally:
+        db.close()
+
+    captured_coros: list = []
+
+    def _capture_and_close(coro):
+        captured_coros.append(coro)
+        coro.close()
+        return None
+
+    stub_result = MentionResult(mention_target="jarvis", action="start_coding", extra="start coding", entities={})
+    with patch("routers.webhook.parse_mention", return_value=stub_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_capture_and_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=START_CODING_PAYLOAD)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "start_coding"
+    assert len(captured_coros) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_coding_creates_pipeline_state_before_task():
+    """New start_coding run creates a PipelineState row with status='running'
+    committed BEFORE asyncio.create_task is called.
+    """
+    from services.mention_parser import MentionResult
+
+    db = TestingSession()
+    try:
+        project = _create_project(db, key="PROJ")
+        project_id = project.id
+    finally:
+        db.close()
+
+    pipeline_state_seen_in_db: list = []
+
+    def _check_db_then_close(coro):
+        check_db = TestingSession()
+        try:
+            row = check_db.query(PipelineState).filter(
+                PipelineState.ticket_key == "PROJ-1",
+                PipelineState.stage == "dev_pipeline",
+                PipelineState.status == "running",
+            ).first()
+            pipeline_state_seen_in_db.append(row)
+        finally:
+            check_db.close()
+        coro.close()
+        return None
+
+    stub_result = MentionResult(mention_target="jarvis", action="start_coding", extra="start coding", entities={})
+    with patch("routers.webhook.parse_mention", return_value=stub_result), \
+         patch("routers.webhook.asyncio.create_task", side_effect=_check_db_then_close):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/webhook/jira-comment", json=START_CODING_PAYLOAD)
+
+    assert response.status_code == 200
+    assert response.json()["action"] == "start_coding"
+    assert len(pipeline_state_seen_in_db) == 1
+    assert pipeline_state_seen_in_db[0] is not None
 
 
 @pytest.mark.asyncio
