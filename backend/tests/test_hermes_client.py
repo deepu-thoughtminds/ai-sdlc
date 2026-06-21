@@ -127,7 +127,9 @@ async def test_update_confluence_page_returns_dict():
 @respx.mock
 async def test_find_confluence_page_returns_dict_when_found():
     page = {"id": "9999", "version": {"number": 2}}
-    respx.get(f"{BASE}/confluence/search").mock(
+    # CR-01 fix: confluence/search uses POST (not GET) to keep
+    # confluence_token out of the URL query string.
+    respx.post(f"{BASE}/confluence/search").mock(
         return_value=httpx.Response(200, json=page)
     )
     result = await find_confluence_page(
@@ -140,7 +142,9 @@ async def test_find_confluence_page_returns_dict_when_found():
 @respx.mock
 async def test_find_confluence_page_returns_none_when_hermes_returns_empty_dict():
     """hermes returns {} when not found — find_confluence_page must translate to None."""
-    respx.get(f"{BASE}/confluence/search").mock(
+    # CR-01 fix: confluence/search uses POST (not GET) to keep
+    # confluence_token out of the URL query string.
+    respx.post(f"{BASE}/confluence/search").mock(
         return_value=httpx.Response(200, json={})
     )
     result = await find_confluence_page(
@@ -198,7 +202,9 @@ async def test_get_comments_returns_empty_on_http_500():
 async def test_get_confluence_page_content_returns_string():
     """get_confluence_page_content() returns the page body string."""
     body_text = "<p>Architecture content</p>"
-    respx.get(f"{BASE}/confluence/page/42").mock(
+    # CR-01 fix: confluence/page/{id} uses POST (not GET) to keep
+    # confluence_token out of the URL query string.
+    respx.post(f"{BASE}/confluence/page/42").mock(
         return_value=httpx.Response(200, json={"body": body_text})
     )
     result = await get_confluence_page_content(
@@ -211,7 +217,7 @@ async def test_get_confluence_page_content_returns_string():
 @respx.mock
 async def test_get_confluence_page_content_returns_empty_string_when_hermes_returns_none_body():
     """get_confluence_page_content() returns '' when hermes body field is empty."""
-    respx.get(f"{BASE}/confluence/page/42").mock(
+    respx.post(f"{BASE}/confluence/page/42").mock(
         return_value=httpx.Response(200, json={"body": ""})
     )
     result = await get_confluence_page_content(
@@ -224,7 +230,7 @@ async def test_get_confluence_page_content_returns_empty_string_when_hermes_retu
 @respx.mock
 async def test_get_confluence_page_content_returns_empty_on_connect_error():
     """get_confluence_page_content() degrades to '' on network error."""
-    respx.get(f"{BASE}/confluence/page/42").mock(
+    respx.post(f"{BASE}/confluence/page/42").mock(
         side_effect=httpx.ConnectError("refused")
     )
     result = await get_confluence_page_content(
@@ -237,7 +243,7 @@ async def test_get_confluence_page_content_returns_empty_on_connect_error():
 @respx.mock
 async def test_get_confluence_page_content_returns_empty_on_http_500():
     """get_confluence_page_content() degrades to '' on HTTP 500."""
-    respx.get(f"{BASE}/confluence/page/42").mock(
+    respx.post(f"{BASE}/confluence/page/42").mock(
         return_value=httpx.Response(500, json={"error": "fail"})
     )
     result = await get_confluence_page_content(
