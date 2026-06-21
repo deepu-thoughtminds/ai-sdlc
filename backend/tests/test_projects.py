@@ -311,3 +311,54 @@ def test_get_project_includes_github_repo() -> None:
     # Token fields must still be excluded
     for token_field in TOKEN_FIELD_NAMES:
         assert token_field not in data, f"Token field '{token_field}' found in GET response"
+
+
+def test_create_project_with_github_repo_commits_pipeline_state() -> None:
+    """POST /api/projects with non-empty github_repo must commit a PipelineState row
+    with stage='codebase_scan', status='running', ticket_key='__onboarding__' (SCAN-01)."""
+    from models.pipeline_state import PipelineState
+
+    response = client.post("/api/projects", json=_unique_payload())
+    assert response.status_code == 201, response.text
+    project_id = response.json()["id"]
+
+    db = TestingSession()
+    try:
+        row = (
+            db.query(PipelineState)
+            .filter(
+                PipelineState.project_id == project_id,
+                PipelineState.stage == "codebase_scan",
+            )
+            .first()
+        )
+        assert row is not None, "PipelineState row not created for codebase_scan stage"
+        assert row.status == "running"
+        assert row.ticket_key == "__onboarding__"
+    finally:
+        db.close()
+
+
+def test_create_project_with_github_repo_schedules_scan_run(monkeypatch) -> None:
+    """POST /api/projects with non-empty github_repo must schedule the background scan
+    via asyncio.create_task (SCAN-01 asyncio.create_task trigger wiring)."""
+    import asyncio as asyncio_mod
+
+    scheduled = []
+
+    def _fake_create_task(coro, **kwargs):
+        scheduled.append(coro.cr_code.co_name)
+        coro.close()  # prevent "coroutine was never awaited" ResourceWarning
+        return object()  # return value is unused by create_project
+
+    monkeypatch.setattr(asyncio_mod, "create_task", _fake_create_task)
+
+    response = client.post("/api/projects", json=_unique_payload())
+    assert response.status_code == 201, response.text
+
+    assert len(scheduled) == 1, (
+        f"Expected asyncio.create_task called once, got {len(scheduled)} call(s)"
+    )
+    assert scheduled[0] == "_run_scan_background", (
+        f"Expected background coroutine '_run_scan_background', got '{scheduled[0]}'"
+    )
