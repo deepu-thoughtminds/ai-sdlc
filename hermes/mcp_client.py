@@ -61,6 +61,16 @@ class HermesMCPClient:
             "x-atlassian-confluence-url": credentials.confluence_url,
         }
 
+    def _parse_mcp_result(self, result) -> object:
+        """Parse MCP tool result content, raising RuntimeError on empty content.
+
+        WR-06 fix: guards against IndexError when result.content is empty,
+        which can occur on MCP tool version mismatches or certain error conditions.
+        """
+        if not result.content:
+            raise RuntimeError("MCP tool returned empty content list")
+        return json.loads(result.content[0].text)
+
     async def add_comment(
         self, issue_key: str, body: str, credentials: JiraCredentials
     ) -> str:
@@ -70,7 +80,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("jira_add_comment", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         return str(parsed["id"])
 
     async def update_description(
@@ -98,7 +108,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("jira_search", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         # Handle both {"issues": [...]} and flat list shapes
         issues = parsed.get("issues", parsed) if isinstance(parsed, dict) else parsed
         return [
@@ -119,7 +129,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("jira_get_user_profile", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         return str(parsed["user"]["accountId"])
 
     async def assign_issue(
@@ -167,7 +177,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("confluence_create_page", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         # Tool returns {"message": "...", "page": {"id": ..., ...}}; normalise to {"id": ...}
         return parsed.get("page", parsed)
 
@@ -179,16 +189,25 @@ class HermesMCPClient:
         Uses CQL-style query with limit=1 to bound the result set (T-12-04).
         Returns a normalised dict with shape {"id": str} if found, else None.
         The version field is not included because confluence_update_page auto-manages versions.
+
+        CR-02 fix: space_key and title are escaped before CQL interpolation to prevent
+        injection via double-quote characters in LLM-generated or user-supplied titles.
         """
+        # CR-02 fix: escape double-quote characters in both space_key and title
+        # before interpolating into the CQL query string. A raw title such as
+        # 'x" OR space = "ADMIN' would otherwise break out of the quoted string
+        # and return pages from unintended spaces.
+        safe_space = space_key.replace('"', '\\"')
+        safe_title = title.replace('"', '\\"')
         args = {
-            "query": f'space = "{space_key}" AND title = "{title}"',
+            "query": f'space = "{safe_space}" AND title = "{safe_title}"',
             "limit": 1,
         }
         async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("confluence_search", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         if isinstance(parsed, list) and parsed:
             hit = parsed[0]
         elif isinstance(parsed, dict) and parsed.get("id"):
@@ -229,7 +248,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("confluence_update_page", args)
-        return json.loads(result.content[0].text)
+        return self._parse_mcp_result(result)
 
     # ---------------------------------------------------------------------------
     # Phase 16 Plan 01: Comment and Confluence page fetch methods
@@ -263,7 +282,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("jira_get_issue", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         # Normalise: extract flat list from fields.comment.comments envelope
         comments = (
             parsed.get("fields", {})
@@ -331,7 +350,7 @@ class HermesMCPClient:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool("confluence_get_page", args)
-        parsed = json.loads(result.content[0].text)
+        parsed = self._parse_mcp_result(result)
         # Normalise: extract plain string from body.storage.value envelope
         body = (
             parsed.get("body", {})
