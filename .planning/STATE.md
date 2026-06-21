@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5
-milestone_name: GitHub Dev Pipeline & LLM Intent Routing
-status: executing
-stopped_at: context exhaustion at 81% (2026-06-20)
-last_updated: "2026-06-21T03:53:46.863Z"
+milestone: v1.6
+milestone_name: Context-Aware Codebase Scanning
+status: planning
+last_updated: "2026-06-21T11:24:06.751Z"
 last_activity: 2026-06-21
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,14 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 17
-Plan: Not started
-Status: Executing Phase 17
-Last activity: 2026-06-21
-
-```
-v1.5 progress: [          ] 0% (0/4 phases)
-```
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-21 — Milestone v1.6 started
 
 ## Milestone History
 
@@ -169,7 +164,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-20T17:57:46.137Z
-Stopped at: context exhaustion at 81% (2026-06-20)
+Last session: 2026-06-21T08:45:32.900Z
+Stopped at: context exhaustion at 75% (2026-06-21)
 Resume file: None
 Next action: `/gsd-plan-phase 14` — plan Phase 14: LLM Intent Router
