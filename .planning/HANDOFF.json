@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-06-21T02:36:39.098Z",
+  "phase": "17",
+  "phase_name": "pr-merge-pipeline",
+  "phase_dir": ".planning/phases/17-pr-merge-pipeline",
+  "plan": 1,
+  "task": 1,
+  "total_tasks": 6,
+  "status": "paused",
+  "completed_tasks": [],
+  "remaining_tasks": [
+    {"id": 1, "name": "17-01 Task 1: pr_creator.find_and_merge_pr() (GitHub API find/merge by branch jarvis/issue-{key} or title match)", "status": "not_started"},
+    {"id": 2, "name": "17-01 Task 2: hermes_client status-update wrapper + hermes/mcp_client.py + hermes/server.py transition_issue support", "status": "not_started"},
+    {"id": 3, "name": "17-01 remaining task (TDD plan, 3 tasks total per frontmatter)", "status": "not_started"},
+    {"id": 4, "name": "17-02 Task: merge_pipeline.py orchestrator (idempotency guard, CR-02 session isolation, WR-01/WR-03)", "status": "not_started"},
+    {"id": 5, "name": "17-02 Task: webhook.py merge_pr stub replacement (mirrors start_coding/architecture branches)", "status": "not_started"},
+    {"id": 6, "name": "17-02 remaining task (TDD plan, 3 tasks total per frontmatter)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {"decision": "Phase 17 planned as 2 plans across 2 waves: 17-01 (pr_creator + hermes_client/MCP status-update, wave 1) and 17-02 (merge_pipeline orchestrator + webhook wiring, wave 2, depends_on 17-01)", "rationale": "Mirrors the Phase 16 split (service layer first, orchestrator+webhook wiring second) so the orchestrator can depend on a finished, tested service function", "phase": "17"},
+    {"decision": "Declined to run /gsd-secure-phase 16 (post-hoc security audit) when offered after Phase 16 completion", "rationale": "User explicitly said 'i dont want to run security enforcement' — do not re-offer for Phase 16. This is distinct from the plan-time <threat_model> block requirement (Step 5.55 of plan-phase.md), which was still embedded in both 17-01 and 17-02 PLAN.md per workflow.security_enforcement=true in config", "phase": "16"},
+    {"decision": "Plan files (.planning/phases/17-pr-merge-pipeline/17-01-PLAN.md, 17-02-PLAN.md) were force-added (git add -f) and committed despite .planning/ being gitignored", "rationale": "Matches established convention for STATE.md/ROADMAP.md/SUMMARY.md/PLAN.md force-tracking used throughout Phase 16", "phase": "17"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Run /gsd-execute-phase 17 in a fresh session to execute both plans wave-by-wave (Wave 1: 17-01, Wave 2: 17-02 after 17-01 completes)",
+  "context_notes": "Phase 16 (dev-pipeline-integration) is fully complete and committed. Phase 17 (pr-merge-pipeline) has been planned only — gsd-planner produced 17-01-PLAN.md and 17-02-PLAN.md, committed in fff9d86. No execution has started: zero tasks done, zero commits against the plan's files_modified list. The first planner subagent attempt aborted citing a stale context-exhaustion warning that did not actually apply to it (fresh subagent, full budget) — a retry succeeded normally and produced both plans cleanly. Resuming agent should just run /gsd-execute-phase 17 directly; no unresolved planning decisions remain."
+}
