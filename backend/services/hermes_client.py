@@ -6,6 +6,8 @@ calls the hermes container's internal API which proxies through mcp-atlassian.
 Threat mitigations:
 - T-09-01: jira_token never logged; only issue_key/project_key logged at INFO.
 - T-09-03: timeout=15.0 on all requests; post_sprint_backlog returns [] on any error.
+- T-04-05: confluence_token is never sent as a URL query parameter; POST with JSON body
+           is used for all Confluence endpoints (CR-01 fix).
 """
 import logging
 import os
@@ -191,9 +193,13 @@ async def find_confluence_page(
     Translates the hermes-layer empty-dict convention ({}) back to None.
 
     T-04-05: confluence_token is never logged; only space_key and title are logged.
+    CR-01 fix: uses POST with JSON body (not GET with params) to prevent
+    confluence_token from appearing in URL query strings.
     """
     logger.info("Searching for Confluence page in space %s: %s", space_key, title)
-    params = {
+    # CR-01 fix: use POST with JSON body (not GET with params) to prevent
+    # confluence_token from appearing in URL query strings (T-04-05).
+    payload = {
         "confluence_url": confluence_url,
         "confluence_email": confluence_email,
         "confluence_token": confluence_token,
@@ -201,7 +207,7 @@ async def find_confluence_page(
         "title": title,
     }
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(f"{HERMES_BASE_URL}/confluence/search", params=params)
+        resp = await client.post(f"{HERMES_BASE_URL}/confluence/search", json=payload)
     resp.raise_for_status()
     data = resp.json()
     # Hermes returns {} when not found — translate back to None
@@ -317,17 +323,21 @@ async def get_confluence_page_content(
     proceed with an empty architecture context rather than crashing.
 
     T-04-05: confluence_token is never logged; only page_id is logged at INFO.
+    CR-01 fix: uses POST with JSON body (not GET with params) to prevent
+    confluence_token from appearing in URL query strings.
     """
     try:
         logger.info("Fetching Confluence page content for page %s", page_id)
-        params = {
+        # CR-01 fix: use POST with JSON body (not GET with params) to prevent
+        # confluence_token from appearing in URL query strings (T-04-05).
+        payload = {
             "confluence_url": confluence_url,
             "confluence_email": confluence_email,
             "confluence_token": confluence_token,
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"{HERMES_BASE_URL}/confluence/page/{page_id}", params=params
+            resp = await client.post(
+                f"{HERMES_BASE_URL}/confluence/page/{page_id}", json=payload
             )
         resp.raise_for_status()
         data = resp.json()

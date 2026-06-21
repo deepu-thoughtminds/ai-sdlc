@@ -1,9 +1,12 @@
 """Hermes internal HTTP server — exposes /jira/* endpoints for the backend."""
+import logging
 import os
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from hermes.mcp_client import HermesMCPClient, JiraCredentials, ConfluenceCredentials
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton — tests override via app.dependency_overrides
 _mcp_client = HermesMCPClient()
@@ -53,7 +56,8 @@ async def post_comment(req: AddCommentRequest, client: HermesMCPClient = Depends
     try:
         comment_id = await client.add_comment(req.issue_key, req.body, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return {"comment_id": comment_id}
 
 
@@ -63,7 +67,8 @@ async def put_description(req: UpdateDescriptionRequest, client: HermesMCPClient
     try:
         await client.update_description(req.issue_key, req.description, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return {}
 
 
@@ -73,7 +78,8 @@ async def post_sprint_backlog(req: SprintBacklogRequest, client: HermesMCPClient
     try:
         issues = await client.get_sprint_issues(req.project_key, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return issues
 
 
@@ -84,7 +90,8 @@ async def post_assign(req: AssignIssueRequest, client: HermesMCPClient = Depends
         account_id = await client.lookup_user(req.display_name, creds)
         await client.assign_issue(req.issue_key, account_id, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return {"account_id": account_id}
 
 
@@ -152,7 +159,8 @@ async def post_confluence_page(req: CreateConfluencePageRequest, client: HermesM
     try:
         result = await client.create_confluence_page(req.space_key, req.title, req.body_html, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return result
 
 
@@ -166,28 +174,44 @@ async def put_confluence_page(page_id: str, req: UpdateConfluencePageRequest, cl
     try:
         result = await client.update_confluence_page(page_id, req.title, req.body_html, req.version, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return result
 
 
-@app.get("/confluence/search")
-async def get_confluence_search(
-    space_key: str,
-    title: str,
-    confluence_url: str,
-    confluence_email: str,
-    confluence_token: str,
+# CR-01 fix: Convert GET /confluence/search to POST to prevent confluence_token
+# from being transmitted as a URL query parameter (T-04-05 compliance).
+# Previously used GET with params=, which encodes credentials in the URL —
+# visible in server access logs and proxy logs.
+
+class SearchConfluencePageRequest(BaseModel):
+    confluence_url: str
+    confluence_email: str
+    confluence_token: str
+    space_key: str
+    title: str
+
+
+@app.post("/confluence/search")
+async def post_confluence_search(
+    req: SearchConfluencePageRequest,
     client: HermesMCPClient = Depends(get_mcp_client),
 ):
+    """Search for a Confluence page by space and title.
+
+    Uses POST (not GET) because credentials are passed in the request body
+    to avoid token exposure in URL query parameters (T-04-05).
+    """
     creds = ConfluenceCredentials(
-        confluence_url=confluence_url,
-        confluence_email=confluence_email,
-        confluence_token=confluence_token,
+        confluence_url=req.confluence_url,
+        confluence_email=req.confluence_email,
+        confluence_token=req.confluence_token,
     )
     try:
-        result = await client.find_confluence_page(space_key, title, creds)
+        result = await client.find_confluence_page(req.space_key, req.title, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     # Return {} (empty dict) when not found — the hermes "not found" sentinel
     return result if result is not None else {}
 
@@ -223,30 +247,40 @@ async def post_get_comments(
     try:
         comments = await client.get_comments(req.issue_key, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return comments
 
 
-@app.get("/confluence/page/{page_id}")
-async def get_confluence_page(
+# CR-01 fix: Convert GET /confluence/page/{page_id} to POST to prevent
+# confluence_token from being transmitted as a URL query parameter (T-04-05).
+
+class GetConfluencePageRequest(BaseModel):
+    confluence_url: str
+    confluence_email: str
+    confluence_token: str
+
+
+@app.post("/confluence/page/{page_id}")
+async def post_get_confluence_page(
     page_id: str,
-    confluence_url: str,
-    confluence_email: str,
-    confluence_token: str,
+    req: GetConfluencePageRequest,
     client: HermesMCPClient = Depends(get_mcp_client),
 ):
     """Fetch the body content of a Confluence page by page ID via MCP.
 
     Returns {"body": "<page content string>"}.
-    Uses GET with query param credentials, mirroring GET /confluence/search convention.
+    Uses POST (not GET) because credentials are passed in the request body
+    to avoid token exposure in URL query parameters (T-04-05).
     """
     creds = ConfluenceCredentials(
-        confluence_url=confluence_url,
-        confluence_email=confluence_email,
-        confluence_token=confluence_token,
+        confluence_url=req.confluence_url,
+        confluence_email=req.confluence_email,
+        confluence_token=req.confluence_token,
     )
     try:
         body = await client.get_confluence_page(page_id, creds)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.warning("MCP call failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal MCP error")
     return {"body": body}
