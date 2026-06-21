@@ -14,6 +14,7 @@ from services.hermes_client import (
     find_confluence_page,
     get_comments,
     get_confluence_page_content,
+    update_status,
 )
 import services.hermes_client as _hermes_client_mod
 
@@ -243,3 +244,42 @@ async def test_get_confluence_page_content_returns_empty_on_http_500():
         "https://conf.example.com", "u@x.com", "tok", "42"
     )
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 Plan 01: update_status tests (PRMERGE-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_status_returns_true_on_success():
+    """update_status() POSTs to /jira/status and returns True when hermes responds 200."""
+    respx.post(f"{BASE}/jira/status").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    result = await update_status(
+        "https://x.atlassian.net", "u@x.com", "jira-secret", "PROJ-1", "Done"
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_update_status_returns_false_on_connect_error(caplog):
+    """update_status() returns False on network error; jira_token must not be in logs."""
+    import logging
+    respx.post(f"{BASE}/jira/status").mock(
+        side_effect=httpx.ConnectError("refused")
+    )
+    with caplog.at_level(logging.WARNING, logger="services.hermes_client"):
+        result = await update_status(
+            "https://x.atlassian.net", "u@x.com", "jira-secret", "PROJ-1", "Done"
+        )
+
+    assert result is False
+    # T-17-02: jira_token must never appear in any log output
+    all_log_text = " ".join(record.getMessage() for record in caplog.records)
+    assert "jira-secret" not in all_log_text, "jira_token leaked in log (T-17-02)"
+    # issue_key should appear in the log warning for traceability
+    assert "PROJ-1" in all_log_text

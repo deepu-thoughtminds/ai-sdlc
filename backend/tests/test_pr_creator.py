@@ -270,3 +270,149 @@ def test_token_not_logged_on_git_failure(tmp_path, caplog):
     assert GITHUB_TOKEN not in all_log_text, (
         "GitHub token appeared in log output — T-07-01 violation"
     )
+
+
+# ---------------------------------------------------------------------------
+# PRMERGE-01 tests — find_and_merge_pr (Phase 17 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+from services.pr_creator import find_and_merge_pr, MergeResult  # noqa: E402
+
+MERGE_TOKEN = "ghp_MERGE_TOKEN_SECRET"
+MERGE_REPO = "owner/repo"
+MERGE_ISSUE_KEY = "PROJ-1"
+MERGE_PR_NUMBER = 42
+MERGE_PR_URL = "https://github.com/owner/repo/pull/42"
+MERGE_SHA = "abc123def456"
+
+OPEN_PR_BY_BRANCH = {
+    "number": MERGE_PR_NUMBER,
+    "html_url": MERGE_PR_URL,
+    "title": "feat: some unrelated title",
+    "head": {"ref": f"jarvis/issue-{MERGE_ISSUE_KEY}"},
+}
+
+OPEN_PR_BY_TITLE = {
+    "number": MERGE_PR_NUMBER,
+    "html_url": MERGE_PR_URL,
+    "title": f"{MERGE_ISSUE_KEY}: feat description",
+    "head": {"ref": "unrelated-branch"},
+}
+
+MERGE_RESPONSE = {
+    "sha": MERGE_SHA,
+    "merged": True,
+    "message": "Pull Request successfully merged",
+}
+
+
+@respx.mock
+def test_find_and_merge_pr_by_branch():
+    """GET /pulls?state=open → branch match → calls PUT /merge → returns MergeResult."""
+    respx.get(f"{GITHUB_API_BASE}/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(200, json=[OPEN_PR_BY_BRANCH])
+    )
+    respx.put(f"{GITHUB_API_BASE}/repos/owner/repo/pulls/{MERGE_PR_NUMBER}/merge").mock(
+        return_value=httpx.Response(200, json=MERGE_RESPONSE)
+    )
+
+    result = find_and_merge_pr(MERGE_REPO, MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+    assert isinstance(result, MergeResult)
+    assert result.merged is True
+    assert result.sha == MERGE_SHA
+    assert result.pr_number == MERGE_PR_NUMBER
+    assert result.pr_url == MERGE_PR_URL
+
+
+@respx.mock
+def test_find_and_merge_pr_by_title_fallback():
+    """No branch match but title contains issue_key → title fallback match → merges OK."""
+    respx.get(f"{GITHUB_API_BASE}/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(200, json=[OPEN_PR_BY_TITLE])
+    )
+    respx.put(f"{GITHUB_API_BASE}/repos/owner/repo/pulls/{MERGE_PR_NUMBER}/merge").mock(
+        return_value=httpx.Response(200, json=MERGE_RESPONSE)
+    )
+
+    result = find_and_merge_pr(MERGE_REPO, MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+    assert isinstance(result, MergeResult)
+    assert result.pr_number == MERGE_PR_NUMBER
+
+
+@respx.mock
+def test_find_and_merge_pr_returns_none_when_no_match():
+    """GET /pulls returns [] → find_and_merge_pr returns None; PUT never called."""
+    respx.get(f"{GITHUB_API_BASE}/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    merge_route = respx.put(f"{GITHUB_API_BASE}/repos/owner/repo/pulls/{MERGE_PR_NUMBER}/merge").mock(
+        return_value=httpx.Response(200, json=MERGE_RESPONSE)
+    )
+
+    result = find_and_merge_pr(MERGE_REPO, MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+    assert result is None
+    assert not merge_route.called
+
+
+@respx.mock
+def test_find_and_merge_pr_raises_runtime_error_on_405(caplog):
+    """PUT merge returns 405 → RuntimeError raised; github_token must not be in message."""
+    respx.get(f"{GITHUB_API_BASE}/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(200, json=[OPEN_PR_BY_BRANCH])
+    )
+    respx.put(f"{GITHUB_API_BASE}/repos/owner/repo/pulls/{MERGE_PR_NUMBER}/merge").mock(
+        return_value=httpx.Response(405, json={"message": "Not mergeable"})
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.pr_creator"):
+        with pytest.raises(RuntimeError) as exc_info:
+            find_and_merge_pr(MERGE_REPO, MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+    # T-17-01: token must never appear in exception message or log output
+    assert MERGE_TOKEN not in str(exc_info.value)
+    all_log_text = " ".join(record.getMessage() for record in caplog.records)
+    assert MERGE_TOKEN not in all_log_text, "github_token leaked in log (T-17-01)"
+
+
+def test_find_and_merge_pr_invalid_repo_raises_value_error():
+    """Malformed github_repo slug → ValueError; httpx is never called."""
+    with pytest.raises(ValueError, match="Invalid github_repo"):
+        find_and_merge_pr("not-a-slug", MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+
+@respx.mock
+def test_find_and_merge_pr_token_only_in_auth_header(caplog):
+    """T-17-01: github_token only appears in Authorization header; never in URL or logs."""
+    captured_requests = []
+
+    def capture_get(request, route):
+        captured_requests.append(("GET", request))
+        return httpx.Response(200, json=[OPEN_PR_BY_BRANCH])
+
+    def capture_put(request, route):
+        captured_requests.append(("PUT", request))
+        return httpx.Response(200, json=MERGE_RESPONSE)
+
+    respx.get(f"{GITHUB_API_BASE}/repos/owner/repo/pulls").mock(side_effect=capture_get)
+    respx.put(f"{GITHUB_API_BASE}/repos/owner/repo/pulls/{MERGE_PR_NUMBER}/merge").mock(
+        side_effect=capture_put
+    )
+
+    with caplog.at_level(logging.INFO, logger="services.pr_creator"):
+        find_and_merge_pr(MERGE_REPO, MERGE_TOKEN, MERGE_ISSUE_KEY)
+
+    assert captured_requests, "No HTTP requests captured"
+    for method, req in captured_requests:
+        # Token must NOT appear in the URL
+        assert MERGE_TOKEN not in str(req.url), f"Token in {method} URL — T-17-01 violation"
+        # Token IS expected in Authorization header only
+        auth_header = req.headers.get("authorization", "")
+        assert MERGE_TOKEN in auth_header, f"Token missing from {method} Authorization header"
+
+    # Token must not appear in any log output
+    all_log_text = " ".join(record.getMessage() for record in caplog.records)
+    assert MERGE_TOKEN not in all_log_text, "Token leaked in log output (T-17-01)"
