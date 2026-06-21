@@ -42,7 +42,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 15: GitHub Config & Dev Pipeline Foundation** - Add github_repo field to project DB and web app form; implement clone → code-generate → PR creation pipeline modules (completed 2026-06-20)
 - [x] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira (completed 2026-06-21)
 - [x] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment (completed 2026-06-21)
-- [ ] **Phase 18: Codebase Scan Service** - On project onboarding, clone the repo and walk the directory tree with targeted file reads; commit structured `.hermes/codebase.md` to main branch
+- [x] **Phase 18: Codebase Scan Service** - On project onboarding, clone the repo and walk the directory tree with targeted file reads; commit structured `.hermes/codebase.md` to main branch (completed 2026-06-21)
 - [ ] **Phase 19: Snapshot Refresh & Read Fallback** - After successful PR merge, re-run codebase scan and push updated snapshot; read path degrades gracefully when snapshot does not exist
 - [ ] **Phase 20: Describe Pipeline Context** - describe_pipeline.py reads `.hermes/codebase.md` via GitHub API before LLM call; generated story elaborations reference real module names and file paths
 - [ ] **Phase 21: Architecture Pipeline Context** - architecture_pipeline.py reads `.hermes/codebase.md` and includes it in the complexity classifier and architecture generation LLM calls; outputs reference actual components and integration points
@@ -468,15 +468,19 @@ Plans:
   3. A `.hermes/codebase.md` file appears on the main branch containing at minimum: directory tree, detected tech stack, list of key files read, and a module/package summary
   4. The commit is pushed directly to main by the agent using the stored GitHub token — no PR is raised for the snapshot file
 
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
 **Wave 1**
 
-- [ ] 18-01-PLAN.md — Async codebase scan service (SCAN-02, SCAN-03): walk GitHub tree, select ≤25 key files, build .hermes/codebase.md, commit via Contents API PUT
+- [x] 18-01-PLAN.md — Async codebase scan service (SCAN-02, SCAN-03): walk GitHub tree, select ≤25 key files, build .hermes/codebase.md, commit via Contents API PUT
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 18-02-PLAN.md — Trigger wiring + tests (SCAN-01): convert create_project to async, schedule background scan task, unit test suite with respx mocks
+- [x] 18-02-PLAN.md — Trigger wiring + tests (SCAN-01): convert create_project to async, schedule background scan task, unit test suite with respx mocks
+
+**Wave 1 (gap closure)**
+
+- [ ] 18-03-PLAN.md — Gap closure: regression tests for PipelineState commit + asyncio.create_task scan trigger in test_projects.py (SCAN-01)
 
 ### Phase 19: Snapshot Refresh & Read Fallback
 
@@ -543,7 +547,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
 | 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
-| 18. Codebase Scan Service | 0/? | Not started | - |
+| 18. Codebase Scan Service | 2/2 | Complete   | 2026-06-21 |
 | 19. Snapshot Refresh & Read Fallback | 0/? | Not started | - |
 | 20. Describe Pipeline Context | 0/? | Not started | - |
 | 21. Architecture Pipeline Context | 0/? | Not started | - |
