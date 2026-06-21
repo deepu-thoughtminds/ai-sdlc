@@ -408,6 +408,71 @@ async def test_get_comments_returns_empty_list_when_no_comments():
 
 
 @pytest.mark.asyncio
+async def test_get_comments_flattens_adf_body_to_plain_text():
+    """get_comments() converts an ADF dict body into a plain text string.
+
+    Regression test for scrum54-dev-pipeline-missing-arch-url: Jira Cloud
+    REST API v3 returns comment.body as an ADF document, not a plain string.
+    Downstream consumers (find_latest_architecture_url) require a plain
+    string body or they silently skip the comment.
+    """
+    adf_body = {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {"type": "text", "text": "Architecture published: "},
+                    {
+                        "type": "text",
+                        "text": "https://team.atlassian.net/wiki/spaces/PROJ/pages/123",
+                    },
+                ],
+            }
+        ],
+    }
+    payload = json.dumps({
+        "fields": {
+            "comment": {
+                "comments": [
+                    {"id": "c1", "body": adf_body, "author": {"displayName": "Bot"}},
+                ]
+            }
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    assert isinstance(result[0]["body"], str)
+    assert "https://team.atlassian.net/wiki/spaces/PROJ/pages/123" in result[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_get_comments_leaves_plain_string_body_unchanged():
+    """get_comments() does not alter a comment whose body is already a string."""
+    payload = json.dumps({
+        "fields": {
+            "comment": {
+                "comments": [
+                    {"id": "c1", "body": "Plain text comment", "author": {"displayName": "Alice"}},
+                ]
+            }
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    assert result[0]["body"] == "Plain text comment"
+
+
+@pytest.mark.asyncio
 async def test_get_comments_uses_jira_cred_headers():
     """get_comments() uses Jira credentials (not Confluence headers)."""
     payload = json.dumps({"fields": {"comment": {"comments": []}}})

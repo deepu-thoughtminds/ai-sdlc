@@ -10,6 +10,60 @@ from mcp.client.streamable_http import streamablehttp_client
 MCP_ATLASSIAN_URL: str = os.getenv("MCP_ATLASSIAN_URL", "http://mcp-atlassian:9000/mcp")
 
 
+def _adf_to_text(node: object) -> str:
+    """Recursively extract plain text from an Atlassian Document Format (ADF) node.
+
+    Jira Cloud REST API v3 (used by the underlying jira_get_issue MCP tool)
+    returns comment bodies as ADF documents — nested dicts of the shape
+    {"type": "doc", "content": [...]} — rather than plain strings, unless the
+    body is explicitly rendered. Downstream consumers (e.g.
+    services.confluence_url_finder.find_latest_architecture_url) expect a
+    plain string and silently skip non-string bodies, so any ADF dict must be
+    flattened to text before being returned from this module.
+
+    Walks "content" arrays depth-first, concatenating "text" leaf values.
+    Inserts a newline after paragraph/heading-like blocks so multi-paragraph
+    comments don't get smashed into one run-on string. Never raises — malformed
+    or unexpected ADF shapes degrade to "" for that node rather than crashing.
+
+    Args:
+        node: An ADF document/node (dict), a list of nodes, a plain string, or
+            any other value (returned as "" if unrecognised).
+
+    Returns:
+        Extracted plain text, stripped of leading/trailing whitespace.
+    """
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_adf_to_text(child) for child in node)
+    if isinstance(node, dict):
+        text = node.get("text")
+        if isinstance(text, str):
+            return text
+        content = node.get("content")
+        rendered = _adf_to_text(content) if content is not None else ""
+        if node.get("type") in ("paragraph", "heading", "codeBlock", "blockquote"):
+            rendered += "\n"
+        return rendered
+    return ""
+
+
+def _normalise_comment_body(comment: dict) -> dict:
+    """Return a copy of a raw Jira comment dict with body coerced to plain text.
+
+    If body is already a string, the comment is returned unchanged (as a new
+    dict, to avoid mutating caller data). If body is an ADF dict (or any other
+    non-string), it is flattened via _adf_to_text. Never raises.
+    """
+    body = comment.get("body")
+    if isinstance(body, str):
+        return comment
+    normalised = dict(comment)
+    normalised["body"] = _adf_to_text(body).strip()
+    return normalised
+
+
 @dataclasses.dataclass
 class JiraCredentials:
     """Per-request Jira credentials for mcp-atlassian tool calls."""
@@ -289,7 +343,16 @@ class HermesMCPClient:
             .get("comment", {})
             .get("comments", [])
         )
-        return comments if isinstance(comments, list) else []
+        if not isinstance(comments, list):
+            return []
+        # Jira Cloud REST API v3 returns comment.body as an ADF document (dict),
+        # not a plain string. Downstream consumers (e.g. find_latest_architecture_url)
+        # expect a plain string body, so flatten any ADF bodies to text here —
+        # the single boundary where raw Jira data enters the system.
+        return [
+            _normalise_comment_body(c) if isinstance(c, dict) else c
+            for c in comments
+        ]
 
     # ---------------------------------------------------------------------------
     # Phase 17 Plan 01: Jira status transition method (PRMERGE-02)
