@@ -19,6 +19,8 @@ and orchestrates the full SDLC pipeline:
     Both are satisfied by the existing stage-agnostic assign_pipeline.run() above.
   - @jarvis approve story description → approval_detector (story description approval)
   - @jarvis approve architecture → approval_detector (architecture approval)
+  - @jarvis merge pr → idempotency guard (returns duplicate_pipeline if active)
+    → merge_pipeline (background task) → PipelineState running → complete
   - No mention / unknown mention → ignored (no keyword-based approvals any more)
 
 Threat mitigations applied:
@@ -47,7 +49,7 @@ from database import get_db, SessionLocal
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent, JiraIssueCreatedEvent
-from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline
+from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline, merge_pipeline
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
@@ -340,10 +342,71 @@ async def handle_jira_comment(
             "routed_to": "dev_pipeline",
         }
 
-    # Step 4f: Stub handler for 'merge_pr' — Phase 17 wires the real pipeline
+    # Step 4f: Handle 'merge_pr' action (background task — GitHub API merge is heavy)
+    # T-17-06: Idempotency guard — same pattern as architecture/start_coding branches.
+    # PipelineState(status="running") is created and committed BEFORE asyncio.create_task
+    # so that a near-simultaneous duplicate webhook is blocked before a second merge
+    # attempt can be scheduled. "complete" and "failed" states allow re-triggering.
     elif mention_result is not None and mention_result.action == "merge_pr":
-        logger.info("Issue %s: merge_pr stub (Phase 17 pending)", event.issue.key)
-        return {"status": "received", "action": "merge_pr", "routed_to": "pending_phase_17"}
+        existing = (
+            db.query(PipelineState)
+            .filter(
+                PipelineState.ticket_key == event.issue.key,
+                PipelineState.stage == "merge_pr",
+                PipelineState.status.in_(["running"]),
+            )
+            .first()
+        )
+        if existing is not None:
+            logger.info(
+                "Merge pipeline already active for issue %s (state_id=%s) — ignoring duplicate",
+                event.issue.key,
+                existing.id,
+            )
+            return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
+
+        # Create PipelineState row with status="running" BEFORE scheduling the
+        # background task so the idempotency guard above can detect a near-
+        # simultaneous second webhook. merge_pipeline.run() re-uses this row.
+        state_row = PipelineState(
+            project_id=project.id,
+            ticket_key=event.issue.key,
+            stage="merge_pr",
+            status="running",
+        )
+        db.add(state_row)
+        db.commit()
+
+        issue_summary = event.issue.summary
+        issue_description = getattr(event.issue, "description", "") or ""
+        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
+        # FastAPI closes the session when the handler returns (via get_db's finally block),
+        # so the background task would receive an already-closed session. Instead, capture
+        # only primitive values (project_id, strings) and open a fresh SessionLocal()
+        # inside the background coroutine.
+        project_id = project.id
+
+        async def _run_merge_background() -> None:
+            bg_db = SessionLocal()
+            try:
+                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                await merge_pipeline.run(
+                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+                )
+            finally:
+                bg_db.close()
+
+        asyncio.create_task(_run_merge_background())
+        logger.info(
+            "Merge pipeline scheduled for issue %s (state_id=%s)",
+            event.issue.key,
+            state_row.id,
+        )
+        return {
+            "status": "received",
+            "action": "merge_pr",
+            "routed_to": "merge_pipeline",
+        }
 
     # Step 4g: No recognized mention.
     # If @jarvis appears in the body but intent is unrecognized, post a help comment
