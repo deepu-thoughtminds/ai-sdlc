@@ -297,14 +297,18 @@ async def run(
         repo_resp = await client.get(f"{api_base}/repos/{owner}/{repo}")
         if repo_resp.status_code != 200:
             logger.warning("Repo metadata fetch failed for %s/%s (status %s)", owner, repo, repo_resp.status_code)
-            return
+            raise RuntimeError(
+                f"Repo metadata fetch failed for {owner}/{repo} (status {repo_resp.status_code})"
+            )
         default_branch = repo_resp.json().get("default_branch", "main")
 
         # Step 5: Get recursive tree
         trees_resp = await client.get(f"{api_base}/repos/{owner}/{repo}/git/trees/HEAD", params={"recursive": "1"})
         if trees_resp.status_code != 200:
             logger.warning("Trees API failed for %s/%s (status %s)", owner, repo, trees_resp.status_code)
-            return
+            raise RuntimeError(
+                f"Trees API failed for {owner}/{repo} (status {trees_resp.status_code})"
+            )
         trees_data = trees_resp.json()
         if trees_data.get("truncated"):
             logger.warning("Trees API truncated for %s/%s — snapshot may be incomplete", owner, repo)

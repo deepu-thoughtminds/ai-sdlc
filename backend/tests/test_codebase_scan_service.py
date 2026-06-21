@@ -403,3 +403,47 @@ async def test_run_idempotent_put_includes_sha():
     put_body = _json.loads(put_request.content)
     assert put_body.get("sha") == "abc123"
     assert put_body.get("message") == "chore: update codebase snapshot [jarvis-scan]"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — 18-04: RuntimeError on non-200 GitHub API responses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_repo_metadata_non200_raises():
+    """run() must raise RuntimeError (not return None) when repo metadata returns 401.
+
+    T-18-01: github_token must NOT appear in the error message.
+    """
+    respx.get("https://api.github.com/repos/org/repo").mock(
+        return_value=httpx.Response(401, json={"message": "Bad credentials"})
+    )
+
+    db = MagicMock()
+    with pytest.raises(RuntimeError) as exc_info:
+        await run("org/repo", "ghp_bad", 1, db)
+
+    assert "ghp_bad" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_trees_api_non200_raises():
+    """run() must raise RuntimeError (not return None) when trees API returns 403.
+
+    T-18-01: github_token must NOT appear in the error message.
+    """
+    respx.get("https://api.github.com/repos/org/repo").mock(
+        return_value=httpx.Response(200, json={"default_branch": "main"})
+    )
+    respx.get("https://api.github.com/repos/org/repo/git/trees/HEAD").mock(
+        return_value=httpx.Response(403, json={"message": "Forbidden"})
+    )
+
+    db = MagicMock()
+    with pytest.raises(RuntimeError) as exc_info:
+        await run("org/repo", "ghp_bad", 1, db)
+
+    assert "ghp_bad" not in str(exc_info.value)
