@@ -230,3 +230,78 @@ class HermesMCPClient:
                 await session.initialize()
                 result = await session.call_tool("confluence_update_page", args)
         return json.loads(result.content[0].text)
+
+    # ---------------------------------------------------------------------------
+    # Phase 16 Plan 01: Comment and Confluence page fetch methods
+    # ---------------------------------------------------------------------------
+
+    async def get_comments(
+        self, issue_key: str, credentials: JiraCredentials
+    ) -> list[dict]:
+        """Fetch all comments for a Jira issue via MCP tool jira_get_issue.
+
+        Returns a flat list[dict] with the raw comment objects from the
+        fields.comment.comments envelope. Returns [] if no comments exist.
+
+        Uses Jira credentials (x-atlassian-jira-url header) — same as get_sprint_issues.
+        Never returns the raw MCP envelope — always normalised to a plain list.
+
+        T-09-01: credentials are passed as HTTP headers, never logged.
+
+        Args:
+            issue_key: Jira issue key (e.g. "PROJ-1").
+            credentials: Per-request Jira credentials.
+
+        Returns:
+            List of comment dicts from fields.comment.comments, or [] if none.
+        """
+        args = {
+            "issue_key": issue_key,
+            "fields": "comment",
+        }
+        async with streamablehttp_client(self._mcp_url, headers=self._cred_headers(credentials)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool("jira_get_issue", args)
+        parsed = json.loads(result.content[0].text)
+        # Normalise: extract flat list from fields.comment.comments envelope
+        comments = (
+            parsed.get("fields", {})
+            .get("comment", {})
+            .get("comments", [])
+        )
+        return comments if isinstance(comments, list) else []
+
+    async def get_confluence_page(
+        self, page_id: str, credentials: ConfluenceCredentials
+    ) -> str:
+        """Fetch the body content of a Confluence page by page ID.
+
+        Returns the plain string body (storage format HTML/markup) from the
+        body.storage.value field. Returns "" if the field is missing.
+
+        Uses Confluence credentials (x-atlassian-confluence-url header) — same as
+        find_confluence_page. Never returns the raw MCP envelope.
+
+        T-04-05: credentials are passed as HTTP headers, never logged.
+
+        Args:
+            page_id: Confluence page ID (numeric string).
+            credentials: Per-request Confluence credentials.
+
+        Returns:
+            Page body content string (storage format), or "" if not found.
+        """
+        args = {"page_id": page_id}
+        async with streamablehttp_client(self._mcp_url, headers=self._confluence_cred_headers(credentials)) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool("confluence_get_page", args)
+        parsed = json.loads(result.content[0].text)
+        # Normalise: extract plain string from body.storage.value envelope
+        body = (
+            parsed.get("body", {})
+            .get("storage", {})
+            .get("value", "")
+        )
+        return body if isinstance(body, str) else ""

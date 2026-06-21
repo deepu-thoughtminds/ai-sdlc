@@ -334,3 +334,174 @@ async def test_confluence_cred_headers_uses_distinct_header_name():
     assert headers["x-atlassian-confluence-url"] == TEST_CONFLUENCE_CREDS.confluence_url
     assert "Authorization" in headers
     assert headers["Authorization"].startswith("Basic ")
+
+
+# ---------------------------------------------------------------------------
+# get_comments tests (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_comments_calls_correct_tool():
+    """get_comments() calls jira_get_issue with comment expansion."""
+    payload = json.dumps({
+        "fields": {
+            "comment": {
+                "comments": [
+                    {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
+                ]
+            }
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "jira_get_issue"
+    assert args["issue_key"] == "TS-1"
+    assert "comment" in args.get("fields", "")
+
+
+@pytest.mark.asyncio
+async def test_get_comments_returns_flat_list():
+    """get_comments() returns a flat list[dict] from the comment envelope."""
+    payload = json.dumps({
+        "fields": {
+            "comment": {
+                "comments": [
+                    {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
+                    {"id": "c2", "body": "Second comment", "author": {"displayName": "Bob"}},
+                ]
+            }
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["id"] == "c1"
+    assert result[1]["id"] == "c2"
+
+
+@pytest.mark.asyncio
+async def test_get_comments_returns_empty_list_when_no_comments():
+    """get_comments() returns [] when issue has no comments."""
+    payload = json.dumps({
+        "fields": {
+            "comment": {"comments": []}
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_comments_uses_jira_cred_headers():
+    """get_comments() uses Jira credentials (not Confluence headers)."""
+    payload = json.dumps({"fields": {"comment": {"comments": []}}})
+    headers_used = {}
+
+    @asynccontextmanager
+    async def capturing_streamable(url, **kwargs):
+        headers_used.update(kwargs.get("headers", {}))
+        mock_session = make_mock_session(payload)
+        yield AsyncMock(), AsyncMock(), None
+
+    mock_cs_instance = AsyncMock()
+    mock_cs_instance.__aenter__ = AsyncMock(return_value=make_mock_session(payload))
+    mock_cs_instance.__aexit__ = AsyncMock(return_value=False)
+    mock_cs_class = MagicMock(return_value=mock_cs_instance)
+
+    with patch("hermes.mcp_client.streamablehttp_client", capturing_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        await client.get_comments("TS-1", TEST_CREDS)
+
+    assert "x-atlassian-jira-url" in headers_used
+    assert "x-atlassian-confluence-url" not in headers_used
+
+
+# ---------------------------------------------------------------------------
+# get_confluence_page tests (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_calls_correct_tool():
+    """get_confluence_page() calls confluence_get_page with page_id."""
+    payload = json.dumps({"id": "42", "body": {"storage": {"value": "<p>content</p>"}}})
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_confluence_page("42", TEST_CONFLUENCE_CREDS)
+
+    tool_name, args = mock_session.call_tool.call_args[0]
+    assert tool_name == "confluence_get_page"
+    assert args["page_id"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_returns_plain_string_body():
+    """get_confluence_page() returns a plain string body, not the raw MCP envelope."""
+    body_text = "<p>Architecture diagram here</p>"
+    payload = json.dumps({"id": "42", "body": {"storage": {"value": body_text}}})
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_confluence_page("42", TEST_CONFLUENCE_CREDS)
+
+    assert isinstance(result, str)
+    assert result == body_text
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_returns_empty_string_when_no_body():
+    """get_confluence_page() returns '' when body/storage/value is missing."""
+    payload = json.dumps({"id": "42"})
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches_kw(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_confluence_page("42", TEST_CONFLUENCE_CREDS)
+
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_uses_confluence_cred_headers():
+    """get_confluence_page() uses Confluence credentials (not Jira headers)."""
+    payload = json.dumps({"id": "42", "body": {"storage": {"value": ""}}})
+    headers_used = {}
+
+    @asynccontextmanager
+    async def capturing_streamable(url, **kwargs):
+        headers_used.update(kwargs.get("headers", {}))
+        mock_session = make_mock_session(payload)
+        yield AsyncMock(), AsyncMock(), None
+
+    mock_cs_instance = AsyncMock()
+    mock_cs_instance.__aenter__ = AsyncMock(return_value=make_mock_session(payload))
+    mock_cs_instance.__aexit__ = AsyncMock(return_value=False)
+    mock_cs_class = MagicMock(return_value=mock_cs_instance)
+
+    with patch("hermes.mcp_client.streamablehttp_client", capturing_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        await client.get_confluence_page("42", TEST_CONFLUENCE_CREDS)
+
+    assert "x-atlassian-confluence-url" in headers_used
+    assert "x-atlassian-jira-url" not in headers_used

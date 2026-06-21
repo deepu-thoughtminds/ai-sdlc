@@ -21,6 +21,10 @@ def make_mock_client():
     )
     client.lookup_user = AsyncMock(return_value="acc-99")
     client.assign_issue = AsyncMock(return_value=None)
+    # Jira comment stubs
+    client.get_comments = AsyncMock(
+        return_value=[{"id": "c1", "body": "A comment", "author": {"displayName": "Alice"}}]
+    )
     # Confluence stubs
     client.create_confluence_page = AsyncMock(
         return_value={"id": "9999", "space": {"key": "PROJ"}}
@@ -30,6 +34,9 @@ def make_mock_client():
     )
     client.find_confluence_page = AsyncMock(
         return_value={"id": "9999", "version": {"number": 3}}
+    )
+    client.get_confluence_page = AsyncMock(
+        return_value="<p>Architecture content here</p>"
     )
     return client
 
@@ -199,5 +206,106 @@ async def test_post_confluence_page_500_on_client_error():
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/confluence/page", json=payload)
+    assert resp.status_code == 500
+    assert "mcp down" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# POST /jira/comments tests (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_get_comments_returns_comment_list():
+    """POST /jira/comments returns the comment list from get_comments()."""
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/jira/comments",
+            json={**BASE_CREDS, "issue_key": "TS-1"},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert data[0]["id"] == "c1"
+
+
+@pytest.mark.asyncio
+async def test_post_get_comments_calls_get_comments_with_issue_key():
+    """POST /jira/comments passes issue_key to get_comments()."""
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        await ac.post(
+            "/jira/comments",
+            json={**BASE_CREDS, "issue_key": "TS-99"},
+        )
+    mock_client.get_comments.assert_called_once()
+    call_args = mock_client.get_comments.call_args
+    assert call_args.args[0] == "TS-99" or call_args.kwargs.get("issue_key") == "TS-99"
+
+
+@pytest.mark.asyncio
+async def test_post_get_comments_returns_500_on_client_error():
+    """POST /jira/comments returns 500 when get_comments() raises."""
+    mock_client = make_mock_client()
+    mock_client.get_comments = AsyncMock(side_effect=RuntimeError("mcp down"))
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/jira/comments",
+            json={**BASE_CREDS, "issue_key": "TS-1"},
+        )
+    assert resp.status_code == 500
+    assert "mcp down" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# GET /confluence/page/{page_id} tests (Phase 16 Plan 01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_returns_body_string():
+    """GET /confluence/page/{page_id} returns body content as plain string."""
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/confluence/page/42",
+            params={**BASE_CONF_CREDS},
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["body"] == "<p>Architecture content here</p>"
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_calls_get_confluence_page_with_page_id():
+    """GET /confluence/page/{page_id} passes page_id to get_confluence_page()."""
+    mock_client = make_mock_client()
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        await ac.get(
+            "/confluence/page/99",
+            params={**BASE_CONF_CREDS},
+        )
+    mock_client.get_confluence_page.assert_called_once()
+    call_args = mock_client.get_confluence_page.call_args
+    assert call_args.args[0] == "99" or call_args.kwargs.get("page_id") == "99"
+
+
+@pytest.mark.asyncio
+async def test_get_confluence_page_returns_500_on_client_error():
+    """GET /confluence/page/{page_id} returns 500 when get_confluence_page() raises."""
+    mock_client = make_mock_client()
+    mock_client.get_confluence_page = AsyncMock(side_effect=RuntimeError("mcp down"))
+    app.dependency_overrides[get_mcp_client] = lambda: mock_client
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/confluence/page/42",
+            params={**BASE_CONF_CREDS},
+        )
     assert resp.status_code == 500
     assert "mcp down" in resp.json()["detail"]

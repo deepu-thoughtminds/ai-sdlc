@@ -159,3 +159,63 @@ async def get_confluence_search(
         raise HTTPException(status_code=500, detail=str(exc))
     # Return {} (empty dict) when not found — the hermes "not found" sentinel
     return result if result is not None else {}
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 Plan 01: Jira comments and Confluence page fetch endpoints
+# ---------------------------------------------------------------------------
+
+
+class GetCommentsRequest(BaseModel):
+    jira_url: str
+    jira_email: str
+    jira_token: str
+    issue_key: str
+
+
+@app.post("/jira/comments")
+async def post_get_comments(
+    req: GetCommentsRequest,
+    client: HermesMCPClient = Depends(get_mcp_client),
+):
+    """Fetch comment history for a Jira issue via MCP.
+
+    Returns a flat list of comment dicts.
+    Uses POST (not GET) because credentials are passed in the request body
+    to avoid token exposure in URL query parameters.
+    """
+    creds = JiraCredentials(
+        jira_url=req.jira_url,
+        jira_email=req.jira_email,
+        jira_token=req.jira_token,
+    )
+    try:
+        comments = await client.get_comments(req.issue_key, creds)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return comments
+
+
+@app.get("/confluence/page/{page_id}")
+async def get_confluence_page(
+    page_id: str,
+    confluence_url: str,
+    confluence_email: str,
+    confluence_token: str,
+    client: HermesMCPClient = Depends(get_mcp_client),
+):
+    """Fetch the body content of a Confluence page by page ID via MCP.
+
+    Returns {"body": "<page content string>"}.
+    Uses GET with query param credentials, mirroring GET /confluence/search convention.
+    """
+    creds = ConfluenceCredentials(
+        confluence_url=confluence_url,
+        confluence_email=confluence_email,
+        confluence_token=confluence_token,
+    )
+    try:
+        body = await client.get_confluence_page(page_id, creds)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"body": body}
