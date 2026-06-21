@@ -438,7 +438,11 @@ Plans:
   2. After a successful merge, the Jira story status is updated via Hermes/Jira MCP and a new Jira comment contains the merge commit SHA confirming the merge
   3. If no open PR is found for the story, the agent posts an informative Jira comment explaining what was searched and that no PR was found — the pipeline does not raise an unhandled exception
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 17-01-PLAN.md — find_and_merge_pr (GitHub API) + Jira status-update primitives (TDD)
+- [ ] 17-02-PLAN.md — merge_pipeline orchestrator + webhook.py merge_pr wiring (TDD)
 
 ---
 
