@@ -14,14 +14,17 @@ Threat mitigations:
   T-15-02: github_repo decrypted at response-construction time via decrypt_credential(); never logged.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import SessionLocal, get_db
+from models.pipeline_state import PipelineState
 from models.project import Project, ProjectCreate, ProjectListItem, ProjectPublic
+from services import codebase_scan_service
 from services.crypto import decrypt_credential, encrypt_credential
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,7 @@ def _project_to_public(project: Project) -> ProjectPublic:
 
 
 @router.post("/projects", response_model=ProjectPublic, status_code=201)
-def create_project(
+async def create_project(
     payload: ProjectCreate,
     db: Session = Depends(get_db),
 ) -> ProjectPublic:
@@ -60,6 +63,8 @@ def create_project(
     Returns ProjectPublic (no token fields, decrypted github_repo) with HTTP 201.
     T-02-04: only project id is logged — no token values.
     T-15-02: github_repo stored as ciphertext; returned decrypted via _project_to_public.
+    SCAN-01: when github_repo is non-empty, schedules an async codebase scan
+    background task immediately after project creation.
     """
     project = Project(
         name=payload.name,
@@ -78,6 +83,55 @@ def create_project(
     db.commit()
     db.refresh(project)
     logger.info("project created id=%d", project.id)  # T-02-04: no token values logged
+
+    if payload.github_repo:
+        # SCAN-01: Trigger codebase scan as background task on project onboarding.
+        # PipelineState committed BEFORE asyncio.create_task() so duplicate-guard
+        # (Phase 19) can detect an in-flight scan. ticket_key "__onboarding__" is
+        # the sentinel value used when no Jira ticket exists at onboarding time.
+        scan_state = PipelineState(
+            project_id=project.id,
+            ticket_key="__onboarding__",
+            stage="codebase_scan",
+            status="running",
+        )
+        db.add(scan_state)
+        db.commit()
+
+        project_id = project.id
+
+        async def _run_scan_background() -> None:
+            # CR-02: Open a fresh session — never reuse the request-scoped db session.
+            bg_db = SessionLocal()
+            try:
+                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                if bg_project is None:
+                    logger.warning(
+                        "Project id=%s not found in scan background task — aborting",
+                        project_id,
+                    )
+                    return
+                github_token = decrypt_credential(bg_project.github_token)  # T-18-01: not logged
+                github_repo = decrypt_credential(bg_project.github_repo)
+                try:
+                    await codebase_scan_service.run(github_repo, github_token, project_id, bg_db)
+                except Exception as exc:
+                    logger.warning(
+                        "Codebase scan failed for project id=%s: %s", project_id, exc
+                    )
+                    # Mark PipelineState as error so UI can surface the failure
+                    bg_db.query(PipelineState).filter(
+                        PipelineState.project_id == project_id,
+                        PipelineState.stage == "codebase_scan",
+                        PipelineState.status == "running",
+                    ).update({"status": "error"})
+                    bg_db.commit()
+            finally:
+                bg_db.close()
+
+        asyncio.create_task(_run_scan_background())
+        logger.info("Codebase scan scheduled project id=%d", project.id)  # T-18-01: no token
+
     return _project_to_public(project)
 
 
