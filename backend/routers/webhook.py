@@ -39,6 +39,7 @@ Threat mitigations applied:
 import asyncio
 import dataclasses
 import datetime
+import hmac
 import logging
 import os
 
@@ -77,6 +78,9 @@ def verify_webhook_secret(
     Reads JIRA_WEBHOOK_SECRET from env. If the env var is set, the header
     must be present and must match exactly. Returns 401 on mismatch.
 
+    WR-01 fix: uses hmac.compare_digest for constant-time comparison to
+    prevent timing-based secret inference attacks.
+
     If JIRA_WEBHOOK_SECRET is not configured (e.g. dev/test without the env
     var), the check is skipped so the service remains usable without secrets.
     """
@@ -84,7 +88,11 @@ def verify_webhook_secret(
     if not expected_secret:
         # No secret configured — allow through (useful in local/test envs)
         return
-    if x_jira_webhook_secret is None or x_jira_webhook_secret != expected_secret:
+    # WR-01 fix: constant-time comparison via hmac.compare_digest prevents
+    # timing attacks where an attacker infers characters by measuring response times.
+    if x_jira_webhook_secret is None or not hmac.compare_digest(
+        x_jira_webhook_secret, expected_secret
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing webhook secret")
 
 
@@ -240,6 +248,14 @@ async def handle_jira_comment(
             bg_db = SessionLocal()
             try:
                 bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                # CR-03 fix: guard against project being deleted between webhook
+                # receipt and background task execution.
+                if bg_project is None:
+                    logger.error(
+                        "Project id=%s not found in background task for issue %s — aborting architecture",
+                        project_id, event.issue.key,
+                    )
+                    return
                 await architecture_pipeline.run(
                     bg_project, event.issue.key, issue_summary, issue_description, bg_db
                 )
@@ -324,6 +340,14 @@ async def handle_jira_comment(
             bg_db = SessionLocal()
             try:
                 bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                # CR-03 fix: guard against project being deleted between webhook
+                # receipt and background task execution.
+                if bg_project is None:
+                    logger.error(
+                        "Project id=%s not found in background task for issue %s — aborting dev_pipeline",
+                        project_id, event.issue.key,
+                    )
+                    return
                 await dev_pipeline.run(
                     bg_project, event.issue.key, issue_summary, issue_description, bg_db
                 )
@@ -390,6 +414,16 @@ async def handle_jira_comment(
             bg_db = SessionLocal()
             try:
                 bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                # CR-03 fix: guard against project being deleted between webhook
+                # receipt and background task execution. Without this check,
+                # bg_project=None causes AttributeError in merge_pipeline.run()
+                # and leaves PipelineState stuck at status="running".
+                if bg_project is None:
+                    logger.error(
+                        "Project id=%s not found in background task for issue %s — aborting merge",
+                        project_id, event.issue.key,
+                    )
+                    return
                 await merge_pipeline.run(
                     bg_project, event.issue.key, issue_summary, issue_description, bg_db
                 )
