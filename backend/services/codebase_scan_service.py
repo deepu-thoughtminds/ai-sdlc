@@ -315,7 +315,8 @@ async def run(
 
         # Step 6: Extract blob paths
         all_paths: list[str] = [
-            item["path"] for item in trees_data.get("tree", []) if item.get("type") == "blob"
+            item.get("path") for item in trees_data.get("tree", [])
+            if item.get("type") == "blob" and item.get("path")
         ]
 
         # Steps 7-8: Select + fetch key files
