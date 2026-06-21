@@ -16,6 +16,8 @@ Threat mitigations:
   T-07-01: github_token never logged; only owner/repo/branch logged at INFO.
   T-07-02: subprocess.run uses list-form args, not shell=True.
   T-07-03: Error responses from GitHub API are logged without credential values.
+  T-17-01: github_token never interpolated into f-strings, exception messages,
+            or logger calls in find_and_merge_pr — mirrors T-07-01 convention.
 """
 
 import logging
@@ -47,6 +49,23 @@ class PullRequest:
     html_url: str
     number: int
     branch: str
+
+
+@dataclass
+class MergeResult:
+    """Result of a successfully merged GitHub pull request — PRMERGE-01.
+
+    Fields:
+        merged:     True if the PR was merged successfully.
+        sha:        The merge commit SHA returned by the GitHub API.
+        pr_number:  The PR number that was merged.
+        pr_url:     The GitHub PR URL (html_url from the PR list).
+    """
+
+    merged: bool
+    sha: str
+    pr_number: int
+    pr_url: str
 
 
 def _run_git(args: list[str], cwd: str, github_token: str = "") -> subprocess.CompletedProcess:
@@ -264,3 +283,139 @@ def apply_commit_push_and_open_pr(
     )
 
     return PullRequest(html_url=pr_url, number=pr_number, branch=branch_name)
+
+
+def find_and_merge_pr(
+    github_repo: str,
+    github_token: str,
+    issue_key: str,
+    base_branch: str = DEFAULT_BASE_BRANCH,
+) -> "MergeResult | None":
+    """Find the open PR for a Jira issue and merge it into main via the GitHub REST API.
+
+    PRMERGE-01: Locates the open PR whose head branch is `jarvis/issue-{issue_key}`
+    (preferred) or whose title contains `issue_key` (fallback), then merges it.
+
+    Returns None if no matching open PR is found — never raises in the no-match case.
+
+    Threat mitigations:
+      T-17-01: github_token is placed ONLY in the `Authorization` header dict;
+               never interpolated into f-strings, exception messages, or logger calls.
+
+    Args:
+        github_repo:  Owner/repo slug (e.g. "acme/my-app"), plaintext decrypted.
+        github_token: GitHub personal access token, plaintext decrypted.
+        issue_key:    Jira issue key (e.g. "PROJ-42").
+        base_branch:  Target branch (default "main") — informational only for this
+                      function; the PR's base branch is already set on GitHub.
+
+    Returns:
+        MergeResult(merged, sha, pr_number, pr_url) on successful merge, or None
+        if no open PR matches the issue_key.
+
+    Raises:
+        ValueError:   If github_repo cannot be parsed as owner/repo.
+        RuntimeError: If the GitHub API list-pulls or merge call fails.
+    """
+    if "/" not in github_repo:
+        raise ValueError(f"Invalid github_repo slug: {github_repo!r}")
+
+    parts = github_repo.strip().split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"Invalid github_repo slug: {github_repo!r}")
+
+    owner, repo = parts[0], parts[1]
+    expected_branch = f"jarvis/issue-{issue_key}"
+
+    # T-17-01: github_token only in Authorization header — never in URLs or log args.
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    api_base = GITHUB_API_BASE
+
+    logger.info("Searching for open PR for %s in %s/%s", issue_key, owner, repo)
+
+    # Step 1: List open PRs
+    try:
+        resp = httpx.get(
+            f"{api_base}/repos/{owner}/{repo}/pulls",
+            headers=headers,
+            params={"state": "open"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GitHub list PRs failed for %s/%s: HTTP %s — %s",
+            owner,
+            repo,
+            exc.response.status_code,
+            exc.response.text[:500],
+        )
+        raise RuntimeError(
+            f"GitHub list PRs failed for {owner}/{repo}: HTTP {exc.response.status_code}"
+        ) from exc
+    except Exception as exc:
+        logger.warning("GitHub list PRs API error for %s/%s: %s", owner, repo, exc)
+        raise RuntimeError(f"GitHub list PRs failed for {owner}/{repo}: {exc}") from exc
+
+    pull_list = resp.json()
+
+    # Step 2: Match by branch name (preferred) then title (fallback)
+    matched_pr = None
+    for pr in pull_list:
+        if pr.get("head", {}).get("ref") == expected_branch:
+            matched_pr = pr
+            break
+
+    if matched_pr is None:
+        for pr in pull_list:
+            if issue_key in pr.get("title", ""):
+                matched_pr = pr
+                break
+
+    if matched_pr is None:
+        logger.info("No open PR found for %s in %s/%s", issue_key, owner, repo)
+        return None
+
+    pr_number = matched_pr["number"]
+    pr_url = matched_pr.get("html_url", "")
+    logger.info("Found open PR #%d for %s in %s/%s", pr_number, issue_key, owner, repo)
+
+    # Step 3: Merge the PR
+    merge_commit_title = f"Merge pull request #{pr_number}"
+    try:
+        merge_resp = httpx.put(
+            f"{api_base}/repos/{owner}/{repo}/pulls/{pr_number}/merge",
+            headers=headers,
+            json={"commit_title": merge_commit_title},
+            timeout=30.0,
+        )
+        merge_resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GitHub merge PR #%d failed for %s/%s: HTTP %s — %s",
+            pr_number,
+            owner,
+            repo,
+            exc.response.status_code,
+            exc.response.text[:500],
+        )
+        raise RuntimeError(
+            f"GitHub merge PR #{pr_number} failed for {owner}/{repo}: HTTP {exc.response.status_code}"
+        ) from exc
+    except Exception as exc:
+        logger.warning("GitHub merge API error for %s/%s PR #%d: %s", owner, repo, pr_number, exc)
+        raise RuntimeError(
+            f"GitHub merge PR #{pr_number} failed for {owner}/{repo}: {exc}"
+        ) from exc
+
+    merge_data = merge_resp.json()
+    sha = merge_data.get("sha", "")
+    merged = bool(merge_data.get("merged", False))
+
+    logger.info("Merged PR #%d for %s in %s/%s — sha=%s", pr_number, issue_key, owner, repo, sha)
+
+    return MergeResult(merged=merged, sha=sha, pr_number=pr_number, pr_url=pr_url)

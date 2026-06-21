@@ -211,6 +211,61 @@ async def find_confluence_page(
 
 
 # ---------------------------------------------------------------------------
+# Phase 17 Plan 01: Jira status transition (PRMERGE-02)
+# ---------------------------------------------------------------------------
+
+
+async def update_status(
+    jira_url: str,
+    jira_email: str,
+    jira_token: str,
+    issue_key: str,
+    status_name: str,
+) -> bool:
+    """Transition a Jira issue to a new status via hermes POST /jira/status.
+
+    Returns True when hermes responds 200 with {"success": true}.
+    Returns False on any error (network, timeout, non-2xx, bad JSON) — never raises.
+
+    This graceful-degradation pattern mirrors post_sprint_backlog — a Jira
+    status-transition failure must not crash the merge_pipeline orchestrator.
+
+    T-17-02: jira_token is placed only in the payload dict key "jira_token";
+             logger.warning logs only issue_key and the exception text — never jira_token.
+
+    Args:
+        jira_url:    Jira instance URL (e.g. "https://mycompany.atlassian.net").
+        jira_email:  Jira account email.
+        jira_token:  Jira API token, plaintext decrypted.
+        issue_key:   Jira issue key (e.g. "PROJ-42").
+        status_name: Target status name (e.g. "Done", "In Progress").
+
+    Returns:
+        True if transition succeeded, False otherwise (never raises).
+    """
+    try:
+        logger.info("Updating status for issue %s to '%s'", issue_key, status_name)
+        payload = {
+            "jira_url": jira_url,
+            "jira_email": jira_email,
+            "jira_token": jira_token,
+            "issue_key": issue_key,
+            "status_name": status_name,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{HERMES_BASE_URL}/jira/status", json=payload)
+        resp.raise_for_status()
+        return bool(resp.json().get("success", False))
+    except Exception as exc:
+        logger.warning(
+            "update_status failed for issue %s: %s — returning False",
+            issue_key,
+            exc,
+        )
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Phase 16 Plan 01: Comment and Confluence page content fetch functions
 # ---------------------------------------------------------------------------
 

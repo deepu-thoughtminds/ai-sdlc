@@ -272,6 +272,40 @@ class HermesMCPClient:
         )
         return comments if isinstance(comments, list) else []
 
+    # ---------------------------------------------------------------------------
+    # Phase 17 Plan 01: Jira status transition method (PRMERGE-02)
+    # ---------------------------------------------------------------------------
+
+    async def transition_issue(
+        self, issue_key: str, status_name: str, credentials: JiraCredentials
+    ) -> bool:
+        """Transition a Jira issue to a new status via MCP tool jira_transition_issue.
+
+        Returns True on successful tool call, False on any exception — never raises.
+        This design ensures a Jira status-transition failure does not propagate into
+        the merge_pipeline orchestrator's exception handler (T-17-03 mitigation).
+
+        T-17-02: credentials (including jira_token) are passed as HTTP headers via
+        _cred_headers — never logged or included in exception messages.
+
+        Args:
+            issue_key:   Jira issue key (e.g. "PROJ-42").
+            status_name: Target status name (e.g. "Done", "In Progress").
+            credentials: Per-request Jira credentials.
+
+        Returns:
+            True if the transition succeeded, False otherwise (never raises).
+        """
+        args = {"issue_key": issue_key, "status": status_name}
+        try:
+            async with streamablehttp_client(self._mcp_url, headers=self._cred_headers(credentials)) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    await session.call_tool("jira_transition_issue", args)
+            return True
+        except Exception:
+            return False
+
     async def get_confluence_page(
         self, page_id: str, credentials: ConfluenceCredentials
     ) -> str:

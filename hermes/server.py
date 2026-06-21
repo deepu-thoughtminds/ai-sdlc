@@ -89,6 +89,37 @@ async def post_assign(req: AssignIssueRequest, client: HermesMCPClient = Depends
 
 
 # ---------------------------------------------------------------------------
+# Phase 17 Plan 01: Jira status transition endpoint (PRMERGE-02)
+# ---------------------------------------------------------------------------
+
+
+class TransitionIssueRequest(BaseModel):
+    jira_url: str
+    jira_email: str
+    jira_token: str
+    issue_key: str
+    status_name: str
+
+
+@app.post("/jira/status")
+async def post_transition_issue(
+    req: TransitionIssueRequest, client: HermesMCPClient = Depends(get_mcp_client)
+):
+    """Transition a Jira issue to a new status via HermesMCPClient.transition_issue.
+
+    Returns {"success": true/false}. The transition_issue method never raises —
+    failures are returned as {"success": false} rather than HTTP 500.
+    """
+    creds = JiraCredentials(
+        jira_url=req.jira_url,
+        jira_email=req.jira_email,
+        jira_token=req.jira_token,
+    )
+    result = await client.transition_issue(req.issue_key, req.status_name, creds)
+    return {"success": result}
+
+
+# ---------------------------------------------------------------------------
 # Confluence endpoints
 # ---------------------------------------------------------------------------
 
