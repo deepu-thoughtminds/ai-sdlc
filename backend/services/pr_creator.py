@@ -333,16 +333,22 @@ def find_and_merge_pr(
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    api_base = GITHUB_API_BASE
+    # WR-03 fix: re-read GITHUB_API_BASE from the environment at call time
+    # (matching apply_commit_push_and_open_pr) so test overrides via
+    # os.environ take effect even after module import.
+    api_base = os.environ.get("GITHUB_API_BASE", GITHUB_API_BASE)
 
     logger.info("Searching for open PR for %s in %s/%s", issue_key, owner, repo)
 
     # Step 1: List open PRs
+    # WR-04 fix: request per_page=100 (GitHub API max) so the jarvis-created
+    # PR is not missed when the repo has more than the default page size (30)
+    # of open PRs.
     try:
         resp = httpx.get(
             f"{api_base}/repos/{owner}/{repo}/pulls",
             headers=headers,
-            params={"state": "open"},
+            params={"state": "open", "per_page": 100},
             timeout=30.0,
         )
         resp.raise_for_status()
