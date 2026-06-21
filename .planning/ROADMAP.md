@@ -14,6 +14,8 @@ Phases 10-13 (milestone v1.4) replace the multi-option architecture flow with a 
 
 Phases 14-17 (milestone v1.5) deliver the GitHub developer pipeline and replace the hardcoded mention-parser keyword whitelist with an LLM-based intent router. Phase 14 replaces KNOWN_STAGES with a free-text LLM intent classifier. Phase 15 adds the GitHub repo field to the project model and web app and implements the clone → code-generate → PR creation foundation. Phase 16 wires the end-to-end `@jarvis start coding` trigger that reads the Confluence architecture from comment history and posts the resulting PR link back to Jira. Phase 17 delivers the `@jarvis merge pr` trigger that merges the open PR via GitHub API and updates the Jira story status.
 
+Phases 18-21 (milestone v1.6) give every pipeline stage accurate, real codebase context. Phase 18 delivers the codebase scan service: on project onboarding the agent clones the repo, walks the directory tree with targeted file reads, and commits a structured `.hermes/codebase.md` summary to main — no LLM involved. Phase 19 hooks the scan into the post-merge lifecycle: after a successful `@jarvis merge pr` the snapshot is refreshed automatically, and the read path degrades gracefully when the file does not yet exist. Phase 20 wires codebase context into the describe pipeline so story elaborations reference real module names and file paths. Phase 21 wires the same context into both the complexity classifier and architecture generation calls so architecture writeups reference actual components and integration points instead of invented structure.
+
 ## Phases
 
 **Phase Numbering:**
@@ -40,6 +42,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 15: GitHub Config & Dev Pipeline Foundation** - Add github_repo field to project DB and web app form; implement clone → code-generate → PR creation pipeline modules (completed 2026-06-20)
 - [x] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira (completed 2026-06-21)
 - [x] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment (completed 2026-06-21)
+- [ ] **Phase 18: Codebase Scan Service** - On project onboarding, clone the repo and walk the directory tree with targeted file reads; commit structured `.hermes/codebase.md` to main branch
+- [ ] **Phase 19: Snapshot Refresh & Read Fallback** - After successful PR merge, re-run codebase scan and push updated snapshot; read path degrades gracefully when snapshot does not exist
+- [ ] **Phase 20: Describe Pipeline Context** - describe_pipeline.py reads `.hermes/codebase.md` via GitHub API before LLM call; generated story elaborations reference real module names and file paths
+- [ ] **Phase 21: Architecture Pipeline Context** - architecture_pipeline.py reads `.hermes/codebase.md` and includes it in the complexity classifier and architecture generation LLM calls; outputs reference actual components and integration points
 
 ## Phase Details
 
@@ -306,7 +312,7 @@ Plans:
 
 - [ ] 13-01-PLAN.md — Rewrite architecture_pipeline.py: single-pass complexity-aware flow (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-03)
 - [x] 13-02-PLAN.md — Webhook idempotency guard + remove architecture approval from approval_detector.py (ARCHINT-01, ARCHINT-02, ARCHINT-03)
-- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webhook.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
+- [ ] 13-03-PLAN.md — Replace architecture pipeline tests + add idempotency test to test_webpack.py (ARCHGEN-01, ARCHGEN-02, ARCHGEN-03, ARCHINT-02)
 
 ### Phase 12: Structured Confluence Publishing
 
@@ -447,10 +453,76 @@ Plans:
 
 ---
 
+## Milestone v1.6: Context-Aware Codebase Scanning
+
+### Phase 18: Codebase Scan Service
+
+**Goal**: When a project is onboarded with a `github_repo` field, the agent automatically clones the repo, walks the directory tree with targeted file reads, and commits a structured `.hermes/codebase.md` summary to the main branch — no manual step and no LLM required for the scan itself
+**Depends on**: Phase 17
+**Milestone**: v1.6 — context-aware-codebase-scanning
+**Requirements**: SCAN-01, SCAN-02, SCAN-03
+**Success Criteria** (what must be TRUE):
+
+  1. When a project is saved with a `github_repo` value (new onboarding or update), the codebase scan starts automatically — the user takes no additional action
+  2. The scan reads only targeted files (README, entry points, config files such as `package.json`, `pyproject.toml`, `__init__.py`) rather than every file in the repo; the directory tree is always included regardless of token cost
+  3. A `.hermes/codebase.md` file appears on the main branch containing at minimum: directory tree, detected tech stack, list of key files read, and a module/package summary
+  4. The commit is pushed directly to main by the agent using the stored GitHub token — no PR is raised for the snapshot file
+
+**Plans**: 2 plans
+Plans:
+**Wave 1**
+
+- [ ] 18-01-PLAN.md — Async codebase scan service (SCAN-02, SCAN-03): walk GitHub tree, select ≤25 key files, build .hermes/codebase.md, commit via Contents API PUT
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 18-02-PLAN.md — Trigger wiring + tests (SCAN-01): convert create_project to async, schedule background scan task, unit test suite with respx mocks
+
+### Phase 19: Snapshot Refresh & Read Fallback
+
+**Goal**: The codebase snapshot stays current after each merge and the pipeline never crashes when the snapshot is absent
+**Depends on**: Phase 18
+**Milestone**: v1.6 — context-aware-codebase-scanning
+**Requirements**: SNAPSHOT-01, SNAPSHOT-02
+**Success Criteria** (what must be TRUE):
+
+  1. After a successful `@jarvis merge pr` completes, the agent re-clones the repo and pushes an updated `.hermes/codebase.md` to main automatically — the developer takes no additional action
+  2. When a pipeline stage attempts to read `.hermes/codebase.md` and the file does not exist on the repo (e.g. scan has never run), the pipeline continues without codebase context and does not raise an exception or return an empty error to the user
+
+**Plans**: TBD
+
+### Phase 20: Describe Pipeline Context
+
+**Goal**: Story elaborations produced by `@jarvis describe` reference real module names and file paths from the codebase instead of generic placeholders
+**Depends on**: Phase 19
+**Milestone**: v1.6 — context-aware-codebase-scanning
+**Requirements**: DESCCTX-01, DESCCTX-02
+**Success Criteria** (what must be TRUE):
+
+  1. Before calling freellmapi to generate the elaborated description, `describe_pipeline.py` fetches `.hermes/codebase.md` via the GitHub API and includes its content in the LLM prompt
+  2. A generated story elaboration for a project with a committed codebase snapshot contains at least one real module name or file path from the actual repo rather than a generic placeholder such as "the existing services" or "the current codebase"
+
+**Plans**: TBD
+
+### Phase 21: Architecture Pipeline Context
+
+**Goal**: Architecture writeups produced by `@jarvis architecture` reference actual existing components, file paths, and integration points rather than invented structure
+**Depends on**: Phase 20
+**Milestone**: v1.6 — context-aware-codebase-scanning
+**Requirements**: ARCHCTX-01, ARCHCTX-02
+**Success Criteria** (what must be TRUE):
+
+  1. `architecture_pipeline.py` reads `.hermes/codebase.md` via the GitHub API and includes it in both the complexity classifier LLM call and the architecture generation LLM call — no separate read call for each
+  2. A generated architecture writeup for a project with a committed codebase snapshot references at least one actual component name, file path, or integration point from the snapshot rather than invented structure
+
+**Plans**: TBD
+
+---
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -471,3 +543,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
 | 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
+| 18. Codebase Scan Service | 0/? | Not started | - |
+| 19. Snapshot Refresh & Read Fallback | 0/? | Not started | - |
+| 20. Describe Pipeline Context | 0/? | Not started | - |
+| 21. Architecture Pipeline Context | 0/? | Not started | - |
