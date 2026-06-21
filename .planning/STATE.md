@@ -4,14 +4,14 @@ milestone: v1.5
 milestone_name: GitHub Dev Pipeline & LLM Intent Routing
 status: executing
 stopped_at: context exhaustion at 81% (2026-06-20)
-last_updated: "2026-06-21T02:42:00.565Z"
-last_activity: 2026-06-21 -- Phase 17 execution started
+last_updated: "2026-06-21T03:53:46.863Z"
+last_activity: 2026-06-21
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 6
-  percent: 75
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 17 (pr-merge-pipeline) — EXECUTING
-Plan: 1 of 2
+Phase: 17
+Plan: Not started
 Status: Executing Phase 17
-Last activity: 2026-06-21 -- Phase 17 execution started
+Last activity: 2026-06-21
 
 ```
 v1.5 progress: [          ] 0% (0/4 phases)
@@ -49,7 +49,7 @@ v1.5 progress: [          ] 0% (0/4 phases)
 
 **Velocity:**
 
-- Total plans completed: 14
+- Total plans completed: 16
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -64,6 +64,7 @@ v1.5 progress: [          ] 0% (0/4 phases)
 | 05-freellmapi-integration | 2 | ~6 min | ~3 min |
 | 06-hermes-llm-client | 2 | ~6 min | ~3 min |
 | 15 | 2 | - | - |
+| 17 | 2 | - | - |
 
 **Recent Trend:**
 

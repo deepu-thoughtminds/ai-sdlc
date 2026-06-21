@@ -39,7 +39,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 14: LLM Intent Router** - Replace KNOWN_STAGES whitelist in mention_parser.py with LLM-based free-text intent extraction; unrecognized intents post a helpful Jira comment listing valid commands (completed 2026-06-20)
 - [x] **Phase 15: GitHub Config & Dev Pipeline Foundation** - Add github_repo field to project DB and web app form; implement clone → code-generate → PR creation pipeline modules (completed 2026-06-20)
 - [x] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira (completed 2026-06-21)
-- [ ] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment
+- [x] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment (completed 2026-06-21)
 
 ## Phase Details
 
@@ -438,12 +438,12 @@ Plans:
   2. After a successful merge, the Jira story status is updated via Hermes/Jira MCP and a new Jira comment contains the merge commit SHA confirming the merge
   3. If no open PR is found for the story, the agent posts an informative Jira comment explaining what was searched and that no PR was found — the pipeline does not raise an unhandled exception
 
-**Plans:** 0/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
-- [ ] 17-01-PLAN.md — find_and_merge_pr (GitHub API) + Jira status-update primitives (TDD)
-- [ ] 17-02-PLAN.md — merge_pipeline orchestrator + webhook.py merge_pr wiring (TDD)
+- [x] 17-01-PLAN.md — find_and_merge_pr (GitHub API) + Jira status-update primitives (TDD)
+- [x] 17-02-PLAN.md — merge_pipeline orchestrator + webhook.py merge_pr wiring (TDD)
 
 ---
 
@@ -470,4 +470,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 14. LLM Intent Router | 2/2 | Complete   | 2026-06-20 |
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
-| 17. PR Merge Pipeline | 0/2 | Planned    |  |
+| 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
