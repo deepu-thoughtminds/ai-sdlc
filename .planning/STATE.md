@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: GitHub Dev Pipeline & LLM Intent Routing
-status: completed
+status: executing
 stopped_at: context exhaustion at 81% (2026-06-20)
-last_updated: "2026-06-21T02:20:16.680Z"
-last_activity: 2026-06-21 -- Phase 16 marked complete
+last_updated: "2026-06-21T02:42:00.565Z"
+last_activity: 2026-06-21 -- Phase 17 execution started
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
+  total_plans: 8
   completed_plans: 6
   percent: 75
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-20)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 16 — dev-pipeline-integration
+**Current focus:** Phase 17 — pr-merge-pipeline
 
 ## Current Position
 
-Phase: 16 — COMPLETE
+Phase: 17 (pr-merge-pipeline) — EXECUTING
 Plan: 1 of 2
-Status: Phase 16 complete
-Last activity: 2026-06-21 -- Phase 16 marked complete
+Status: Executing Phase 17
+Last activity: 2026-06-21 -- Phase 17 execution started
 
 ```
 v1.5 progress: [          ] 0% (0/4 phases)

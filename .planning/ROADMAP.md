@@ -438,9 +438,10 @@ Plans:
   2. After a successful merge, the Jira story status is updated via Hermes/Jira MCP and a new Jira comment contains the merge commit SHA confirming the merge
   3. If no open PR is found for the story, the agent posts an informative Jira comment explaining what was searched and that no PR was found — the pipeline does not raise an unhandled exception
 
-**Plans:** 2 plans
+**Plans:** 0/2 plans executed
 
 Plans:
+
 - [ ] 17-01-PLAN.md — find_and_merge_pr (GitHub API) + Jira status-update primitives (TDD)
 - [ ] 17-02-PLAN.md — merge_pipeline orchestrator + webhook.py merge_pr wiring (TDD)
 
@@ -469,4 +470,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 14. LLM Intent Router | 2/2 | Complete   | 2026-06-20 |
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
-| 17. PR Merge Pipeline | 0/? | Not started | - |
+| 17. PR Merge Pipeline | 0/2 | Planned    |  |
