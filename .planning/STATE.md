@@ -2,14 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
-status: planning
-last_updated: "2026-06-21T11:24:06.751Z"
-last_activity: 2026-06-21
+status: executing
+stopped_at: context exhaustion at 77% (2026-06-21)
+last_updated: "2026-06-21T14:30:21.839Z"
+last_activity: 2026-06-21 -- Phase 18 execution started
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 2
   percent: 0
 ---
 
@@ -17,17 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-20)
+See: .planning/PROJECT.md (updated 2026-06-21)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 17 — pr-merge-pipeline
+**Current focus:** Phase 18 — codebase-scan-service
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-06-21 — Milestone v1.6 started
+Phase: 18 (codebase-scan-service) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 18
+Last activity: 2026-06-21 -- Phase 18 execution started
 
 ## Milestone History
 
@@ -38,7 +39,8 @@ Last activity: 2026-06-21 — Milestone v1.6 started
 | v1.2 hermes-freellmapi | 1 (Phase 6) | 2 | Complete | 2026-06-18 |
 | v1.3 hermes-mcp-agent | 3 (Phases 7-9) | 3 | Complete | 2026-06-19 |
 | v1.4 smart-architecture | 4 (Phases 10-13) | 2026-06-19 | Complete | All 13 phases, all 24 plans done |
-| v1.5 github-dev-pipeline | 4 (Phases 14-17) | TBD | In Progress | — |
+| v1.5 github-dev-pipeline | 4 (Phases 14-17) | TBD | Complete | 2026-06-21 |
+| v1.6 context-aware-codebase-scanning | 4 (Phases 18-21) | TBD | In Progress | — |
 
 ## Performance Metrics
 
@@ -137,10 +139,15 @@ Recent decisions affecting current work:
 - [v1.5 roadmap]: Dev pipeline branch name convention is jarvis/issue-{key}; PR opened against main via GitHub API with stored token (DEVPIPE-04, Phase 15)
 - [v1.5 roadmap]: DEVPIPE-01 reads Confluence architecture URL from ticket comment history (posted by architecture pipeline); fetches page via Hermes Confluence MCP client (Phase 16)
 - [v1.5 roadmap]: PRMERGE-01 locates PR by branch pattern jarvis/issue-{key} or PR title match; merges to main; posts merge commit SHA to Jira comment (Phase 17)
+- [v1.6 roadmap]: Codebase scan uses git clone + directory tree walk + targeted file reads — no LLM; output is a structured markdown file committed directly to main as .hermes/codebase.md (Phase 18)
+- [v1.6 roadmap]: Scan triggered automatically on project onboarding when github_repo is saved — no separate user action required (SCAN-01, Phase 18)
+- [v1.6 roadmap]: Snapshot refresh hooks into merge_pipeline.py post-merge path (SNAPSHOT-01, Phase 19); read path degrades gracefully when file absent (SNAPSHOT-02, Phase 19)
+- [v1.6 roadmap]: describe_pipeline.py and architecture_pipeline.py both read .hermes/codebase.md via GitHub API before their LLM calls; during dev pipeline the local clone path can also be used (Phases 20-21)
+- [v1.6 roadmap]: Architecture pipeline passes codebase context to both the complexity classifier call and the generation call in a single read operation (ARCHCTX-01, Phase 21)
 
 ### Pending Todos
 
-None — v1.5 roadmap created; ready to begin Phase 14 planning.
+None — v1.6 roadmap created; ready to begin Phase 18 planning.
 
 ### Quick Tasks Completed
 
@@ -161,10 +168,13 @@ None.
 | v1.4.x | Override trigger @jarvis architecture force-complex / force-simple | Deferred | v1.4 planning |
 | v1.5 | Auto-chain architecture generation after @jarvis describe approval | Deferred | v1.4 planning |
 | v1.5 | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | **Done** (quick task 260619-hlp, 2026-06-19) | v1.4 planning |
+| v1.6.x | On-demand refresh trigger (@jarvis refresh codebase) | Deferred | v1.6 planning |
+| v1.6.x | Diff-based incremental scan (re-scan only changed files) | Deferred | v1.6 planning |
+| v2+ | Codebase embedding / vector search | Deferred | v1.6 planning |
 
 ## Session Continuity
 
-Last session: 2026-06-21T08:45:32.900Z
-Stopped at: context exhaustion at 75% (2026-06-21)
+Last session: 2026-06-21T14:30:21.833Z
+Stopped at: context exhaustion at 77% (2026-06-21)
 Resume file: None
-Next action: `/gsd-plan-phase 14` — plan Phase 14: LLM Intent Router
+Next action: `/gsd-plan-phase 18` — plan Phase 18: Codebase Scan Service
