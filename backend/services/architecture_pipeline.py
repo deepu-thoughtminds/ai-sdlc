@@ -75,6 +75,11 @@ def _parse_sections(llm_output: str, section_names: list[str]) -> dict[str, str]
 
     def _flush() -> None:
         if current_section is not None and current_section in result:
+            if result[current_section]:
+                logger.warning(
+                    "_parse_sections: duplicate heading %r — overwriting previous content",
+                    current_section,
+                )
             result[current_section] = "\n".join(accumulated).strip()
 
     for line in lines:
@@ -88,6 +93,11 @@ def _parse_sections(llm_output: str, section_names: list[str]) -> dict[str, str]
                 if name.lower() == heading.lower():
                     current_section = name
                     break
+            if current_section is None:
+                logger.warning(
+                    "_parse_sections: unrecognised heading %r — content will be dropped",
+                    heading,
+                )
         else:
             accumulated.append(line)
 
