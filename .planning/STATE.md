@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
 status: executing
-stopped_at: Completed 18-04-PLAN.md
-last_updated: "2026-06-21T17:41:22.037Z"
-last_activity: 2026-06-21 -- Phase 18 execution started
+stopped_at: Completed Phase 19 Plan 01 post-merge codebase re-scan hook
+last_updated: "2026-06-22T03:13:47.326Z"
+last_activity: 2026-06-22 -- Phase 19 execution started
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
-  percent: 25
+  completed_phases: 2
+  total_plans: 6
+  completed_plans: 6
+  percent: 50
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-21)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 18 — codebase-scan-service
+**Current focus:** Phase 19 — snapshot-refresh-read-fallback
 
 ## Current Position
 
-Phase: 18 (codebase-scan-service) — EXECUTING
+Phase: 19 (snapshot-refresh-read-fallback) — EXECUTING
 Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-06-21 -- Phase 18 execution started
+Last activity: 2026-06-22 -- Phase 19 execution started
 
 ## Milestone History
 
@@ -46,7 +46,7 @@ Last activity: 2026-06-21 -- Phase 18 execution started
 
 **Velocity:**
 
-- Total plans completed: 16
+- Total plans completed: 20
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -62,6 +62,7 @@ Last activity: 2026-06-21 -- Phase 18 execution started
 | 06-hermes-llm-client | 2 | ~6 min | ~3 min |
 | 15 | 2 | - | - |
 | 17 | 2 | - | - |
+| 18 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -82,6 +83,8 @@ Last activity: 2026-06-21 -- Phase 18 execution started
 | Phase 13 P01 | 8 | 1 tasks | 1 files |
 | Phase 13 P02 | 9min | 2 tasks | 5 files |
 | Phase 18-codebase-scan-service P04 | 8 | 2 tasks | 2 files |
+| Phase 19-snapshot-refresh-read-fallback P01 | 3min | 1 tasks | 2 files |
+| Phase 19-snapshot-refresh-read-fallback P02 | 2min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -146,6 +149,8 @@ Recent decisions affecting current work:
 - [v1.6 roadmap]: describe_pipeline.py and architecture_pipeline.py both read .hermes/codebase.md via GitHub API before their LLM calls; during dev pipeline the local clone path can also be used (Phases 20-21)
 - [v1.6 roadmap]: Architecture pipeline passes codebase context to both the complexity classifier call and the generation call in a single read operation (ARCHCTX-01, Phase 21)
 - [Phase ?]: RuntimeError message format uses only owner/repo/status_code — github_token never interpolated (T-18-01 compliance, 18-04)
+- [Phase 19-snapshot-refresh-read-fallback]: Post-merge re-scan hook uses isolated try/except; scan failure never flips state_row.status or modifies Jira comment body (T-19-02 compliance, SNAPSHOT-01)
+- [Phase ?]: Phase 19-02 decision
 
 ### Pending Todos
 
@@ -176,7 +181,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-21T16:47:17.959Z
-Stopped at: Completed 18-04-PLAN.md
+Last session: 2026-06-22T02:37:23.447Z
+Stopped at: Completed Phase 19 Plan 01 post-merge codebase re-scan hook
 Resume file: None
 Next action: `/gsd-plan-phase 18` — plan Phase 18: Codebase Scan Service

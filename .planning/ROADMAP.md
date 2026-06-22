@@ -43,7 +43,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 16: Dev Pipeline Integration** - Wire @jarvis start coding end-to-end: read Confluence architecture from comment history, run dev pipeline, post PR link to Jira (completed 2026-06-21)
 - [x] **Phase 17: PR Merge Pipeline** - Wire @jarvis merge pr trigger: find open PR by branch pattern, merge via GitHub API, update Jira story status, post merge commit to Jira comment (completed 2026-06-21)
 - [x] **Phase 18: Codebase Scan Service** - On project onboarding, clone the repo and walk the directory tree with targeted file reads; commit structured `.hermes/codebase.md` to main branch (completed 2026-06-21)
-- [ ] **Phase 19: Snapshot Refresh & Read Fallback** - After successful PR merge, re-run codebase scan and push updated snapshot; read path degrades gracefully when snapshot does not exist
+- [x] **Phase 19: Snapshot Refresh & Read Fallback** - After successful PR merge, re-run codebase scan and push updated snapshot; read path degrades gracefully when snapshot does not exist (completed 2026-06-22)
 - [ ] **Phase 20: Describe Pipeline Context** - describe_pipeline.py reads `.hermes/codebase.md` via GitHub API before LLM call; generated story elaborations reference real module names and file paths
 - [ ] **Phase 21: Architecture Pipeline Context** - architecture_pipeline.py reads `.hermes/codebase.md` and includes it in the complexity classifier and architecture generation LLM calls; outputs reference actual components and integration points
 
@@ -497,8 +497,8 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 19-01-PLAN.md — Post-merge codebase re-scan hook in merge_pipeline.run() (SNAPSHOT-01)
-- [ ] 19-02-PLAN.md — Standalone get_codebase_snapshot() reader with graceful 404/error fallback (SNAPSHOT-02)
+- [x] 19-01-PLAN.md — Post-merge codebase re-scan hook in merge_pipeline.run() (SNAPSHOT-01)
+- [x] 19-02-PLAN.md — Standalone get_codebase_snapshot() reader with graceful 404/error fallback (SNAPSHOT-02)
 
 ### Phase 20: Describe Pipeline Context
 
@@ -511,7 +511,13 @@ Plans:
   1. Before calling freellmapi to generate the elaborated description, `describe_pipeline.py` fetches `.hermes/codebase.md` via the GitHub API and includes its content in the LLM prompt
   2. A generated story elaboration for a project with a committed codebase snapshot contains at least one real module name or file path from the actual repo rather than a generic placeholder such as "the existing services" or "the current codebase"
 
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+
+**Wave 1**
+
+- [ ] 20-01-PLAN.md — Replace get_codebase_summary with get_codebase_snapshot in describe_pipeline; update tests; add snapshot content assertion (DESCCTX-01, DESCCTX-02)
 
 ### Phase 21: Architecture Pipeline Context
 
@@ -553,6 +559,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
 | 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
 | 18. Codebase Scan Service | 4/4 | Complete    | 2026-06-22 |
-| 19. Snapshot Refresh & Read Fallback | 0/? | Not started | - |
-| 20. Describe Pipeline Context | 0/? | Not started | - |
+| 19. Snapshot Refresh & Read Fallback | 2/2 | Complete   | 2026-06-22 |
+| 20. Describe Pipeline Context | 0/1 | Not started | - |
 | 21. Architecture Pipeline Context | 0/? | Not started | - |
