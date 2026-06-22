@@ -2,10 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
+current_phase: 21
+current_phase_name: architecture-pipeline-context
 status: executing
-stopped_at: context exhaustion at 78% (2026-06-22)
-last_updated: "2026-06-22T07:19:38.324Z"
-last_activity: 2026-06-22 -- Phase 21 plan 01 executed and complete
+stopped_at: context exhaustion at 75% (2026-06-22)
+last_updated: "2026-06-22T13:33:15.355Z"
+last_activity: 2026-06-22
+last_activity_desc: Phase 21 plan 01 executed and complete
 progress:
   total_phases: 4
   completed_phases: 4
@@ -165,6 +168,7 @@ None — v1.6 roadmap created; ready to begin Phase 18 planning.
 |----|--------------|------|
 | 260619-hlp | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | 2026-06-19 |
 | 260619-o0v | Auto-trigger description generation on Story creation (jira:issue_created webhook); replace keyword-based approval detection with `@jarvis approve story description` / `@jarvis approve architecture` mentions; remove `@jarvis describe` comment trigger | 2026-06-19 |
+| 260622-hye | Enhance dev pipeline: inject relevant file contents into codegen prompt (read_relevant_files); add Claude Code CLI executor used when CLAUDE_API_KEY set, falls back to freellmapi otherwise | 2026-06-22 |
 
 ### Blockers/Concerns
 
@@ -184,7 +188,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-22T07:14:29.501Z
-Stopped at: Phase 21 plan 01 executed and complete (2026-06-22)
+Last session: 2026-06-22T13:38:17.694Z
+Stopped at: Quick task 260622-hye closed out (SUMMARY.md + STATE.md row written); session resumed
 Resume file: None
-Next action: Milestone v1.6 (Context-Aware Codebase Scanning) complete — all 4 phases (18-21) done. Run `/gsd-complete-milestone` or start next milestone planning.
+Next action: Run `/gsd-complete-milestone` to archive v1.6 and prepare next milestone.
