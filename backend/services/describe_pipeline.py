@@ -1,24 +1,31 @@
-"""Description elaboration pipeline — DESC-01 + DESC-02.
+"""Description elaboration pipeline — DESCCTX-01 + DESCCTX-02.
 
 Implements the describe stage pipeline:
-  1. (DESC-01) Fetch structured codebase summary from GitHub via graphify_service
-  2. (DESC-02) Fetch active sprint backlog from Jira REST API via hermes_client
-  3. Assemble a prompt combining ticket info + codebase context + sprint context
+  1. (DESCCTX-01) Read codebase snapshot from .hermes/codebase.md via get_codebase_snapshot()
+  2. Fetch active sprint backlog from Jira REST API via hermes_client
+  3. Assemble a prompt combining ticket info + snapshot context + sprint context
   4. Route to freellmapi via route_request("describe", prompt) — now in HEAVY_STAGES
   5. Return the generated description string
+
+Replaces graphify_service with codebase_snapshot_reader for codebase context (Phase 20).
 
 Threat mitigations:
   T-03-02: Prompt assembled inline — decrypted token is only used for hermes_client
            calls, not included in the prompt string; only issue_key is logged.
   T-03-06: post_sprint_backlog handles all errors and returns [].
+  T-20-01: github_repo slug decrypted with decrypt_credential; decrypted value
+           never logged — only issue_key is logged. github_token used only for
+           get_codebase_snapshot API call, not included in prompt.
+  T-20-02: Snapshot text truncated to 8000 chars to prevent token overrun.
+           When snapshot is None (unavailable), pipeline continues with fallback text.
 """
 
 import logging
 import os
 
 from models.project import Project
+from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.crypto import decrypt_credential
-from services.graphify_service import get_codebase_summary
 from services.hermes_client import post_sprint_backlog
 from services.llm_router import route_request
 
@@ -46,14 +53,19 @@ async def run(event: object, project: Project) -> str:
     Returns:
         The LLM-generated description string.
     """
-    # --- Step 1 (DESC-01): Fetch codebase summary ---
+    # --- Step 1 (DESCCTX-01): Fetch codebase snapshot from .hermes/codebase.md ---
     try:
         github_token = decrypt_credential(project.github_token) if project.github_token else ""
     except Exception:
         github_token = ""
 
-    github_url = getattr(project, "github_url", None) or ""
-    summary = get_codebase_summary(github_url, github_token)
+    # T-20-01: decrypt github_repo slug; decrypted value never logged
+    try:
+        github_repo = decrypt_credential(project.github_repo)
+    except Exception:
+        github_repo = ""
+
+    snapshot = await get_codebase_snapshot(github_repo, github_token)
 
     # --- Step 2 (DESC-02): Fetch sprint backlog ---
     try:
@@ -72,9 +84,8 @@ async def run(event: object, project: Project) -> str:
         or "(no active sprint tickets)"
     )
 
-    # Codebase context (truncate to avoid token limit overrun)
-    codebase_text = summary.directory_tree[:3000] if summary.directory_tree else "(no codebase context available)"
-    key_files_text = "\n".join(summary.key_files[:10]) if summary.key_files else "(none)"
+    # T-20-02: truncate to 8000 chars to prevent token overrun; fallback when None
+    codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
 
     # Ticket info from the event
     issue_key = getattr(event.issue, "key", "UNKNOWN")  # type: ignore[union-attr]
@@ -91,11 +102,11 @@ async def run(event: object, project: Project) -> str:
         f"Summary: {ticket_title}\n"
         f"Current description / trigger comment:\n{trigger_comment}\n\n"
         f"Sprint backlog context (related tickets in same sprint):\n{backlog_text}\n\n"
-        f"Codebase structure (for technical context):\n{codebase_text}\n\n"
-        f"Key Python modules:\n{key_files_text}\n\n"
+        f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
         f"Write an elaborated feature description (3-5 paragraphs) covering: user value, "
         f"acceptance criteria, technical scope, and any integration points visible in the "
-        f"codebase. Output only the description text."
+        f"codebase. Reference specific module names and file paths from the codebase context "
+        f"where relevant. Output only the description text."
     )
 
     # --- Step 4: Route to LLM (HEAVY_STAGES includes "describe") ---
