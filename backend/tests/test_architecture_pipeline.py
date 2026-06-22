@@ -82,6 +82,8 @@ def _make_mock_project():
     p.jira_token = encrypt_credential("jira-secret-token")
     p.confluence_url = "https://confluence.example.com"
     p.confluence_token = encrypt_credential("conf-secret-token")
+    p.github_repo = encrypt_credential("acme/my-app")
+    p.github_token = encrypt_credential("ghp-test-token")
     return p
 
 
@@ -145,6 +147,11 @@ async def test_run_complex_path():
                 return_value=("complex", "touches 3 services"),
             ),
             patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
+            ),
+            patch(
                 "services.architecture_pipeline.route_request",
                 return_value=_make_stub_llm_response_complex(),
             ),
@@ -198,6 +205,11 @@ async def test_run_simple_path():
             patch(
                 "services.architecture_pipeline.classify_complexity",
                 return_value=("small", "single service change"),
+            ),
+            patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
             ),
             patch(
                 "services.architecture_pipeline.route_request",
@@ -270,6 +282,11 @@ async def test_run_draft_content_is_human_readable():
             patch(
                 "services.architecture_pipeline.classify_complexity",
                 return_value=("small", "single service"),
+            ),
+            patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
             ),
             patch(
                 "services.architecture_pipeline.route_request",
@@ -349,6 +366,11 @@ async def test_run_creates_pipeline_state_complete():
                 return_value=("complex", "multi-service"),
             ),
             patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
+            ),
+            patch(
                 "services.architecture_pipeline.route_request",
                 return_value=_make_stub_llm_response_complex(),
             ),
@@ -402,6 +424,11 @@ async def test_run_graceful_on_confluence_failure():
                 return_value=("complex", "multi-service"),
             ),
             patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
+            ),
+            patch(
                 "services.architecture_pipeline.route_request",
                 return_value=_make_stub_llm_response_complex(),
             ),
@@ -449,6 +476,11 @@ async def test_run_calls_llm_with_architecture_stage():
             patch(
                 "services.architecture_pipeline.classify_complexity",
                 return_value=("small", "single service"),
+            ),
+            patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
             ),
             patch(
                 "services.architecture_pipeline.route_request",
@@ -512,6 +544,11 @@ async def test_run_posts_jira_comment():
                 return_value=("small", "simple"),
             ),
             patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
+            ),
+            patch(
                 "services.architecture_pipeline.route_request",
                 return_value=_make_stub_llm_response_simple(),
             ),
@@ -540,5 +577,106 @@ async def test_run_posts_jira_comment():
         mock_post.assert_called_once()
         call_body = mock_post.call_args[0][4]  # 5th positional arg is the comment body
         assert "PROJ-1" in call_body, "comment body must reference the issue key"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_includes_snapshot_in_architecture_prompt():
+    """ARCHCTX-02: the codebase snapshot fetched in run() must appear in the
+    architecture generation prompt passed to route_request.
+    """
+    db = _make_db()
+    try:
+        with (
+            patch(
+                "services.architecture_pipeline.classify_complexity",
+                return_value=("small", "single service"),
+            ),
+            patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="SENTINEL_COMPONENT: backend/services/my_unique_module.py",
+            ),
+            patch(
+                "services.architecture_pipeline.route_request",
+                return_value=_make_stub_llm_response_simple(),
+            ) as mock_rr,
+            patch(
+                "services.architecture_pipeline.generate_diagram",
+                return_value="<mxGraphModel/>",
+            ),
+            patch(
+                "services.architecture_pipeline.generate_viewer_url",
+                return_value="https://diagrams.net/view",
+            ),
+            patch(
+                "services.architecture_pipeline.publish_architecture",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            from services.architecture_pipeline import run
+
+            await run(_make_mock_project(), "PROJ-1", "Fix", "desc", db)
+
+        prompt = mock_rr.call_args[0][1]
+        assert "my_unique_module.py" in prompt
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_passes_snapshot_to_complexity_classifier():
+    """ARCHCTX-01: the snapshot fetched in run() must be passed to
+    classify_complexity() as the codebase_snapshot keyword argument.
+    """
+    db = _make_db()
+    try:
+        with (
+            patch(
+                "services.architecture_pipeline.get_codebase_snapshot",
+                new_callable=AsyncMock,
+                return_value="snapshot-content-xyz",
+            ),
+            patch(
+                "services.architecture_pipeline.classify_complexity",
+                return_value=("small", "one service"),
+            ) as mock_classify,
+            patch(
+                "services.architecture_pipeline.route_request",
+                return_value=_make_stub_llm_response_simple(),
+            ),
+            patch(
+                "services.architecture_pipeline.generate_diagram",
+                return_value="<mxGraphModel/>",
+            ),
+            patch(
+                "services.architecture_pipeline.generate_viewer_url",
+                return_value="https://diagrams.net/view",
+            ),
+            patch(
+                "services.architecture_pipeline.publish_architecture",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
+            patch(
+                "services.architecture_pipeline.hermes_post_comment",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            from services.architecture_pipeline import run
+
+            await run(_make_mock_project(), "PROJ-1", "Fix", "desc", db)
+
+        assert mock_classify.call_args[1].get("codebase_snapshot") == "snapshot-content-xyz" or (
+            mock_classify.call_args[0][-1] == "snapshot-content-xyz"
+        )
     finally:
         db.close()

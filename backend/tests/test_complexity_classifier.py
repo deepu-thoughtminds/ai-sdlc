@@ -190,3 +190,37 @@ def test_classify_persists_to_pipeline_state_when_row_exists():
     assert saved is not None
     assert saved.complexity == "small"
     assert saved.complexity_rationale is not None
+
+
+def test_build_classify_prompt_includes_snapshot_when_provided():
+    """ARCHCTX-01: codebase_snapshot content is appended to the prompt when provided."""
+    prompt = _build_classify_prompt(
+        "PROJ-1", "My summary", "My description",
+        codebase_snapshot="# Real file: src/api.py\nSome content",
+    )
+
+    assert "src/api.py" in prompt
+
+
+def test_build_classify_prompt_no_snapshot_when_none():
+    """Backward compatible: no codebase_snapshot means no codebase context section."""
+    prompt = _build_classify_prompt("PROJ-1", "My summary", "My description")
+
+    assert "Codebase context" not in prompt
+
+
+def test_classify_complexity_passes_snapshot_to_prompt():
+    """ARCHCTX-01: classify_complexity() threads codebase_snapshot into the LLM prompt."""
+    db = _make_db()
+    mock_resp = _make_llm_response(
+        {"classification": "small", "rationale": "one comp", "component_count": 1}
+    )
+    with patch("services.complexity_classifier.route_request", return_value=mock_resp) as mock_rr:
+        classify_complexity(
+            "PROJ-1", "summary", "desc", db, project_id=1,
+            codebase_snapshot="# src/unique_module.py content",
+        )
+
+    mock_rr.assert_called_once()
+    prompt = mock_rr.call_args[0][1]
+    assert "unique_module.py" in prompt
