@@ -4,12 +4,12 @@ milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
 status: executing
 stopped_at: Completed Phase 19 Plan 01 post-merge codebase re-scan hook
-last_updated: "2026-06-22T03:13:47.326Z"
-last_activity: 2026-06-22 -- Phase 19 execution started
+last_updated: "2026-06-22T03:15:51.465Z"
+last_activity: 2026-06-22 -- Phase 20 execution started
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 6
+  total_plans: 7
   completed_plans: 6
   percent: 50
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-21)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 19 — snapshot-refresh-read-fallback
+**Current focus:** Phase 20 — describe-pipeline-context
 
 ## Current Position
 
-Phase: 19 (snapshot-refresh-read-fallback) — EXECUTING
-Plan: 2 of 2
-Status: Ready to execute
-Last activity: 2026-06-22 -- Phase 19 execution started
+Phase: 20 (describe-pipeline-context) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 20
+Last activity: 2026-06-22 -- Phase 20 execution started
 
 ## Milestone History
 
