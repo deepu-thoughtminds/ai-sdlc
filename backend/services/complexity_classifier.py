@@ -72,8 +72,8 @@ def _build_classify_prompt(
         '- "small": the change touches fewer than 2 distinct components, services, '
         "or integration points\n\n"
         f"Ticket: {issue_key}\n"
-        f"Summary: {summary}\n"
-        f"Description: {description}\n\n"
+        f"Summary: {summary[:2000]}\n"
+        f"Description: {description[:4000]}\n\n"
         "Respond with ONLY valid JSON in this exact schema:\n"
         "{\n"
         '  "classification": "small" or "complex",\n'

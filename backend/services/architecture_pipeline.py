@@ -274,12 +274,13 @@ async def _run_complex(
     codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
 
     # Build prompt for complex architecture.
+    # T-WR-02: truncate summary/description to prevent token overrun (consistent with T-21-02 for snapshot).
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
         "the following Jira ticket. Do NOT generate multiple options.\n\n"
         f"Ticket: {issue_key}\n"
-        f"Summary: {issue_summary}\n"
-        f"Description: {issue_description}\n\n"
+        f"Summary: {issue_summary[:2000]}\n"
+        f"Description: {issue_description[:4000]}\n\n"
         f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
         "Reference specific module names and file paths from the codebase context "
         "where relevant.\n\n"
@@ -399,12 +400,13 @@ async def _run_simple(
     codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
 
     # Build prompt for simple architecture.
+    # T-WR-02: truncate summary/description to prevent token overrun (consistent with T-21-02 for snapshot).
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
         "the following Jira ticket. Do NOT generate multiple options.\n\n"
         f"Ticket: {issue_key}\n"
-        f"Summary: {issue_summary}\n"
-        f"Description: {issue_description}\n\n"
+        f"Summary: {issue_summary[:2000]}\n"
+        f"Description: {issue_description[:4000]}\n\n"
         f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
         "Reference specific module names and file paths from the codebase context "
         "where relevant.\n\n"
