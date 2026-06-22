@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from models.pipeline_state import PipelineState
 from models.project import Project
+from services import codebase_scan_service
 from services.crypto import decrypt_credential
 from services.hermes_client import (
     post_comment as hermes_post_comment,
@@ -189,6 +190,27 @@ async def run(
             issue_key,
             AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
         )
+
+        # Post-merge re-scan hook (SNAPSHOT-01): refresh .hermes/codebase.md on main.
+        # Isolated in its own try/except — a scan failure must NEVER affect
+        # state_row.status, the posted Jira comment, or db.commit() of Step 7.
+        # T-19-01: exception text logged server-side only; never interpolated into
+        #          comment_text or any value passed to hermes_post_comment.
+        # T-19-03: RuntimeError from codebase_scan_service (e.g. GitHub API timeout)
+        #          is caught here; the merge outcome is unaffected.
+        try:
+            await codebase_scan_service.run(github_repo, github_token, project.id, db)
+            logger.info(
+                "Codebase snapshot refresh triggered after merge for project id=%d",
+                project.id,
+            )
+        except Exception as scan_exc:
+            logger.warning(
+                "Post-merge codebase snapshot refresh failed for project id=%s: %s"
+                " — merge still succeeded",
+                project.id,
+                scan_exc,
+            )
 
         # Step 7: Finalise state row.
         state_row.status = "complete"
