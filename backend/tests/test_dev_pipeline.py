@@ -1,6 +1,6 @@
 """TDD tests for dev_pipeline.run() — DEVPIPE-01, DEVPIPE-05.
 
-Tests (6 total):
+Tests (7 total):
 1. test_run_no_confluence_url — find_latest_architecture_url returns None → informative
    comment posted, state status="complete", apply_commit_push_and_open_pr NOT called.
 2. test_run_success — Confluence URL found, codegen returns changes → clone/codegen/PR all
@@ -13,6 +13,8 @@ Tests (6 total):
    failure notification comment posted via hermes_post_comment.
 6. test_run_draft_content_contains_pr_url — PipelineState.draft_content after successful run
    is a plain string containing "PR ready" and the PR html_url, not JSON.
+7. test_run_derives_github_url_from_repo_when_missing — github_url is None on project →
+   get_codebase_summary is called with URL derived from github_repo slug, not empty string.
 
 Uses StaticPool in-memory DB; unittest.mock.patch for all external dependencies.
 
@@ -332,4 +334,76 @@ async def test_run_draft_content_contains_pr_url():
     assert not state_row.draft_content.startswith("{")
     assert "PR ready" in state_row.draft_content
     assert pr.html_url in state_row.draft_content
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_derives_github_url_from_repo_when_missing():
+    """Root-cause regression test: github_url=None → derived from github_repo slug.
+
+    When project.github_url is None (the common case — github_url was never
+    added to ProjectCreate and is therefore NULL for all existing projects),
+    dev_pipeline must construct a valid GitHub URL from the decrypted github_repo
+    slug and pass it to get_codebase_summary.  Without this, get_codebase_summary
+    receives an empty string, returns an empty directory tree, and the LLM has no
+    knowledge of existing files — causing it to create new files (e.g. LoginPage.jsx)
+    instead of editing existing ones (LoginPage.tsx).
+    """
+    from services.dev_pipeline import run
+
+    project = _make_mock_project()
+    project.github_url = None  # Simulate the real-world case: never set on project
+
+    db = TestingSession()
+    state_row = PipelineState(
+        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
+    )
+    db.add(state_row)
+    db.commit()
+
+    pr = _make_pull_request()
+    codebase_summary = MagicMock(directory_tree="src/pages/LoginPage.tsx\nsrc/App.tsx")
+
+    with (
+        patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=[
+            {"body": "https://conf.example.com/wiki/spaces/PROJ/pages/1"}
+        ]),
+        patch("services.dev_pipeline.find_latest_architecture_url",
+              return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1"),
+        patch("services.dev_pipeline.get_confluence_page_content",
+              new_callable=AsyncMock, return_value="content"),
+        patch("services.dev_pipeline.get_codebase_summary",
+              return_value=codebase_summary) as mock_get_summary,
+        patch("services.dev_pipeline.clone_repository", return_value=_make_cloned_repo()),
+        patch("services.dev_pipeline.generate_code_changes",
+              return_value=[_make_file_change()]) as mock_codegen,
+        patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
+        patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.dev_pipeline.shutil.rmtree"),
+    ):
+        result = await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    # get_codebase_summary must have been called with a non-empty derived URL
+    mock_get_summary.assert_called_once()
+    called_github_url = mock_get_summary.call_args[0][0]
+    assert called_github_url, "github_url passed to get_codebase_summary must not be empty"
+    assert "github.com" in called_github_url, (
+        f"Expected derived GitHub URL, got: {called_github_url!r}"
+    )
+    assert "owner/repo" in called_github_url, (
+        f"Expected owner/repo in derived URL, got: {called_github_url!r}"
+    )
+
+    # The directory_tree from the summary must reach generate_code_changes
+    # (codebase_context arg, position 4, index 3 zero-based after issue_key/summary/description/arch)
+    mock_codegen.assert_called_once()
+    codegen_codebase_arg = mock_codegen.call_args[0][4]
+    assert "LoginPage.tsx" in codegen_codebase_arg, (
+        "directory_tree containing LoginPage.tsx must be passed to generate_code_changes "
+        f"as codebase_context, got: {codegen_codebase_arg!r}"
+    )
+
+    assert "PR ready" in result
+    db.refresh(state_row)
+    assert state_row.status == "complete"
     db.close()

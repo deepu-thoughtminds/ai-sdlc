@@ -149,7 +149,18 @@ async def run(
         # Step 5: Build codebase context and clone the repository.
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
+        # Derive github_url from github_repo slug when the project record does not
+        # carry an explicit github_url.  github_repo is always stored as an
+        # "owner/repo" slug (validated by ProjectCreate pattern), so constructing
+        # the HTTPS URL from it is safe.  This ensures get_codebase_summary can
+        # fetch the directory tree even for projects onboarded before github_url
+        # was added to the schema, fixing the root cause of the LLM creating new
+        # files instead of editing existing ones (empty codebase_context → LLM has
+        # no knowledge of existing file paths).
         github_url = getattr(project, "github_url", None) or ""
+        if not github_url and github_repo and "/" in github_repo:
+            github_host = os.environ.get("GITHUB_HOST", "github.com")
+            github_url = f"https://{github_host}/{github_repo}"
         codebase_context = get_codebase_summary(github_url, github_token)
         directory_tree = codebase_context.directory_tree if codebase_context else ""
 
