@@ -1,33 +1,35 @@
 """TDD tests for describe_pipeline.run().
 
-Tests (3 total):
-1. test_run_returns_generated_description - mocked dependencies; run() returns LLM content string
-2. test_run_with_no_sprint_backlog - empty backlog; run() completes and returns non-empty string
-3. test_run_with_graphify_error - empty StructuredCodebaseSummary; run() still calls route_request
+Tests (4 total):
+1. test_run_returns_generated_description — mocked dependencies; run() returns LLM content string
+2. test_run_with_no_sprint_backlog — empty backlog; run() completes returns non-empty string
+3. test_run_with_no_codebase_snapshot — get_codebase_snapshot returns None; run() still calls route_request
+4. test_run_includes_snapshot_content_in_prompt — snapshot content (file paths) appears in LLM prompt (DESCCTX-02)
 
-All dependencies (get_codebase_summary, post_sprint_backlog, route_request) are mocked via unittest.mock.
+Dependencies (get_codebase_snapshot, post_sprint_backlog, route_request) mocked via unittest.mock.
 """
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
 
-# Set up test encryption key before any imports
+# Set up test encryption key before any module-level imports that read env vars
 _TEST_KEY = Fernet.generate_key().decode()
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
 os.environ.setdefault("JIRA_ACCOUNT_EMAIL", "test@example.com")
 
 
 def _make_encrypted(value: str) -> str:
-    """Encrypt a value using the test key."""
+    """Encrypt value using test key."""
     from cryptography.fernet import Fernet as _Fernet
     return _Fernet(os.environ["ENCRYPTION_KEY"].encode()).encrypt(value.encode()).decode()
 
 
 def _make_mock_project():
-    """Return a mock Project with fields needed by describe_pipeline.run()."""
+    """Return mock Project fields needed by describe_pipeline.run()."""
     project = MagicMock()
     project.id = 1
     project.name = "Test Project"
@@ -36,69 +38,87 @@ def _make_mock_project():
     project.github_url = "https://github.com/org/repo"
     project.jira_token = _make_encrypted("jira-secret-token")
     project.github_token = _make_encrypted("github-secret-token")
+    project.github_repo = _make_encrypted("org/repo")
     return project
 
 
 def _make_mock_event():
-    """Return a mock JiraCommentEvent."""
+    """Return mock JiraCommentEvent."""
     event = MagicMock()
     event.issue.key = "PROJ-42"
-    event.issue.fields = {"summary": "Add JWT authentication"}
-    event.comment.body = "@jarvis describe Add JWT login with refresh tokens"
+    event.issue.summary = "Add JWT authentication"
+    event.comment.body = "@jarvis describe Add JWT login refresh tokens"
     return event
 
 
-def _make_stub_summary():
-    """Return a StructuredCodebaseSummary with minimal data."""
-    from services.graphify_service import StructuredCodebaseSummary
-    return StructuredCodebaseSummary(
-        directory_tree="backend/main.py\nbackend/database.py",
-        key_files=["backend/main.py", "backend/database.py"],
-        module_docs={"backend/main.py": "Main FastAPI application module."},
+def _make_stub_snapshot() -> str:
+    """Return a stub codebase snapshot string."""
+    return (
+        "# Codebase Snapshot\n"
+        "## Services\n"
+        "- backend/services/describe_pipeline.py\n"
+        "- backend/services/hermes_client.py\n"
+        "- backend/services/llm_router.py\n"
     )
 
 
-def _make_stub_llm_response(content: str = "Elaborated description content."):
-    """Return a mock LLMResponse."""
-    from services.llm_router import LLMResponse
-    return LLMResponse(provider="freellmapi", content=content, model="llama3")
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+def _make_stub_llm_response(content: str):
+    """Return a stub LLM route_request response with .content attribute."""
+    stub = MagicMock()
+    stub.content = content
+    return stub
 
 
 def test_run_returns_generated_description():
-    """Mock all three dependencies; assert run() returns the LLM content string."""
-    backlog = [{"key": "PROJ-2", "summary": "Add login", "issue_type": "Story"}]
-
+    """Mocked dependencies; run() returns the LLM content string."""
     with (
-        patch("services.describe_pipeline.get_codebase_summary", return_value=_make_stub_summary()),
-        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
-        patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
-            "Elaborated: feature adds login capability with JWT tokens."
-        )),
+        patch(
+            "services.describe_pipeline.get_codebase_snapshot",
+            new_callable=AsyncMock,
+            return_value=_make_stub_snapshot(),
+        ),
+        patch(
+            "services.describe_pipeline.post_sprint_backlog",
+            new_callable=AsyncMock,
+        ) as mock_backlog,
+        patch(
+            "services.describe_pipeline.route_request",
+            return_value=_make_stub_llm_response(
+                "Elaborated: feature adds login capability with JWT tokens."
+            ),
+        ),
     ):
-        mock_backlog.return_value = backlog
+        mock_backlog.return_value = [
+            {"key": "PROJ-1", "summary": "Setup repo", "issue_type": "Task"},
+        ]
 
         import asyncio
         from services.describe_pipeline import run
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
-    assert isinstance(result, str)
-    assert result == "Elaborated: feature adds login capability with JWT tokens."
+        assert isinstance(result, str)
+        assert result == "Elaborated: feature adds login capability with JWT tokens."
 
 
 def test_run_with_no_sprint_backlog():
-    """Empty sprint backlog; run() completes and returns a non-empty string."""
+    """Empty sprint backlog; run() completes and returns non-empty string."""
     with (
-        patch("services.describe_pipeline.get_codebase_summary", return_value=_make_stub_summary()),
-        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
-        patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
-            "Feature description without sprint context."
-        )),
+        patch(
+            "services.describe_pipeline.get_codebase_snapshot",
+            new_callable=AsyncMock,
+            return_value=_make_stub_snapshot(),
+        ),
+        patch(
+            "services.describe_pipeline.post_sprint_backlog",
+            new_callable=AsyncMock,
+        ) as mock_backlog,
+        patch(
+            "services.describe_pipeline.route_request",
+            return_value=_make_stub_llm_response(
+                "Feature description without sprint context."
+            ),
+        ),
     ):
         mock_backlog.return_value = []  # Empty backlog
 
@@ -107,25 +127,31 @@ def test_run_with_no_sprint_backlog():
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
-    assert isinstance(result, str)
-    assert len(result) > 0
+        assert isinstance(result, str)
+        assert len(result) > 0
 
 
-def test_run_with_graphify_error():
-    """Empty StructuredCodebaseSummary from graphify; run() still calls route_request."""
-    from services.graphify_service import StructuredCodebaseSummary
-
-    empty_summary = StructuredCodebaseSummary()  # All empty fields
-
+def test_run_with_no_codebase_snapshot():
+    """get_codebase_snapshot returns None; run() still calls route_request (graceful degradation)."""
     with (
-        patch("services.describe_pipeline.get_codebase_summary", return_value=empty_summary),
-        patch("services.describe_pipeline.post_sprint_backlog", new_callable=AsyncMock) as mock_backlog,
-        patch("services.describe_pipeline.route_request", return_value=_make_stub_llm_response(
-            "Description even without codebase context."
-        )) as mock_route,
+        patch(
+            "services.describe_pipeline.get_codebase_snapshot",
+            new_callable=AsyncMock,
+            return_value=None,  # Snapshot unavailable
+        ),
+        patch(
+            "services.describe_pipeline.post_sprint_backlog",
+            new_callable=AsyncMock,
+        ) as mock_backlog,
+        patch(
+            "services.describe_pipeline.route_request",
+            return_value=_make_stub_llm_response(
+                "Description even without codebase context."
+            ),
+        ) as mock_route,
     ):
         mock_backlog.return_value = [
-            {"key": "PROJ-1", "summary": "Background task", "issue_type": "Task"}
+            {"key": "PROJ-1", "summary": "Background task", "issue_type": "Task"},
         ]
 
         import asyncio
@@ -133,7 +159,47 @@ def test_run_with_graphify_error():
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
-    # route_request must have been called even with empty codebase context
-    mock_route.assert_called_once()
-    assert isinstance(result, str)
-    assert len(result) > 0
+        # route_request must be called even with no codebase snapshot
+        mock_route.assert_called_once()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+def test_run_includes_snapshot_content_in_prompt():
+    """Snapshot content (real file paths) appears in the LLM prompt (DESCCTX-02)."""
+    snapshot_text = (
+        "## Services\n"
+        "- backend/services/describe_pipeline.py\n"
+        "- backend/services/hermes_client.py\n"
+    )
+
+    with (
+        patch(
+            "services.describe_pipeline.get_codebase_snapshot",
+            new_callable=AsyncMock,
+            return_value=snapshot_text,
+        ),
+        patch(
+            "services.describe_pipeline.post_sprint_backlog",
+            new_callable=AsyncMock,
+        ) as mock_backlog,
+        patch(
+            "services.describe_pipeline.route_request",
+            return_value=_make_stub_llm_response("Feature elaboration with codebase context."),
+        ) as mock_route,
+    ):
+        mock_backlog.return_value = []
+
+        import asyncio
+        from services.describe_pipeline import run
+
+        asyncio.run(run(_make_mock_event(), _make_mock_project()))
+
+        # Verify snapshot content appears in the prompt passed to route_request
+        assert mock_route.called, "route_request should have been called"
+        call_args = mock_route.call_args
+        prompt_arg = call_args[0][1]  # Second positional arg is the prompt string
+
+        assert "backend/services/describe_pipeline.py" in prompt_arg, (
+            "Snapshot content (file path) must appear in LLM prompt for DESCCTX-02"
+        )
