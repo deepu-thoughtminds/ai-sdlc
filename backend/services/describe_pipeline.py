@@ -7,7 +7,7 @@ Implements the describe stage pipeline:
   4. Route to freellmapi via route_request("describe", prompt) — now in HEAVY_STAGES
   5. Return the generated description string
 
-Replaces graphify_service with codebase_snapshot_reader for codebase context (Phase 20).
+Uses codebase_snapshot_reader for codebase context.
 
 Threat mitigations:
   T-03-02: Prompt assembled inline — decrypted token is only used for hermes_client
@@ -54,15 +54,27 @@ async def run(event: object, project: Project) -> str:
         The LLM-generated description string.
     """
     # --- Step 1 (DESCCTX-01): Fetch codebase snapshot from .hermes/codebase.md ---
+    _issue_key_early = getattr(getattr(event, "issue", None), "key", "UNKNOWN")
+
     try:
         github_token = decrypt_credential(project.github_token) if project.github_token else ""
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to decrypt github_token for issue %s — snapshot skipped: %s",
+            _issue_key_early,
+            exc,
+        )
         github_token = ""
 
     # T-20-01: decrypt github_repo slug; decrypted value never logged
     try:
         github_repo = decrypt_credential(project.github_repo)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Failed to decrypt github_repo for issue %s — snapshot skipped: %s",
+            _issue_key_early,
+            exc,
+        )
         github_repo = ""
 
     snapshot = await get_codebase_snapshot(github_repo, github_token)
@@ -92,8 +104,8 @@ async def run(event: object, project: Project) -> str:
     # Use .summary directly — JiraIssue now has summary as a top-level field
     # (flattened from issue.fields.summary in the webhook model validator)
     ticket_title = getattr(event.issue, "summary", None) or issue_key  # type: ignore[union-attr]
-    # T-03-02: comment body from Jira (validated at webhook layer, max 10000 chars)
-    trigger_comment = getattr(event.comment, "body", "") or ""  # type: ignore[union-attr]
+    # T-03-02: comment body from Jira; cap here as a defence-in-depth guard
+    trigger_comment = (getattr(event.comment, "body", "") or "")[:4000]  # type: ignore[union-attr]
 
     prompt = (
         f"You are a senior product manager. Elaborate the following Jira ticket into a clear, "

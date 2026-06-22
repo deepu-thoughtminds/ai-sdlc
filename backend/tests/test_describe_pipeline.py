@@ -1,10 +1,11 @@
 """TDD tests for describe_pipeline.run().
 
-Tests (4 total):
+Tests (5 total):
 1. test_run_returns_generated_description — mocked dependencies; run() returns LLM content string
 2. test_run_with_no_sprint_backlog — empty backlog; run() completes returns non-empty string
 3. test_run_with_no_codebase_snapshot — get_codebase_snapshot returns None; run() still calls route_request
 4. test_run_includes_snapshot_content_in_prompt — snapshot content (file paths) appears in LLM prompt (DESCCTX-02)
+5. test_run_with_decrypt_failure — decrypt_credential raises; run() degrades gracefully, route_request still called
 
 Dependencies (get_codebase_snapshot, post_sprint_backlog, route_request) mocked via unittest.mock.
 """
@@ -15,6 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
+
+from services.describe_pipeline import run
 
 # Set up test encryption key before any module-level imports that read env vars
 _TEST_KEY = Fernet.generate_key().decode()
@@ -92,8 +95,6 @@ def test_run_returns_generated_description():
             {"key": "PROJ-1", "summary": "Setup repo", "issue_type": "Task"},
         ]
 
-        import asyncio
-        from services.describe_pipeline import run
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
@@ -122,8 +123,6 @@ def test_run_with_no_sprint_backlog():
     ):
         mock_backlog.return_value = []  # Empty backlog
 
-        import asyncio
-        from services.describe_pipeline import run
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
@@ -154,8 +153,6 @@ def test_run_with_no_codebase_snapshot():
             {"key": "PROJ-1", "summary": "Background task", "issue_type": "Task"},
         ]
 
-        import asyncio
-        from services.describe_pipeline import run
 
         result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
@@ -190,8 +187,6 @@ def test_run_includes_snapshot_content_in_prompt():
     ):
         mock_backlog.return_value = []
 
-        import asyncio
-        from services.describe_pipeline import run
 
         asyncio.run(run(_make_mock_event(), _make_mock_project()))
 
@@ -203,3 +198,31 @@ def test_run_includes_snapshot_content_in_prompt():
         assert "backend/services/describe_pipeline.py" in prompt_arg, (
             "Snapshot content (file path) must appear in LLM prompt for DESCCTX-02"
         )
+
+def test_run_with_decrypt_failure():
+    """decrypt_credential raises; run() still completes gracefully (CR-01)."""
+    from cryptography.fernet import InvalidToken
+
+    with (
+        patch(
+            "services.describe_pipeline.decrypt_credential",
+            side_effect=InvalidToken,
+        ),
+        patch(
+            "services.describe_pipeline.get_codebase_snapshot",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "services.describe_pipeline.post_sprint_backlog",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "services.describe_pipeline.route_request",
+            return_value=_make_stub_llm_response("ok after decrypt failure"),
+        ) as mock_route,
+    ):
+        result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        mock_route.assert_called_once()
+        assert isinstance(result, str)
