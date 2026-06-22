@@ -132,6 +132,7 @@ def classify_complexity(
         parsed = json.loads(route_result.content)
         raw_classification = parsed["classification"]
         rationale = parsed.get("rationale", "")
+        component_count = parsed.get("component_count")
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
             "classify_complexity: failed to parse LLM response for %s: %s — defaulting to small",
@@ -139,6 +140,20 @@ def classify_complexity(
             exc,
         )
         return ("small", "Classification unavailable — defaulting to small")
+
+    # Cross-check component_count against the classification string (CLASSIFY-02).
+    # Log a warning if they disagree so format drift is visible in logs; trust the
+    # classification string for the actual decision.
+    if isinstance(component_count, int):
+        rubric_class = "complex" if component_count >= 2 else "small"
+        if rubric_class != raw_classification:
+            logger.warning(
+                "classify_complexity: component_count=%d conflicts with classification=%r for %s "
+                "— trusting classification string",
+                component_count,
+                raw_classification,
+                issue_key,
+            )
 
     # Validate classification value; default to 'small' if unexpected
     if raw_classification not in _VALID_CLASSIFICATIONS:
