@@ -12,10 +12,9 @@ CLASSIFY-02: LLM prompt requests JSON keys: classification ('small'|'complex'),
 Isolation contract:
   - Zero imports from routers/, hermes_client, crypto, or any Jira-aware module.
   - Allowed imports: json, logging, sqlalchemy.orm.Session,
-    models.pipeline_state.PipelineState, services.llm_router.route_request.
-  - DB side effects are limited to updating the most recent PipelineState row
-    for (project_id, issue_key) via the caller's session — no direct DB
-    connections or session creation.
+    services.llm_router.route_request.
+  - Zero DB side effects — the classifier makes no writes. The caller
+    (architecture_pipeline.run()) persists the returned values (WR-04).
 
 ARCHCTX-01: classify_complexity() and _build_classify_prompt() accept an
 optional codebase_snapshot parameter that threads codebase context from the
@@ -29,7 +28,6 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from models.pipeline_state import PipelineState
 from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
@@ -103,9 +101,9 @@ def classify_complexity(
     stage is in HEAVY_STAGES so the call routes to freellmapi for structured
     JSON output.
 
-    Persists the classification result onto the most recent PipelineState row
-    for (project_id, issue_key) if one exists. If no row exists, the caller
-    is responsible for persisting the returned values.
+    Returns the (complexity, rationale) tuple. Persistence is the caller's
+    responsibility — architecture_pipeline.run() writes both values to its
+    state_row in a single commit (WR-04: no redundant DB round-trip here).
 
     ARCHCTX-01: codebase_snapshot is an optional parameter threaded from the
     caller (architecture_pipeline.run(), which fetches the snapshot exactly
@@ -166,31 +164,10 @@ def classify_complexity(
     else:
         complexity = raw_classification
 
-    # Persist onto the most recent PipelineState row for this (project_id, issue_key)
-    state = (
-        db.query(PipelineState)
-        .filter_by(project_id=project_id, ticket_key=issue_key)
-        .order_by(PipelineState.id.desc())
-        .first()
-    )
-    if state is not None:
-        state.complexity = complexity
-        state.complexity_rationale = rationale
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.warning(
-                "classify_complexity: failed to persist result for issue_key=%s; "
-                "returning result anyway",
-                issue_key,
-            )
-    else:
-        logger.debug(
-            "classify_complexity: no PipelineState row found for project_id=%s issue_key=%s; "
-            "skipping persistence — caller may not have created a row yet",
-            project_id,
-            issue_key,
-        )
-
+    # WR-04: do NOT write to DB here — architecture_pipeline.run() already writes
+    # complexity/complexity_rationale onto state_row and commits once.  A second
+    # commit here would cause a redundant DB round-trip and a transient
+    # inconsistency window if the second commit fails after the first succeeds.
+    # The caller (architecture_pipeline.run()) is solely responsible for
+    # persisting the returned values.
     return (complexity, rationale)

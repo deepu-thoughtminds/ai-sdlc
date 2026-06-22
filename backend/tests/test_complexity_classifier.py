@@ -163,8 +163,10 @@ def test_build_classify_prompt_contains_rubric_and_schema():
     assert "Enable OAuth" in prompt
 
 
-def test_classify_persists_to_pipeline_state_when_row_exists():
-    """CLASSIFY-02: classification and rationale are persisted to PipelineState."""
+def test_classify_does_not_write_to_pipeline_state():
+    """WR-04: classify_complexity() no longer writes to DB — caller (architecture_pipeline.run)
+    is solely responsible for persisting complexity/complexity_rationale to avoid the redundant
+    DB round-trip and transient inconsistency window that a double-commit caused."""
     db = _make_db()
     project_id = _insert_project(db)
 
@@ -185,11 +187,13 @@ def test_classify_persists_to_pipeline_state_when_row_exists():
         complexity, rationale = classify_complexity("PROJ-10", "Tiny fix", "One-line change", db, project_id=project_id)
 
     assert complexity == "small"
+    assert rationale == "Tiny one-liner fix."
 
+    # Verify the classifier did NOT write to PipelineState — the caller owns that.
     saved = db.query(PipelineState).filter_by(ticket_key="PROJ-10").first()
     assert saved is not None
-    assert saved.complexity == "small"
-    assert saved.complexity_rationale is not None
+    assert saved.complexity is None  # not written by classifier
+    assert saved.complexity_rationale is None  # not written by classifier
 
 
 def test_build_classify_prompt_includes_snapshot_when_provided():
