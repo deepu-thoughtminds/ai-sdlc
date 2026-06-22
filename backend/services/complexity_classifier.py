@@ -16,6 +16,12 @@ Isolation contract:
   - DB side effects are limited to updating the most recent PipelineState row
     for (project_id, issue_key) via the caller's session — no direct DB
     connections or session creation.
+
+ARCHCTX-01: classify_complexity() and _build_classify_prompt() accept an
+optional codebase_snapshot parameter that threads codebase context from the
+caller (architecture_pipeline.run(), which fetches the snapshot exactly once).
+This module never calls get_codebase_snapshot() itself — isolation contract
+above is preserved.
 """
 
 import json
@@ -31,22 +37,33 @@ logger = logging.getLogger(__name__)
 _VALID_CLASSIFICATIONS = {"small", "complex"}
 
 
-def _build_classify_prompt(issue_key: str, summary: str, description: str) -> str:
+def _build_classify_prompt(
+    issue_key: str,
+    summary: str,
+    description: str,
+    codebase_snapshot: str | None = None,
+) -> str:
     """Build the complexity classification prompt for the LLM.
 
     States the rubric, asks the model to count integration points, and requires
     a structured JSON response with exactly three keys: classification, rationale,
     and component_count.
 
+    ARCHCTX-01: when codebase_snapshot is provided, a truncated (8000 char)
+    codebase context block is appended to the prompt so the classifier can
+    ground its component count in the actual codebase structure.
+
     Args:
         issue_key: Jira issue key (e.g. "PROJ-123").
         summary: Jira ticket summary line.
         description: Jira ticket description body.
+        codebase_snapshot: Optional .hermes/codebase.md snapshot text. When
+            provided, appended to the prompt (truncated to 8000 chars).
 
     Returns:
         Formatted prompt string ready to send to route_request.
     """
-    return (
+    prompt = (
         "You are a software complexity classifier. Given a Jira ticket, classify "
         "the requested change.\n\n"
         "Rubric:\n"
@@ -65,6 +82,12 @@ def _build_classify_prompt(issue_key: str, summary: str, description: str) -> st
         "}"
     )
 
+    if codebase_snapshot is not None:
+        codebase_text = codebase_snapshot[:8000]
+        prompt += f"\n\nCodebase context (.hermes/codebase.md snapshot):\n{codebase_text}"
+
+    return prompt
+
 
 def classify_complexity(
     issue_key: str,
@@ -72,6 +95,7 @@ def classify_complexity(
     description: str,
     db: Session,
     project_id: int,
+    codebase_snapshot: str | None = None,
 ) -> tuple[str, str]:
     """Classify a Jira ticket as 'small' or 'complex' using a single LLM call.
 
@@ -83,17 +107,22 @@ def classify_complexity(
     for (project_id, issue_key) if one exists. If no row exists, the caller
     is responsible for persisting the returned values.
 
+    ARCHCTX-01: codebase_snapshot is an optional parameter threaded from the
+    caller (architecture_pipeline.run(), which fetches the snapshot exactly
+    once). When provided, it is appended to the classification prompt.
+
     Args:
         issue_key: Jira issue key (e.g. "PROJ-123").
         summary: Jira ticket summary line.
         description: Jira ticket description body.
         db: SQLAlchemy session to persist classification result.
         project_id: ID of the project in the web app DB.
+        codebase_snapshot: Optional .hermes/codebase.md snapshot text.
 
     Returns:
         Tuple of (complexity, rationale) where complexity is "small" or "complex".
     """
-    prompt = _build_classify_prompt(issue_key, summary, description)
+    prompt = _build_classify_prompt(issue_key, summary, description, codebase_snapshot=codebase_snapshot)
 
     # freellmapi routes classify to a deterministic model; temperature=0 enforced by HEAVY_STAGES routing
     # TODO: pass temperature=0 explicitly once route_request supports it (CLASSIFY-01)

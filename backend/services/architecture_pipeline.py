@@ -15,6 +15,15 @@ Threat mitigations:
            are ever interpolated into the LLM prompt.
   T-04-03: Confluence publish failure is caught and degraded (page_url = "");
            pipeline continues and posts Jira comment without URL.
+  T-21-01: github_token and github_repo decrypted values never logged — only
+           issue_key is logged in all logger calls.
+  T-21-02: Snapshot text truncated to 8000 chars to prevent token overrun.
+           When snapshot is None, pipeline continues with fallback text
+           "(no codebase context available)".
+
+ARCHCTX-01: run() decrypts github_repo/github_token and calls
+get_codebase_snapshot() exactly once, then passes the result to both
+classify_complexity() and _run_complex()/_run_simple() (ARCHCTX-02).
 """
 
 import logging
@@ -24,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from models.pipeline_state import PipelineState
 from models.project import Project
+from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
 from services.crypto import decrypt_credential
@@ -139,9 +149,34 @@ async def run(
 
     comment_text = ""
     try:
+        # Step 1.5 (ARCHCTX-01): decrypt github_repo/github_token and fetch the
+        # codebase snapshot exactly once. T-21-01: decrypted values never logged.
+        try:
+            github_token = decrypt_credential(project.github_token) if project.github_token else ""
+        except Exception as exc:
+            logger.warning(
+                "Failed to decrypt github_token for ticket %s — snapshot skipped: %s",
+                issue_key,
+                exc,
+            )
+            github_token = ""
+
+        try:
+            github_repo = decrypt_credential(project.github_repo) if project.github_repo else ""
+        except Exception as exc:
+            logger.warning(
+                "Failed to decrypt github_repo for ticket %s — snapshot skipped: %s",
+                issue_key,
+                exc,
+            )
+            github_repo = ""
+
+        snapshot = await get_codebase_snapshot(github_repo, github_token)
+
         # Step 2: Classify the ticket complexity.
         complexity, rationale = classify_complexity(
-            issue_key, issue_summary, issue_description, db, project.id
+            issue_key, issue_summary, issue_description, db, project.id,
+            codebase_snapshot=snapshot,
         )
         state_row.complexity = complexity
         state_row.complexity_rationale = rationale
@@ -153,11 +188,11 @@ async def run(
 
         if complexity == "complex":
             comment_text = await _run_complex(
-                project, issue_key, issue_summary, issue_description
+                project, issue_key, issue_summary, issue_description, snapshot
             )
         else:
             comment_text = await _run_simple(
-                project, issue_key, issue_summary, issue_description
+                project, issue_key, issue_summary, issue_description, snapshot
             )
 
         # Step 3: Post the architecture comment to Jira BEFORE finalising state.
@@ -215,6 +250,7 @@ async def _run_complex(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
+    snapshot: str | None,
 ) -> str:
     """Execute the complex-ticket branch of the architecture pipeline.
 
@@ -222,10 +258,17 @@ async def _run_complex(
     and publishes to Confluence with is_complex=True.
 
     T-04-01: only issue_key/summary/description are included in the prompt.
+    T-21-02: snapshot truncated to 8000 chars; fallback text used when None.
+
+    Args:
+        snapshot: Codebase snapshot text fetched once in run() (ARCHCTX-01),
+            or None when unavailable.
 
     Returns:
         Human-readable Jira comment text.
     """
+    codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
+
     # Build prompt for complex architecture.
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
@@ -233,6 +276,9 @@ async def _run_complex(
         f"Ticket: {issue_key}\n"
         f"Summary: {issue_summary}\n"
         f"Description: {issue_description}\n\n"
+        f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
+        "Reference specific module names and file paths from the codebase context "
+        "where relevant.\n\n"
         "Respond with exactly these six labelled sections in this order:\n\n"
         "## Summary\n"
         "[1-2 sentence overview of the recommended architecture]\n\n"
@@ -329,6 +375,7 @@ async def _run_simple(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
+    snapshot: str | None,
 ) -> str:
     """Execute the simple-ticket branch of the architecture pipeline.
 
@@ -336,10 +383,17 @@ async def _run_simple(
     Publishes to Confluence with is_complex=False.
 
     T-04-01: only issue_key/summary/description are included in the prompt.
+    T-21-02: snapshot truncated to 8000 chars; fallback text used when None.
+
+    Args:
+        snapshot: Codebase snapshot text fetched once in run() (ARCHCTX-01),
+            or None when unavailable.
 
     Returns:
         Human-readable Jira comment text.
     """
+    codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
+
     # Build prompt for simple architecture.
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
@@ -347,6 +401,9 @@ async def _run_simple(
         f"Ticket: {issue_key}\n"
         f"Summary: {issue_summary}\n"
         f"Description: {issue_description}\n\n"
+        f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
+        "Reference specific module names and file paths from the codebase context "
+        "where relevant.\n\n"
         "Respond with exactly these four labelled sections in this order:\n\n"
         "## Summary\n"
         "[1-2 sentence overview of the recommended architecture]\n\n"
