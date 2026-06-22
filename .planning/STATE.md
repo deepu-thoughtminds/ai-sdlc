@@ -5,8 +5,8 @@ milestone_name: Context-Aware Codebase Scanning
 current_phase: 21
 current_phase_name: architecture-pipeline-context
 status: executing
-stopped_at: context exhaustion at 75% (2026-06-22)
-last_updated: "2026-06-22T13:33:15.355Z"
+stopped_at: context exhaustion at 76% (2026-06-22)
+last_updated: "2026-06-22T13:50:15.734Z"
 last_activity: 2026-06-22
 last_activity_desc: Phase 21 plan 01 executed and complete
 progress:
@@ -185,10 +185,18 @@ None.
 | v1.6.x | On-demand refresh trigger (@jarvis refresh codebase) | Deferred | v1.6 planning |
 | v1.6.x | Diff-based incremental scan (re-scan only changed files) | Deferred | v1.6 planning |
 | v2+ | Codebase embedding / vector search | Deferred | v1.6 planning |
+| debug | scrum54-dev-pipeline-missing-arch-url (dev_pipeline.py fails to look up architecture URL published by architecture_pipeline) | Acknowledged — awaiting_human_verify | v1.6 close (2026-06-22) |
+| uat_gap | Phase 17 (17-UAT.md) — 3 scenarios not yet tested | Acknowledged — testing | v1.6 close (2026-06-22) |
+| verification_gap | Phase 15 (15-VERIFICATION.md) — gaps found | Acknowledged — gaps_found | v1.6 close (2026-06-22) |
+| quick_task | fix-mcp-client-headers (20260619) | Acknowledged — missing | v1.6 close (2026-06-22) |
+| quick_task | 260618-lbw-fix-onboard-project-failing-with-failed- | Acknowledged — missing | v1.6 close (2026-06-22) |
+| quick_task | 260618-n0u-fix-webhook-422-for-real-jira-automation | Acknowledged — unknown | v1.6 close (2026-06-22) |
+| quick_task | 260619-hlp-route-confluence-publishing-through-mcp- | Acknowledged — unknown | v1.6 close (2026-06-22) |
+| quick_task | 260619-o0v-change-description-generation-to-auto-tr | Acknowledged — unknown | v1.6 close (2026-06-22) |
 
 ## Session Continuity
 
-Last session: 2026-06-22T13:38:17.694Z
-Stopped at: Quick task 260622-hye closed out (SUMMARY.md + STATE.md row written); session resumed
+Last session: 2026-06-22T13:50:15.727Z
+Stopped at: context exhaustion at 76% (2026-06-22)
 Resume file: None
 Next action: Run `/gsd-complete-milestone` to archive v1.6 and prepare next milestone.
