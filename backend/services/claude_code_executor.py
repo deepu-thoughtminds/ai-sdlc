@@ -2,17 +2,23 @@
 
 When CLAUDE_API_KEY is set, dev_pipeline uses this module instead of
 generate_code_changes so that the full Claude Code agentic loop (including
-/graphify, /gsd-graphify, and /gsd-quick skills) runs against the real repo.
+codebase-memory-mcp and /gsd-quick skills) runs against the real repo.
 
 The executor:
-  1. Builds a prompt that instructs claude to update the graphify index,
-     plan via /gsd-graphify, and implement via /gsd-quick.
+  1. Builds a prompt that instructs claude to index the repo with
+     codebase-memory-mcp (no LLM, static binary MCP server), query the
+     resulting knowledge graph to understand relevant code, then implement
+     via /gsd-quick.
   2. Runs `claude --dangerously-skip-permissions -p <prompt>` in workspace_path.
      --dangerously-skip-permissions is required for non-interactive subprocess
      invocation — the user has explicitly authorised this usage.
   3. Reads the git diff afterward to discover changed + new files.
   4. Returns them as FileChange objects so the rest of dev_pipeline (PR creation,
      cleanup) continues unchanged.
+
+codebase-memory-mcp is installed in the container (backend/Dockerfile) and
+registered as a stdio MCP server in /root/.claude/.mcp.json so the claude CLI
+picks it up automatically without LLM involvement.
 """
 
 import logging
@@ -49,9 +55,12 @@ def run_claude_code_executor(
         f"Description:\n{issue_description}\n\n"
         f"Architecture:\n{architecture_content}\n\n"
         "Steps:\n"
-        "1. Run /graphify update . to update the codebase index\n"
-        "2. Run /gsd-graphify plan to plan the implementation\n"
-        "3. Run /gsd-quick implement the story based on the plan\n"
+        "1. Use the codebase-memory-mcp tool to index the repository: call "
+        "index_repository with the current directory path '.'\n"
+        "2. Use search_graph and get_code_snippet tools from codebase-memory-mcp "
+        "to understand the existing code structure and identify files to change\n"
+        "3. Run /gsd-quick to plan and implement the story based on the codebase "
+        "understanding from step 2\n"
         "Make all necessary code changes to implement the story."
     )
 
