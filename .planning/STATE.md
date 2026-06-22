@@ -169,6 +169,7 @@ None — v1.6 roadmap created; ready to begin Phase 18 planning.
 | 260619-hlp | Confluence MCP migration (replace direct REST ConfluenceClient with MCP tool call) | 2026-06-19 |
 | 260619-o0v | Auto-trigger description generation on Story creation (jira:issue_created webhook); replace keyword-based approval detection with `@jarvis approve story description` / `@jarvis approve architecture` mentions; remove `@jarvis describe` comment trigger | 2026-06-19 |
 | 260622-hye | Enhance dev pipeline: inject relevant file contents into codegen prompt (read_relevant_files); add Claude Code CLI executor used when CLAUDE_API_KEY set, falls back to freellmapi otherwise | 2026-06-22 |
+| 260622-p0f | Replace graphify indexing with codebase-memory-mcp in backend container; remove /graphify + /gsd-graphify from executor prompt; use codebase-memory-mcp index + /gsd-quick | 2026-06-22 |
 
 ### Blockers/Concerns
 
