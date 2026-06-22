@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
-current_phase: 21
-current_phase_name: architecture-pipeline-context
-status: executing
-stopped_at: context exhaustion at 76% (2026-06-22)
-last_updated: "2026-06-22T13:50:15.734Z"
+current_phase: null
+current_phase_name: null
+status: milestone-complete
+stopped_at: null
+last_updated: "2026-06-22T14:15:00.000Z"
 last_activity: 2026-06-22
-last_activity_desc: Phase 21 plan 01 executed and complete
+last_activity_desc: Milestone v1.6 archived and closed — ready for next milestone
 progress:
   total_phases: 4
   completed_phases: 4
@@ -196,7 +196,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-22T13:50:15.727Z
-Stopped at: context exhaustion at 76% (2026-06-22)
+Last session: 2026-06-22T14:15:00.000Z
+Stopped at: Milestone v1.6 close complete — all archival tasks done
 Resume file: None
-Next action: Run `/gsd-complete-milestone` to archive v1.6 and prepare next milestone.
+Next action: Run `/gsd-new-milestone` to plan the next milestone.

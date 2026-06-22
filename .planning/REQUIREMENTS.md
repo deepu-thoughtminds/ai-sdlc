@@ -111,60 +111,7 @@ Automate the developer stage end-to-end: from reading the published Confluence a
 
 ## Milestone v1.6: Context-Aware Codebase Scanning
 
-Give every pipeline stage accurate, real codebase context by scanning the project repo at onboarding, committing a structured summary to the repo, and feeding it into description and architecture generation — so LLM outputs reference actual file paths and patterns instead of guessing.
-
----
-
-## Codebase Onboarding Scan
-
-- [x] **SCAN-01**: When a project is onboarded (or updated) with a `github_repo` field, the agent clones the repo using the stored GitHub token and runs a codebase scan immediately — no additional user action required
-- [x] **SCAN-02**: Codebase scan is token-efficient: walks the directory tree, reads a targeted subset of key files (README, entry points, config files, module index files e.g. `__init__.py`, `package.json`, `pyproject.toml`) — no full-file bulk ingestion
-- [x] **SCAN-03**: Scan output is a structured markdown file committed to the repo as `.hermes/codebase.md` on the main branch, pushed by the agent; the file includes: directory tree, tech stack, key files, and module summary
-
-## Snapshot Refresh
-
-- [x] **SNAPSHOT-01**: After a successful `@jarvis merge pr`, the agent re-clones the repo and re-runs the codebase scan, pushing an updated `.hermes/codebase.md` to main — the snapshot stays current with the codebase
-- [x] **SNAPSHOT-02**: When reading the codebase summary before a pipeline run, if `.hermes/codebase.md` does not exist in the repo, the pipeline continues without codebase context (graceful degradation — no crash, no empty result returned to user)
-
-## Describe Pipeline Integration
-
-- [x] **DESCCTX-01**: Story description elaboration (`@jarvis describe`) reads `.hermes/codebase.md` via GitHub API before generating the elaborated description, and includes relevant module names and file paths in the LLM prompt
-- [x] **DESCCTX-02**: Generated story descriptions reference actual codebase components (e.g. real module names, real file paths) rather than generic placeholders
-
-## Architecture Pipeline Integration
-
-- [x] **ARCHCTX-01**: Architecture pipeline reads `.hermes/codebase.md` via GitHub API and includes it in both the complexity classifier LLM call and the architecture generation LLM call
-- [x] **ARCHCTX-02**: Generated architecture writeups reference actual existing components, file paths, and integration points from the codebase summary rather than invented structure
-
----
-
-## Future Requirements (deferred from v1.6)
-
-- On-demand refresh trigger (`@jarvis refresh codebase`) — skip in v1.6; auto-refresh after merge covers the common case
-- Diff-based incremental scan (re-scan only changed files) — full re-scan is sufficient at MVP scale
-- Codebase embedding / vector search — token-efficient text summary is sufficient for v1.6; embedding is a future optimization
-
-## Out of Scope (v1.6)
-
-- Full codebase ingestion via LLM (every file sent to LLM) — token cost is prohibitive; targeted file reads used instead
-- Private package registry authentication during scan — beyond MVP scope
-- Multi-branch snapshot tracking — main branch only in v1.6
-
----
-
-## Traceability (v1.6)
-
-| REQ-ID | Phase | Plan |
-|--------|-------|------|
-| SCAN-01 | Phase 18 | TBD |
-| SCAN-02 | Phase 18 | TBD |
-| SCAN-03 | Phase 18 | TBD |
-| SNAPSHOT-01 | Phase 19 | TBD |
-| SNAPSHOT-02 | Phase 19 | TBD |
-| DESCCTX-01 | Phase 20 | TBD |
-| DESCCTX-02 | Phase 20 | TBD |
-| ARCHCTX-01 | Phase 21 | TBD |
-| ARCHCTX-02 | Phase 21 | TBD |
+✅ Shipped 2026-06-22 — archived to .planning/milestones/v1.6-REQUIREMENTS.md (9/9 requirements complete).
 
 ---
 

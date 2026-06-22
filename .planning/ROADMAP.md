@@ -453,7 +453,7 @@ Plans:
 
 ---
 
-## Milestone v1.6: Context-Aware Codebase Scanning
+## Milestone v1.6: Context-Aware Codebase Scanning ✅ SHIPPED 2026-06-22
 
 ### Phase 18: Codebase Scan Service
 
