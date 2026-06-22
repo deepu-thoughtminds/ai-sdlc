@@ -70,7 +70,9 @@ async def get_codebase_snapshot(github_repo: str, github_token: str) -> str | No
 
         resp.raise_for_status()
 
-        content_b64 = resp.json().get("content", "")
+        content_b64 = resp.json().get("content")
+        if not content_b64:
+            return None
         return base64.b64decode(content_b64).decode("utf-8", errors="replace")
 
     except Exception as exc:

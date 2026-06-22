@@ -206,7 +206,7 @@ async def run(
             )
         except Exception as scan_exc:
             logger.warning(
-                "Post-merge codebase snapshot refresh failed for project id=%s: %s"
+                "Post-merge codebase snapshot refresh failed for project id=%d: %s"
                 " — merge still succeeded",
                 project.id,
                 scan_exc,
