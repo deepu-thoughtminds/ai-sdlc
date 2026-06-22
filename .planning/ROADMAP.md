@@ -493,7 +493,12 @@ Plans:
   1. After a successful `@jarvis merge pr` completes, the agent re-clones the repo and pushes an updated `.hermes/codebase.md` to main automatically — the developer takes no additional action
   2. When a pipeline stage attempts to read `.hermes/codebase.md` and the file does not exist on the repo (e.g. scan has never run), the pipeline continues without codebase context and does not raise an exception or return an empty error to the user
 
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+**Wave 1**
+
+- [ ] 19-01-PLAN.md — Post-merge codebase re-scan hook in merge_pipeline.run() (SNAPSHOT-01)
+- [ ] 19-02-PLAN.md — Standalone get_codebase_snapshot() reader with graceful 404/error fallback (SNAPSHOT-02)
 
 ### Phase 20: Describe Pipeline Context
 
@@ -547,7 +552,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
 | 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
-| 18. Codebase Scan Service | 4/4 | Complete   | 2026-06-21 |
+| 18. Codebase Scan Service | 4/4 | Complete    | 2026-06-22 |
 | 19. Snapshot Refresh & Read Fallback | 0/? | Not started | - |
 | 20. Describe Pipeline Context | 0/? | Not started | - |
 | 21. Architecture Pipeline Context | 0/? | Not started | - |
