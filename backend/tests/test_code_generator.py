@@ -217,3 +217,51 @@ x = 1
     result = _parse_file_changes(llm_output)
     assert len(result) == 1
     assert result[0].path == "backend/main.py"
+
+
+def test_generate_code_changes_injects_relevant_file_contents():
+    """relevant_file_contents non-empty → prompt contains 'Relevant file contents' block."""
+    captured: list[str] = []
+
+    def capture(stage, prompt):
+        captured.append(prompt)
+        return _make_llm_response("")
+
+    with patch("services.code_generator.route_request", side_effect=capture):
+        generate_code_changes(
+            issue_key="PROJ-1",
+            issue_summary="test",
+            issue_description="desc",
+            architecture_content="arch",
+            codebase_context="context",
+            relevant_file_contents={"src/foo.py": "def bar(): pass"},
+        )
+
+    assert captured, "route_request was never called"
+    prompt = captured[0]
+    assert "Relevant file contents" in prompt
+    assert "src/foo.py" in prompt
+    assert "def bar(): pass" in prompt
+
+
+def test_generate_code_changes_no_injection_when_empty_contents():
+    """relevant_file_contents empty or None → 'Relevant file contents' NOT in prompt."""
+    for contents in ({}, None):
+        captured: list[str] = []
+
+        def capture(stage, prompt):
+            captured.append(prompt)
+            return _make_llm_response("")
+
+        with patch("services.code_generator.route_request", side_effect=capture):
+            generate_code_changes(
+                issue_key="PROJ-1",
+                issue_summary="test",
+                issue_description="desc",
+                architecture_content="arch",
+                codebase_context="context",
+                relevant_file_contents=contents,
+            )
+
+        assert captured
+        assert "Relevant file contents" not in captured[0]

@@ -16,6 +16,7 @@ Threat mitigations:
            in webhook.py — this module re-uses that row (Step 1).
 """
 
+import itertools
 import logging
 import os
 import re
@@ -27,6 +28,7 @@ from models.pipeline_state import PipelineState
 from models.project import Project
 from services.confluence_url_finder import find_latest_architecture_url
 from services.crypto import decrypt_credential
+from services.claude_code_executor import run_claude_code_executor
 from services.code_generator import generate_code_changes
 from services.graphify_service import get_codebase_summary
 from services.hermes_client import (
@@ -56,6 +58,56 @@ def _extract_page_id(confluence_url: str) -> str:
     """
     match = re.search(r"/pages/(\d+)", confluence_url)
     return match.group(1) if match else ""
+
+
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "dist", "build"}
+_MAX_LINES_PER_FILE = 500
+_MAX_TOTAL_CHARS = 8000
+
+
+def read_relevant_files(
+    workspace_path: str,
+    issue_summary: str,
+    issue_description: str,
+) -> dict[str, str]:
+    """Return a mapping of relative path → content for files relevant to the issue.
+
+    Keywords are extracted from issue_summary + issue_description (length >= 4,
+    lowercased). Files whose content contains any keyword are included, capped at
+    500 lines/file and 8000 total characters across all returned files.
+    """
+    combined = f"{issue_summary} {issue_description}".lower()
+    keywords = {w for w in re.split(r"\W+", combined) if len(w) >= 4}
+    if not keywords:
+        return {}
+
+    matches: dict[str, str] = {}
+    for root, dirs, files in os.walk(workspace_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for filename in files:
+            abs_path = os.path.join(root, filename)
+            try:
+                with open(abs_path, encoding="utf-8") as fh:
+                    content = "".join(itertools.islice(fh, _MAX_LINES_PER_FILE))
+            except (OSError, UnicodeDecodeError):
+                continue
+            if any(kw in content.lower() for kw in keywords):
+                rel_path = os.path.relpath(abs_path, workspace_path)
+                matches[rel_path] = content
+
+    result: dict[str, str] = {}
+    total_chars = 0
+    for rel_path, content in matches.items():
+        if total_chars >= _MAX_TOTAL_CHARS:
+            break
+        remaining = _MAX_TOTAL_CHARS - total_chars
+        if len(content) > remaining:
+            content = content[:remaining]
+        result[rel_path] = content
+        total_chars += len(content)
+
+    logger.debug("read_relevant_files: %d file(s) matched in %s", len(result), workspace_path)
+    return result
 
 
 async def run(
@@ -165,14 +217,32 @@ async def run(
         directory_tree = codebase_context.directory_tree if codebase_context else ""
 
         cloned = clone_repository(github_repo, github_token)
+        relevant_files = read_relevant_files(
+            cloned.workspace_path, issue_summary, issue_description
+        )
 
         # Step 6: Run codegen and PR creation in a try/finally so the temp
         # workspace is always cleaned up (T-16-07 / repo_clone.py contract).
         try:
-            # Step 7: Generate code changes.
-            file_changes = generate_code_changes(
-                issue_key, issue_summary, issue_description, architecture_content, directory_tree
-            )
+            # Step 7: Generate code changes via Claude Code executor when
+            # CLAUDE_API_KEY is set, otherwise fall back to freellmapi.
+            if os.environ.get("CLAUDE_API_KEY"):
+                file_changes = run_claude_code_executor(
+                    cloned.workspace_path,
+                    issue_key,
+                    issue_summary,
+                    issue_description,
+                    architecture_content,
+                )
+            else:
+                file_changes = generate_code_changes(
+                    issue_key,
+                    issue_summary,
+                    issue_description,
+                    architecture_content,
+                    directory_tree,
+                    relevant_file_contents=relevant_files,
+                )
             if not file_changes:
                 comment_text = (
                     f"The dev pipeline ran for {issue_key} but the code generator "

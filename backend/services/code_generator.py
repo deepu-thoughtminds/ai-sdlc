@@ -113,6 +113,7 @@ def generate_code_changes(
     issue_description: str,
     architecture_content: str,
     codebase_context: str,
+    relevant_file_contents: dict[str, str] | None = None,
 ) -> list[FileChange]:
     """Generate file-level code changes for a Jira issue via freellmapi.
 
@@ -124,13 +125,18 @@ def generate_code_changes(
     are interpolated into the prompt — no token or credential values included.
 
     Args:
-        issue_key:            Jira issue key (e.g. "PROJ-42").
-        issue_summary:        Issue summary field.
-        issue_description:    Issue description (plain text).
-        architecture_content: Architecture page content fetched from Confluence
-                              (plain text or markdown).
-        codebase_context:     Codebase directory tree and key module docstrings
-                              (plain text summary from graphify_service).
+        issue_key:               Jira issue key (e.g. "PROJ-42").
+        issue_summary:           Issue summary field.
+        issue_description:       Issue description (plain text).
+        architecture_content:    Architecture page content fetched from Confluence
+                                 (plain text or markdown).
+        codebase_context:        Codebase directory tree and key module docstrings
+                                 (plain text summary from graphify_service).
+        relevant_file_contents:  Mapping of relative file path → file content for
+                                 files in the cloned workspace that match the issue
+                                 keywords. Injected before the IMPORTANT block so
+                                 the LLM edits existing files rather than creating
+                                 new ones.
 
     Returns:
         List of FileChange instances. Empty list if LLM returns no parseable
@@ -138,6 +144,17 @@ def generate_code_changes(
         handle this gracefully.
     """
     logger.info("Generating code changes for ticket %s", issue_key)
+
+    if relevant_file_contents:
+        file_blocks = "\n\n".join(
+            f"### {path}\n{content}" for path, content in relevant_file_contents.items()
+        )
+        file_contents_section = (
+            "Relevant file contents (READ THESE before generating changes):\n\n"
+            f"{file_blocks}\n\n"
+        )
+    else:
+        file_contents_section = ""
 
     # T-06-01: prompt contains only issue data + architecture + codebase context
     prompt = (
@@ -150,6 +167,7 @@ def generate_code_changes(
         f"{architecture_content}\n\n"
         "Existing Codebase Structure:\n"
         f"{codebase_context}\n\n"
+        f"{file_contents_section}"
         "IMPORTANT: Respond with ONLY the file changes needed. "
         "For each file to create or modify, use EXACTLY this format:\n\n"
         "### FILE: path/to/file.py\n"

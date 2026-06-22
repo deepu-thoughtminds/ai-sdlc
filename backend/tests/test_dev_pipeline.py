@@ -1,10 +1,10 @@
 """TDD tests for dev_pipeline.run() — DEVPIPE-01, DEVPIPE-05.
 
-Tests (7 total):
+Tests (7 core + 4 new):
 1. test_run_no_confluence_url — find_latest_architecture_url returns None → informative
    comment posted, state status="complete", apply_commit_push_and_open_pr NOT called.
 2. test_run_success — Confluence URL found, codegen returns changes → clone/codegen/PR all
-   called; comment contains PR url; state status="complete".
+   called; comment contains PR url; state status="complete"; relevant_file_contents kwarg sent.
 3. test_run_no_code_changes — codegen returns [] → apply_commit_push_and_open_pr NOT called;
    informative comment posted; state status="complete".
 4. test_run_cleanup_on_pr_failure — apply_commit_push_and_open_pr raises → shutil.rmtree
@@ -15,6 +15,12 @@ Tests (7 total):
    is a plain string containing "PR ready" and the PR html_url, not JSON.
 7. test_run_derives_github_url_from_repo_when_missing — github_url is None on project →
    get_codebase_summary is called with URL derived from github_repo slug, not empty string.
+8. test_read_relevant_files_keyword_match — files containing keywords are returned.
+9. test_read_relevant_files_cap — total chars across all returned files <= 8000.
+10. test_run_uses_claude_executor_when_key_set — CLAUDE_API_KEY set → run_claude_code_executor
+    is called, generate_code_changes is not.
+11. test_run_uses_freellmapi_when_no_key — CLAUDE_API_KEY unset → generate_code_changes
+    is called, run_claude_code_executor is not.
 
 Uses StaticPool in-memory DB; unittest.mock.patch for all external dependencies.
 
@@ -62,6 +68,15 @@ def reset_tables():
     yield
     Base.metadata.drop_all(TEST_ENGINE)
     Base.metadata.create_all(TEST_ENGINE)
+
+
+@pytest.fixture(autouse=True)
+def clear_claude_api_key():
+    """Ensure CLAUDE_API_KEY is unset by default so existing tests exercise the
+    freellmapi (generate_code_changes) path. Routing tests set it explicitly."""
+    os.environ.pop("CLAUDE_API_KEY", None)
+    yield
+    os.environ.pop("CLAUDE_API_KEY", None)
 
 
 def _make_mock_project():
@@ -157,6 +172,7 @@ async def test_run_success():
               new_callable=AsyncMock, return_value="## Architecture\nUse FastAPI."),
         patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
         patch("services.dev_pipeline.clone_repository", return_value=cloned),
+        patch("services.dev_pipeline.read_relevant_files", return_value={"src/foo.py": "x"}) as mock_relfiles,
         patch("services.dev_pipeline.generate_code_changes", return_value=file_changes) as mock_codegen,
         patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr) as mock_pr,
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
@@ -173,6 +189,10 @@ async def test_run_success():
     codegen_args = mock_codegen.call_args[0]
     for arg in codegen_args:
         assert "secret" not in str(arg).lower(), f"Token leaked into codegen args: {arg}"
+
+    # relevant_file_contents from read_relevant_files is threaded into codegen
+    mock_relfiles.assert_called_once()
+    assert mock_codegen.call_args.kwargs.get("relevant_file_contents") == {"src/foo.py": "x"}
 
     db.refresh(state_row)
     assert state_row.status == "complete"
@@ -406,4 +426,110 @@ async def test_run_derives_github_url_from_repo_when_missing():
     assert "PR ready" in result
     db.refresh(state_row)
     assert state_row.status == "complete"
+
+
+def test_read_relevant_files_keyword_match(tmp_path):
+    """Only files whose content matches an issue keyword are returned."""
+    from services.dev_pipeline import read_relevant_files
+
+    (tmp_path / "matching.py").write_text("def login_feature():\n    pass\n")
+    (tmp_path / "unrelated.txt").write_text("hello world\n")
+
+    result = read_relevant_files(str(tmp_path), "login feature", "implement login flow")
+
+    assert "matching.py" in result
+    assert "unrelated.txt" not in result
+
+
+def test_read_relevant_files_cap(tmp_path):
+    """Total characters across all returned files do not exceed 8000."""
+    from services.dev_pipeline import read_relevant_files
+
+    (tmp_path / "big1.py").write_text("login " * 2000)
+    (tmp_path / "big2.py").write_text("login " * 2000)
+
+    result = read_relevant_files(str(tmp_path), "login", "")
+
+    total_chars = sum(len(v) for v in result.values())
+    assert total_chars <= 8000
+
+
+@pytest.mark.asyncio
+async def test_run_uses_claude_executor_when_key_set():
+    """CLAUDE_API_KEY set → run_claude_code_executor called, generate_code_changes not."""
+    from services.dev_pipeline import run
+
+    os.environ["CLAUDE_API_KEY"] = "test-key"
+    try:
+        project = _make_mock_project()
+        db = TestingSession()
+        state_row = PipelineState(
+            project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
+        )
+        db.add(state_row)
+        db.commit()
+
+        comments = [{"body": "https://conf.example.com/wiki/spaces/PROJ/pages/12345"}]
+        cloned = _make_cloned_repo()
+        pr = _make_pull_request()
+        codebase_summary = MagicMock(directory_tree="src/\nsrc/foo.py")
+
+        with (
+            patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=comments),
+            patch("services.dev_pipeline.find_latest_architecture_url", return_value="https://conf.example.com/wiki/spaces/PROJ/pages/12345"),
+            patch("services.dev_pipeline.get_confluence_page_content", new_callable=AsyncMock, return_value="content"),
+            patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
+            patch("services.dev_pipeline.clone_repository", return_value=cloned),
+            patch("services.dev_pipeline.read_relevant_files", return_value={}),
+            patch("services.dev_pipeline.run_claude_code_executor", return_value=[_make_file_change()]) as mock_executor,
+            patch("services.dev_pipeline.generate_code_changes") as mock_codegen,
+            patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
+            patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
+            patch("services.dev_pipeline.shutil.rmtree"),
+        ):
+            await run(project, "PROJ-1", "Feature X", "desc", db)
+
+        mock_executor.assert_called_once()
+        mock_codegen.assert_not_called()
+        db.close()
+    finally:
+        os.environ.pop("CLAUDE_API_KEY", None)
+
+
+@pytest.mark.asyncio
+async def test_run_uses_freellmapi_when_no_key():
+    """CLAUDE_API_KEY unset → generate_code_changes called, run_claude_code_executor not."""
+    from services.dev_pipeline import run
+
+    project = _make_mock_project()
+    db = TestingSession()
+    state_row = PipelineState(
+        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
+    )
+    db.add(state_row)
+    db.commit()
+
+    comments = [{"body": "https://conf.example.com/wiki/spaces/PROJ/pages/12345"}]
+    cloned = _make_cloned_repo()
+    pr = _make_pull_request()
+    codebase_summary = MagicMock(directory_tree="src/\nsrc/foo.py")
+
+    with (
+        patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=comments),
+        patch("services.dev_pipeline.find_latest_architecture_url", return_value="https://conf.example.com/wiki/spaces/PROJ/pages/12345"),
+        patch("services.dev_pipeline.get_confluence_page_content", new_callable=AsyncMock, return_value="content"),
+        patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
+        patch("services.dev_pipeline.clone_repository", return_value=cloned),
+        patch("services.dev_pipeline.read_relevant_files", return_value={}),
+        patch("services.dev_pipeline.run_claude_code_executor") as mock_executor,
+        patch("services.dev_pipeline.generate_code_changes", return_value=[_make_file_change()]) as mock_codegen,
+        patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
+        patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.dev_pipeline.shutil.rmtree"),
+    ):
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    mock_codegen.assert_called_once()
+    mock_executor.assert_not_called()
+    db.close()
     db.close()
