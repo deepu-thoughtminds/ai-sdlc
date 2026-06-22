@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
 status: executing
-stopped_at: Completed Phase 19 Plan 01 post-merge codebase re-scan hook
-last_updated: "2026-06-22T03:15:51.465Z"
-last_activity: 2026-06-22 -- Phase 20 execution started
+stopped_at: context exhaustion at 78% (2026-06-22)
+last_updated: "2026-06-22T07:19:38.324Z"
+last_activity: 2026-06-22 -- Phase 21 plan 01 executed and complete
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 7
-  completed_plans: 6
-  percent: 50
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-21)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 20 — describe-pipeline-context
+**Current focus:** Phase 21 — architecture-pipeline-context
 
 ## Current Position
 
-Phase: 20 (describe-pipeline-context) — EXECUTING
-Plan: 1 of 1
-Status: Executing Phase 20
-Last activity: 2026-06-22 -- Phase 20 execution started
+Phase: 21 (architecture-pipeline-context) — COMPLETE
+Plan: 1 of 1 (complete)
+Status: Phase 21 complete — milestone v1.6 (Context-Aware Codebase Scanning) all 4 phases done
+Last activity: 2026-06-22 -- Phase 21 plan 01 executed and complete
 
 ## Milestone History
 
@@ -40,13 +40,13 @@ Last activity: 2026-06-22 -- Phase 20 execution started
 | v1.3 hermes-mcp-agent | 3 (Phases 7-9) | 3 | Complete | 2026-06-19 |
 | v1.4 smart-architecture | 4 (Phases 10-13) | 2026-06-19 | Complete | All 13 phases, all 24 plans done |
 | v1.5 github-dev-pipeline | 4 (Phases 14-17) | TBD | Complete | 2026-06-21 |
-| v1.6 context-aware-codebase-scanning | 4 (Phases 18-21) | TBD | In Progress | — |
+| v1.6 context-aware-codebase-scanning | 4 (Phases 18-21) | 8 | Complete | 2026-06-22 |
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 20
+- Total plans completed: 21
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -63,6 +63,7 @@ Last activity: 2026-06-22 -- Phase 20 execution started
 | 15 | 2 | - | - |
 | 17 | 2 | - | - |
 | 18 | 4 | - | - |
+| 20 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -85,6 +86,7 @@ Last activity: 2026-06-22 -- Phase 20 execution started
 | Phase 18-codebase-scan-service P04 | 8 | 2 tasks | 2 files |
 | Phase 19-snapshot-refresh-read-fallback P01 | 3min | 1 tasks | 2 files |
 | Phase 19-snapshot-refresh-read-fallback P02 | 2min | 1 tasks | 2 files |
+| Phase 21-architecture-pipeline-context P01 | - | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -148,6 +150,7 @@ Recent decisions affecting current work:
 - [v1.6 roadmap]: Snapshot refresh hooks into merge_pipeline.py post-merge path (SNAPSHOT-01, Phase 19); read path degrades gracefully when file absent (SNAPSHOT-02, Phase 19)
 - [v1.6 roadmap]: describe_pipeline.py and architecture_pipeline.py both read .hermes/codebase.md via GitHub API before their LLM calls; during dev pipeline the local clone path can also be used (Phases 20-21)
 - [v1.6 roadmap]: Architecture pipeline passes codebase context to both the complexity classifier call and the generation call in a single read operation (ARCHCTX-01, Phase 21)
+- [Phase 21-01]: architecture_pipeline.run() fetches codebase snapshot exactly once (single await call site) and threads it through as a parameter to classify_complexity()/_run_complex()/_run_simple() — get_codebase_snapshot is never called inside the per-complexity branches
 - [Phase ?]: RuntimeError message format uses only owner/repo/status_code — github_token never interpolated (T-18-01 compliance, 18-04)
 - [Phase 19-snapshot-refresh-read-fallback]: Post-merge re-scan hook uses isolated try/except; scan failure never flips state_row.status or modifies Jira comment body (T-19-02 compliance, SNAPSHOT-01)
 - [Phase ?]: Phase 19-02 decision
@@ -181,7 +184,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-22T02:37:23.447Z
-Stopped at: Completed Phase 19 Plan 01 post-merge codebase re-scan hook
+Last session: 2026-06-22T07:14:29.501Z
+Stopped at: Phase 21 plan 01 executed and complete (2026-06-22)
 Resume file: None
-Next action: `/gsd-plan-phase 18` — plan Phase 18: Codebase Scan Service
+Next action: Milestone v1.6 (Context-Aware Codebase Scanning) complete — all 4 phases (18-21) done. Run `/gsd-complete-milestone` or start next milestone planning.
