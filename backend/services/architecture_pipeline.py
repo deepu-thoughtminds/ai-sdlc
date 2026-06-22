@@ -235,8 +235,12 @@ async def run(
                 AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n"
                 + "Architecture generation failed. Please retry with `@jarvis architecture`.",
             )
-        except Exception:
-            pass
+        except Exception as notify_exc:
+            logger.warning(
+                "Failed to post failure-notification comment for ticket %s: %s",
+                issue_key,
+                notify_exc,
+            )
         logger.exception("Architecture pipeline failed for ticket %s: %s", issue_key, exc)
         # Do not re-raise — the background task has no outer exception handler,
         # so re-raising would silently swallow the exception as an unhandled task exception.
