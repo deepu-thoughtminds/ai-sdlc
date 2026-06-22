@@ -1,6 +1,6 @@
 """TDD tests for merge_pipeline.run() — PRMERGE-01, PRMERGE-02.
 
-Tests (6 total):
+Tests (9 total):
 1. test_run_no_pr_found — find_and_merge_pr returns None → informative comment posted,
    update_status NOT called, PipelineState.status ends as "complete" (not "failed").
 2. test_run_success — find_and_merge_pr returns MergeResult(merged=True, sha="abc123", …)
@@ -16,6 +16,12 @@ Tests (6 total):
    reuse that exact row (row count == 1 after run).
 6. test_run_tokens_never_in_comment — github_token and jira_token literal fixture values
    must never appear in the text posted to Jira (T-17-05 token isolation).
+7. test_run_triggers_codebase_rescan_on_success — successful merge triggers codebase
+   re-scan; state_row.status still "complete" and SHA confirmation comment still posted.
+8. test_run_rescan_failure_does_not_fail_merge — re-scan raises RuntimeError → merge
+   outcome unaffected (state_row.status="complete", SHA comment posted unchanged).
+9. test_run_no_pr_found_skips_rescan — find_and_merge_pr returns None → codebase_scan
+   is NOT called since nothing was merged.
 
 Uses StaticPool in-memory DB; unittest.mock.patch for all external dependencies.
 """
@@ -156,6 +162,9 @@ async def test_run_success():
         patch(
             "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
         ) as mock_post,
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ),
     ):
         from services.merge_pipeline import run
 
@@ -203,6 +212,9 @@ async def test_run_status_update_fails_gracefully():
         patch(
             "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
         ) as mock_post,
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ),
     ):
         from services.merge_pipeline import run
 
@@ -275,6 +287,9 @@ async def test_run_reuses_existing_pipeline_state_row():
         patch("services.merge_pipeline.find_and_merge_pr", return_value=merge_result),
         patch("services.merge_pipeline.update_status", new_callable=AsyncMock, return_value=True),
         patch("services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ),
     ):
         from services.merge_pipeline import run
 
@@ -314,6 +329,9 @@ async def test_run_tokens_never_in_comment():
         patch(
             "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
         ) as mock_post,
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ),
     ):
         from services.merge_pipeline import run
 
@@ -329,5 +347,145 @@ async def test_run_tokens_never_in_comment():
     assert PLAINTEXT_JIRA_TOKEN not in posted_body, (
         f"jira_token literal leaked into Jira comment: {posted_body!r}"
     )
+
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# New tests: post-merge codebase re-scan hook (SNAPSHOT-01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_triggers_codebase_rescan_on_success():
+    """SNAPSHOT-01: successful merge triggers codebase re-scan with correct args;
+    state_row.status stays "complete" and SHA confirmation comment still posted."""
+    project = _make_mock_project()
+    db = TestingSession()
+
+    state_row = PipelineState(
+        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
+    )
+    db.add(state_row)
+    db.commit()
+
+    merge_result = _make_merge_result(sha="abc123", pr_number=42)
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=merge_result),
+        patch(
+            "services.merge_pipeline.update_status", new_callable=AsyncMock, return_value=True
+        ),
+        patch(
+            "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
+        ) as mock_post,
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ) as mock_rescan,
+    ):
+        from services.merge_pipeline import run
+
+        result = await run(project, "PROJ-1", "Feature X", "Some description", db)
+
+    # re-scan must be called exactly once with the decrypted args
+    mock_rescan.assert_awaited_once_with(
+        "owner/repo",
+        PLAINTEXT_GITHUB_TOKEN,
+        project.id,
+        db,
+    )
+
+    # SHA confirmation comment still posted
+    mock_post.assert_called_once()
+    posted_body = mock_post.call_args[0][4]
+    assert "abc123" in posted_body
+
+    db.refresh(state_row)
+    assert state_row.status == "complete"
+
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_rescan_failure_does_not_fail_merge():
+    """SNAPSHOT-01 isolation: re-scan raises RuntimeError → merge outcome unaffected.
+    state_row.status="complete", SHA comment posted, exception not leaked to Jira."""
+    project = _make_mock_project()
+    db = TestingSession()
+
+    state_row = PipelineState(
+        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
+    )
+    db.add(state_row)
+    db.commit()
+
+    merge_result = _make_merge_result(sha="abc123", pr_number=42)
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=merge_result),
+        patch(
+            "services.merge_pipeline.update_status", new_callable=AsyncMock, return_value=True
+        ),
+        patch(
+            "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
+        ) as mock_post,
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("scan boom"),
+        ),
+    ):
+        from services.merge_pipeline import run
+
+        result = await run(project, "PROJ-1", "Feature X", "Some description", db)
+
+    # merge state must still be complete despite scan failure
+    db.refresh(state_row)
+    assert state_row.status == "complete", (
+        f"Expected 'complete' but got '{state_row.status}' — scan failure leaked into merge state"
+    )
+
+    # SHA comment must still be posted once (no scan-failure text in it)
+    mock_post.assert_called_once()
+    posted_body = mock_post.call_args[0][4]
+    assert "abc123" in posted_body
+    assert "scan boom" not in posted_body
+
+    # return value must be the normal confirmation text
+    assert "abc123" in result
+
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_no_pr_found_skips_rescan():
+    """No-PR branch: find_and_merge_pr returns None → codebase_scan NOT called."""
+    project = _make_mock_project()
+    db = TestingSession()
+
+    state_row = PipelineState(
+        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
+    )
+    db.add(state_row)
+    db.commit()
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=None),
+        patch(
+            "services.merge_pipeline.update_status", new_callable=AsyncMock
+        ),
+        patch(
+            "services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock
+        ),
+        patch(
+            "services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock
+        ) as mock_rescan,
+    ):
+        from services.merge_pipeline import run
+
+        await run(project, "PROJ-1", "Feature X", "Some description", db)
+
+    # nothing was merged — re-scan must NOT be triggered
+    mock_rescan.assert_not_called()
 
     db.close()
