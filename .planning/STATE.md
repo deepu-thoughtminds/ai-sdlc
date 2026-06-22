@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: Context-Aware Codebase Scanning
-current_phase: null
-current_phase_name: null
+milestone: v1.4
+milestone_name: Smart Architecture & Confluence Publishing
+current_phase: 21
+current_phase_name: architecture-pipeline-context
 status: milestone-complete
-stopped_at: null
-last_updated: "2026-06-22T14:15:00.000Z"
+stopped_at: context exhaustion at 76% (2026-06-22)
+last_updated: "2026-06-22T18:16:41.118Z"
 last_activity: 2026-06-22
-last_activity_desc: Milestone v1.6 archived and closed — ready for next milestone
+last_activity_desc: Phase 21 plan 01 executed and complete
 progress:
   total_phases: 4
   completed_phases: 4
@@ -170,6 +170,7 @@ None — v1.6 roadmap created; ready to begin Phase 18 planning.
 | 260619-o0v | Auto-trigger description generation on Story creation (jira:issue_created webhook); replace keyword-based approval detection with `@jarvis approve story description` / `@jarvis approve architecture` mentions; remove `@jarvis describe` comment trigger | 2026-06-19 |
 | 260622-hye | Enhance dev pipeline: inject relevant file contents into codegen prompt (read_relevant_files); add Claude Code CLI executor used when CLAUDE_API_KEY set, falls back to freellmapi otherwise | 2026-06-22 |
 | 260622-p0f | Replace graphify indexing with codebase-memory-mcp in backend container; remove /graphify + /gsd-graphify from executor prompt; use codebase-memory-mcp index + /gsd-quick | 2026-06-22 |
+| 260622-fix-executor-prompt | Fix executor prompt to enforce targeted edits via get_code_snippet; remove /gsd-quick; revert LoginPage.tsx in test-blog broken by SCRUM-70 PR | 2026-06-22 |
 
 ### Blockers/Concerns
 
@@ -197,7 +198,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-22T14:15:00.000Z
-Stopped at: Milestone v1.6 close complete — all archival tasks done
+Last session: 2026-06-22T18:16:41.108Z
+Stopped at: context exhaustion at 76% (2026-06-22)
 Resume file: None
 Next action: Run `/gsd-new-milestone` to plan the next milestone.
