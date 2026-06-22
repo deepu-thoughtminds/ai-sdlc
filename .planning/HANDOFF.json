@@ -1,30 +1,47 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-21T02:36:39.098Z",
-  "phase": "17",
-  "phase_name": "pr-merge-pipeline",
-  "phase_dir": ".planning/phases/17-pr-merge-pipeline",
-  "plan": 1,
-  "task": 1,
-  "total_tasks": 6,
-  "status": "paused",
-  "completed_tasks": [],
+  "timestamp": "2026-06-22T13:38:17.694Z",
+  "phase": null,
+  "phase_name": null,
+  "phase_dir": null,
+  "quick_task": "260622-hye-enhance-dev-pipeline-code-generation-wit",
+  "plan": null,
+  "task": null,
+  "total_tasks": 2,
+  "status": "wrap_up_pending",
+  "completed_tasks": [
+    {"id": 1, "name": "Part 1: file content injection (read_relevant_files in dev_pipeline.py, relevant_file_contents param in code_generator.py)", "status": "done", "commit": "cd5f3cb"},
+    {"id": 2, "name": "Part 2: Claude Code executor service (claude_code_executor.py) + dev_pipeline CLAUDE_API_KEY branch", "status": "done", "commit": "cd5f3cb"}
+  ],
   "remaining_tasks": [
-    {"id": 1, "name": "17-01 Task 1: pr_creator.find_and_merge_pr() (GitHub API find/merge by branch jarvis/issue-{key} or title match)", "status": "not_started"},
-    {"id": 2, "name": "17-01 Task 2: hermes_client status-update wrapper + hermes/mcp_client.py + hermes/server.py transition_issue support", "status": "not_started"},
-    {"id": 3, "name": "17-01 remaining task (TDD plan, 3 tasks total per frontmatter)", "status": "not_started"},
-    {"id": 4, "name": "17-02 Task: merge_pipeline.py orchestrator (idempotency guard, CR-02 session isolation, WR-01/WR-03)", "status": "not_started"},
-    {"id": 5, "name": "17-02 Task: webhook.py merge_pr stub replacement (mirrors start_coding/architecture branches)", "status": "not_started"},
-    {"id": 6, "name": "17-02 remaining task (TDD plan, 3 tasks total per frontmatter)", "status": "not_started"}
+    {"id": 3, "name": "Write .planning/quick/260622-hye-enhance-dev-pipeline-code-generation-wit/260622-hye-SUMMARY.md (status: complete)", "status": "not_started"},
+    {"id": 4, "name": "Add row to .planning/STATE.md Quick Tasks Completed table for 260622-hye", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [],
   "decisions": [
-    {"decision": "Phase 17 planned as 2 plans across 2 waves: 17-01 (pr_creator + hermes_client/MCP status-update, wave 1) and 17-02 (merge_pipeline orchestrator + webhook wiring, wave 2, depends_on 17-01)", "rationale": "Mirrors the Phase 16 split (service layer first, orchestrator+webhook wiring second) so the orchestrator can depend on a finished, tested service function", "phase": "17"},
-    {"decision": "Declined to run /gsd-secure-phase 16 (post-hoc security audit) when offered after Phase 16 completion", "rationale": "User explicitly said 'i dont want to run security enforcement' — do not re-offer for Phase 16. This is distinct from the plan-time <threat_model> block requirement (Step 5.55 of plan-phase.md), which was still embedded in both 17-01 and 17-02 PLAN.md per workflow.security_enforcement=true in config", "phase": "16"},
-    {"decision": "Plan files (.planning/phases/17-pr-merge-pipeline/17-01-PLAN.md, 17-02-PLAN.md) were force-added (git add -f) and committed despite .planning/ being gitignored", "rationale": "Matches established convention for STATE.md/ROADMAP.md/SUMMARY.md/PLAN.md force-tracking used throughout Phase 16", "phase": "17"}
+    {
+      "decision": "Use --dangerously-skip-permissions when invoking the claude CLI subprocess in claude_code_executor.py",
+      "rationale": "User explicitly authorized this via AskUserQuestion after the auto-mode safety classifier flagged it (subprocess `claude -p <prompt>` would otherwise stall on permission prompts in headless use). Scoped only to this one subprocess call.",
+      "phase": "quick/260622-hye"
+    },
+    {
+      "decision": "Implemented directly in the main working tree instead of via a worktree-isolated gsd-executor sub-agent",
+      "rationale": "The worktree-isolated sub-agent lacked Bash permissions to do file/git work; user said 'proceed' to direct implementation after being asked",
+      "phase": "quick/260622-hye"
+    }
   ],
-  "uncommitted_files": [],
-  "next_action": "Run /gsd-execute-phase 17 in a fresh session to execute both plans wave-by-wave (Wave 1: 17-01, Wave 2: 17-02 after 17-01 completes)",
-  "context_notes": "Phase 16 (dev-pipeline-integration) is fully complete and committed. Phase 17 (pr-merge-pipeline) has been planned only — gsd-planner produced 17-01-PLAN.md and 17-02-PLAN.md, committed in fff9d86. No execution has started: zero tasks done, zero commits against the plan's files_modified list. The first planner subagent attempt aborted citing a stale context-exhaustion warning that did not actually apply to it (fresh subagent, full budget) — a retry succeeded normally and produced both plans cleanly. Resuming agent should just run /gsd-execute-phase 17 directly; no unresolved planning decisions remain."
+  "uncommitted_files": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/STATE.md",
+    ".planning/phases/17-pr-merge-pipeline/17-REVIEW.md",
+    "backend/Dockerfile",
+    "backend/services/pr_creator.py",
+    "backend/services/repo_clone.py",
+    "freellmapi (submodule pointer)",
+    "hermes/mcp_client.py",
+    "hermes/tests/test_mcp_client.py"
+  ],
+  "next_action": "Write 260622-hye-SUMMARY.md and add the STATE.md Quick Tasks Completed row, then this quick task is fully closed out",
+  "context_notes": "Both implementation parts are done, unit-tested (24/24 passing across test_dev_pipeline.py, test_code_generator.py, test_claude_code_executor.py), and committed as cd5f3cb. Only GSD bookkeeping (SUMMARY.md + STATE.md table row) remains. The uncommitted_files list above are PRE-EXISTING changes from before this session started (Dockerfile, pr_creator.py, repo_clone.py, freellmapi submodule, mcp_client.py, REQUIREMENTS.md, STATE.md edits, 17-REVIEW.md) — they are unrelated to this quick task and were intentionally left untouched/unstaged; do not assume they need finishing as part of this handoff."
 }
