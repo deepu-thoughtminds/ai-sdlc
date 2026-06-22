@@ -175,7 +175,7 @@ class ConfluenceClient:
             is_complex: If True, render the diagram+components template.
             component_breakdown: Component breakdown text (diagram template only).
             integration_points: Integration points text (diagram template only).
-            diagram_xml: Raw mxGraph XML (diagram template only, not escaped).
+            diagram_xml: Raw mxGraph XML (diagram template only; HTML-escaped inside <pre>).
             viewer_url: diagrams.net viewer URL (diagram template only, not escaped).
 
         Returns:
@@ -296,10 +296,9 @@ def _render_diagram_template(
 
     Six sections in order: Summary, Approach, Component Breakdown,
     Integration Points, Key Decisions, Risks — all escaped via `_escape()` —
-    followed by a Diagram section containing the raw mxGraph XML in a
-    <pre class="drawio-xml"> block (NOT escaped — see T-12-02) and a link to
-    the diagrams.net viewer (viewer_url interpolated raw — pre-encoded,
-    trusted internal source).
+    followed by a Diagram section containing the HTML-escaped mxGraph XML in a
+    <pre class="drawio-xml"> block and a link to the diagrams.net viewer
+    (viewer_url interpolated raw — pre-encoded, trusted internal source).
     """
     return (
         f"<h1>Architecture: {issue_key}</h1>"
@@ -310,7 +309,7 @@ def _render_diagram_template(
         f"<h2>Key Decisions</h2><p>{_escape(key_decisions)}</p>"
         f"<h2>Risks</h2><p>{_escape(risks)}</p>"
         f"<h2>Diagram</h2>"
-        f'<pre class="drawio-xml">{diagram_xml}</pre>'
+        f'<pre class="drawio-xml">{_escape(diagram_xml)}</pre>'
         f'<p><a href="{viewer_url}">Open diagram in diagrams.net</a></p>'
     )
 

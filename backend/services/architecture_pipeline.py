@@ -321,6 +321,15 @@ async def _run_complex(
     route_result = route_request("architecture", prompt)
     sections = _parse_sections(route_result.content, section_names)
 
+    # If the LLM skipped the ## headings the parser returns all-empty sections.
+    # Fall back to raw output so the page is never blank.
+    if not any(sections.values()):
+        logger.warning(
+            "Architecture LLM output for %s contained no ## sections — using raw output as summary",
+            issue_key,
+        )
+        sections["Summary"] = route_result.content or "(no architecture generated)"
+
     summary = sections["Summary"]
     approach = sections["Approach"]
     component_breakdown = sections["Component Breakdown"]
@@ -435,6 +444,13 @@ async def _run_simple(
 
     route_result = route_request("architecture", prompt)
     sections = _parse_sections(route_result.content, section_names)
+
+    if not any(sections.values()):
+        logger.warning(
+            "Architecture LLM output for %s contained no ## sections — using raw output as summary",
+            issue_key,
+        )
+        sections["Summary"] = route_result.content or "(no architecture generated)"
 
     summary = sections["Summary"]
     approach = sections["Approach"]
