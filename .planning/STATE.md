@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Context-Aware Codebase Scanning
 status: executing
-stopped_at: context exhaustion at 77% (2026-06-21)
-last_updated: "2026-06-21T14:30:21.839Z"
+stopped_at: Completed 18-04-PLAN.md
+last_updated: "2026-06-21T17:41:22.037Z"
 last_activity: 2026-06-21 -- Phase 18 execution started
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 3
-  completed_plans: 2
-  percent: 0
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 4
+  percent: 25
 ---
 
 # Project State
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-06-21)
 ## Current Position
 
 Phase: 18 (codebase-scan-service) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 18
+Plan: 2 of 2
+Status: Ready to execute
 Last activity: 2026-06-21 -- Phase 18 execution started
 
 ## Milestone History
@@ -81,6 +81,7 @@ Last activity: 2026-06-21 -- Phase 18 execution started
 | Phase 12-structured-confluence-publishing P01 | 18 min | 1 tasks | 2 files |
 | Phase 13 P01 | 8 | 1 tasks | 1 files |
 | Phase 13 P02 | 9min | 2 tasks | 5 files |
+| Phase 18-codebase-scan-service P04 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,7 @@ Recent decisions affecting current work:
 - [v1.6 roadmap]: Snapshot refresh hooks into merge_pipeline.py post-merge path (SNAPSHOT-01, Phase 19); read path degrades gracefully when file absent (SNAPSHOT-02, Phase 19)
 - [v1.6 roadmap]: describe_pipeline.py and architecture_pipeline.py both read .hermes/codebase.md via GitHub API before their LLM calls; during dev pipeline the local clone path can also be used (Phases 20-21)
 - [v1.6 roadmap]: Architecture pipeline passes codebase context to both the complexity classifier call and the generation call in a single read operation (ARCHCTX-01, Phase 21)
+- [Phase ?]: RuntimeError message format uses only owner/repo/status_code — github_token never interpolated (T-18-01 compliance, 18-04)
 
 ### Pending Todos
 
@@ -174,7 +176,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-21T14:30:21.833Z
-Stopped at: context exhaustion at 77% (2026-06-21)
+Last session: 2026-06-21T16:47:17.959Z
+Stopped at: Completed 18-04-PLAN.md
 Resume file: None
 Next action: `/gsd-plan-phase 18` — plan Phase 18: Codebase Scan Service

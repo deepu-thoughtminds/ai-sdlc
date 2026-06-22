@@ -547,7 +547,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 15. GitHub Config & Dev Pipeline Foundation | 2/2 | Complete    | 2026-06-20 |
 | 16. Dev Pipeline Integration | 2/2 | Complete   | 2026-06-21 |
 | 17. PR Merge Pipeline | 2/2 | Complete    | 2026-06-21 |
-| 18. Codebase Scan Service | 3/3 | Complete   | 2026-06-21 |
+| 18. Codebase Scan Service | 4/4 | Complete   | 2026-06-21 |
 | 19. Snapshot Refresh & Read Fallback | 0/? | Not started | - |
 | 20. Describe Pipeline Context | 0/? | Not started | - |
 | 21. Architecture Pipeline Context | 0/? | Not started | - |
