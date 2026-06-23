@@ -47,6 +47,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 20: Describe Pipeline Context** - describe_pipeline.py reads `.hermes/codebase.md` via GitHub API before LLM call; generated story elaborations reference real module names and file paths (completed 2026-06-22)
 - [x] **Phase 21: Architecture Pipeline Context** - architecture_pipeline.py reads `.hermes/codebase.md` and includes it in the complexity classifier and architecture generation LLM calls; outputs reference actual components and integration points (completed 2026-06-22)
 
+## Milestone v1.7: Agentic Codegen via LiteLLM + Claude Agent SDK
+
+- [ ] **Phase 22: Agentic Codegen** - Replace the freellmapi text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs. Enables the dev pipeline to handle any complexity of story — from single-line text changes to multi-file architectural features — without Anthropic API costs.
+
 ## Phase Details
 
 ### Phase 1: Foundation
@@ -534,6 +538,19 @@ Plans:
 
 ---
 
+### Phase 22: Agentic Codegen
+
+**Goal:** Replace freellmapi one-shot codegen with an agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs.
+
+**Deliverables:**
+- `litellm/` Docker service + `config.yaml`
+- `backend/services/agentic_coder.py`
+- Updated `docker-compose.yml`, `dev_pipeline.py`, `requirements.txt`
+
+**Requirements:** `.planning/phases/22-agentic-codegen/22-REQUIREMENTS.md`
+
+---
+
 ## Progress
 
 **Execution Order:**
@@ -562,3 +579,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 19. Snapshot Refresh & Read Fallback | 2/2 | Complete   | 2026-06-22 |
 | 20. Describe Pipeline Context | 1/1 | Complete    | 2026-06-22 |
 | 21. Architecture Pipeline Context | 1/1 | Complete   | 2026-06-22 |
+| 22. Agentic Codegen              | 0/? | Not started | -          |
