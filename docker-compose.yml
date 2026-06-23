@@ -27,6 +27,27 @@ services:
       start_period: 30s
       retries: 3
 
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm-local}
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    depends_on:
+      - freellmapi
+    networks:
+      - ai-sdlc-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
   hermes:
     build:
       context: ./hermes
@@ -38,7 +59,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
       - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
-      - MCP_ATLASSIAN_URL=${MCP_ATLASSIAN_URL:-http://mcp-atlassian:9000/sse}
+      - MCP_ATLASSIAN_URL=${MCP_ATLASSIAN_URL:-http://mcp-atlassian:9000/mcp}
     depends_on:
       - freellmapi
       - mcp-atlassian
@@ -82,6 +103,7 @@ services:
       - HERMES_BASE_URL=http://hermes:8001
     depends_on:
       - hermes
+      - litellm
     ports:
       - "8000:8000"
     networks:

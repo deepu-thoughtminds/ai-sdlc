@@ -1,0 +1,13 @@
+model_list:
+  - model_name: sonnet
+    litellm_params:
+      model: openai/llama-3.3-70b-versatile
+      api_base: http://freellmapi:3001/v1
+      api_key: dummy
+  - model_name: sonnet
+    litellm_params:
+      model: openai/gemini-2.0-flash
+      api_base: http://freellmapi:3001/v1
+      api_key: dummy
+general_settings:
+  master_key: "sk-litellm-local"

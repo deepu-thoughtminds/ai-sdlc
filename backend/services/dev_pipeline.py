@@ -5,7 +5,7 @@ and PR creation into a single run() coroutine triggered by @jarvis start coding.
 
 Threat mitigations:
   T-16-05: jira_token/github_token/confluence_token are NEVER passed to
-           generate_code_changes — only issue metadata and content strings.
+           run_agentic_codegen — only issue metadata and content strings.
   T-16-06: Token values are NEVER logged; only issue_key and github_repo slug
            appear in log statements at INFO/WARNING level.
   T-16-07: shutil.rmtree runs in a try/finally block around clone→codegen→PR,
@@ -28,8 +28,7 @@ from models.pipeline_state import PipelineState
 from models.project import Project
 from services.confluence_url_finder import find_latest_architecture_url
 from services.crypto import decrypt_credential
-from services.claude_code_executor import run_claude_code_executor
-from services.code_generator import generate_code_changes
+from services.agentic_coder import run_agentic_codegen
 from services.graphify_service import get_codebase_summary
 from services.hermes_client import (
     get_comments,
@@ -125,7 +124,7 @@ async def run(
 
     Graceful degradation paths (both set status="complete"):
       - No Confluence URL in comment history → informative Jira comment posted.
-      - generate_code_changes returns [] → informative Jira comment posted.
+      - run_agentic_codegen returns [] → informative Jira comment posted.
 
     Args:
         project: Project ORM with jira_url, confluence_url, encrypted tokens.
@@ -224,25 +223,16 @@ async def run(
         # Step 6: Run codegen and PR creation in a try/finally so the temp
         # workspace is always cleaned up (T-16-07 / repo_clone.py contract).
         try:
-            # Step 7: Generate code changes via Claude Code executor when
-            # CLAUDE_API_KEY is set, otherwise fall back to freellmapi.
-            if os.environ.get("CLAUDE_API_KEY"):
-                file_changes = run_claude_code_executor(
-                    cloned.workspace_path,
-                    issue_key,
-                    issue_summary,
-                    issue_description,
-                    architecture_content,
-                )
-            else:
-                file_changes = generate_code_changes(
-                    issue_key,
-                    issue_summary,
-                    issue_description,
-                    architecture_content,
-                    directory_tree,
-                    relevant_file_contents=relevant_files,
-                )
+            # Step 7: Generate code changes via the agentic coder (Claude Agent
+            # SDK routed through the local LiteLLM proxy to freellmapi).
+            file_changes = await run_agentic_codegen(
+                cloned.workspace_path,
+                issue_key,
+                issue_summary,
+                issue_description,
+                architecture_content,
+                directory_tree,
+            )
             if not file_changes:
                 comment_text = (
                     f"The dev pipeline ran for {issue_key} but the code generator "
