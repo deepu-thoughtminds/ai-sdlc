@@ -159,7 +159,7 @@ def generate_code_changes(
     # T-06-01: prompt contains only issue data + architecture + codebase context
     prompt = (
         "You are a senior software engineer implementing a Jira story. "
-        "Generate the exact file changes needed to implement the following story.\n\n"
+        "Make the MINIMUM necessary changes to implement the following story.\n\n"
         f"Jira Ticket: {issue_key}\n"
         f"Summary: {issue_summary}\n"
         f"Description:\n{issue_description}\n\n"
@@ -175,9 +175,15 @@ def generate_code_changes(
         "<complete file content here>\n"
         "```\n\n"
         "Rules:\n"
-        "- Include complete file content (not diffs or partial snippets)\n"
+        "- Include complete file content for each changed file\n"
+        "- CRITICAL: Copy the provided file content CHARACTER FOR CHARACTER except "
+        "for the specific lines that must change. Do NOT reformat, reorder imports, "
+        "rename variables, add comments, or change whitespace anywhere else.\n"
+        "- CRITICAL: Minimise the number of files changed. Only include a file if "
+        "it MUST change to satisfy the story. Do not add or modify test files unless "
+        "the story explicitly requires new test logic.\n"
+        "- For text/string changes: change ONLY that string and nothing else in the file.\n"
         "- Use the exact ### FILE: format for each file\n"
-        "- Only include files that need to be created or modified\n"
         "- File paths should be relative to the repository root\n"
         "- Do not include explanations outside of the file blocks"
     )
