@@ -313,8 +313,8 @@ class HermesMCPClient:
     ) -> list[dict]:
         """Fetch all comments for a Jira issue via MCP tool jira_get_issue.
 
-        Returns a flat list[dict] with the raw comment objects from the
-        fields.comment.comments envelope. Returns [] if no comments exist.
+        Returns a flat list[dict] with the raw comment objects. Returns [] if
+        no comments exist.
 
         Uses Jira credentials (x-atlassian-jira-url header) — same as get_sprint_issues.
         Never returns the raw MCP envelope — always normalised to a plain list.
@@ -326,7 +326,7 @@ class HermesMCPClient:
             credentials: Per-request Jira credentials.
 
         Returns:
-            List of comment dicts from fields.comment.comments, or [] if none.
+            List of comment dicts, or [] if none.
         """
         args = {
             "issue_key": issue_key,
@@ -337,12 +337,14 @@ class HermesMCPClient:
                 await session.initialize()
                 result = await session.call_tool("jira_get_issue", args)
         parsed = self._parse_mcp_result(result)
-        # Normalise: extract flat list from fields.comment.comments envelope
-        comments = (
-            parsed.get("fields", {})
-            .get("comment", {})
-            .get("comments", [])
-        )
+        # mcp-atlassian's jira_get_issue tool returns its own simplified
+        # envelope {"id", "key", "comments": [...]} — top-level "comments",
+        # not the raw Jira REST v3 fields.comment.comments shape. Fall back
+        # to the nested shape too in case a future mcp-atlassian version
+        # reverts to passing through the raw Jira envelope.
+        comments = parsed.get("comments")
+        if comments is None:
+            comments = parsed.get("fields", {}).get("comment", {}).get("comments", [])
         if not isinstance(comments, list):
             return []
         # Jira Cloud REST API v3 returns comment.body as an ADF document (dict),

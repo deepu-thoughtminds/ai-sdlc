@@ -345,13 +345,11 @@ async def test_confluence_cred_headers_uses_distinct_header_name():
 async def test_get_comments_calls_correct_tool():
     """get_comments() calls jira_get_issue with comment expansion."""
     payload = json.dumps({
-        "fields": {
-            "comment": {
-                "comments": [
-                    {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
-                ]
-            }
-        }
+        "id": "10277",
+        "key": "TS-1",
+        "comments": [
+            {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
+        ],
     })
     fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
     with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
@@ -369,14 +367,12 @@ async def test_get_comments_calls_correct_tool():
 async def test_get_comments_returns_flat_list():
     """get_comments() returns a flat list[dict] from the comment envelope."""
     payload = json.dumps({
-        "fields": {
-            "comment": {
-                "comments": [
-                    {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
-                    {"id": "c2", "body": "Second comment", "author": {"displayName": "Bob"}},
-                ]
-            }
-        }
+        "id": "10277",
+        "key": "TS-1",
+        "comments": [
+            {"id": "c1", "body": "First comment", "author": {"displayName": "Alice"}},
+            {"id": "c2", "body": "Second comment", "author": {"displayName": "Bob"}},
+        ],
     })
     fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
     with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
@@ -394,9 +390,9 @@ async def test_get_comments_returns_flat_list():
 async def test_get_comments_returns_empty_list_when_no_comments():
     """get_comments() returns [] when issue has no comments."""
     payload = json.dumps({
-        "fields": {
-            "comment": {"comments": []}
-        }
+        "id": "10277",
+        "key": "TS-1",
+        "comments": [],
     })
     fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
     with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
@@ -433,13 +429,11 @@ async def test_get_comments_flattens_adf_body_to_plain_text():
         ],
     }
     payload = json.dumps({
-        "fields": {
-            "comment": {
-                "comments": [
-                    {"id": "c1", "body": adf_body, "author": {"displayName": "Bot"}},
-                ]
-            }
-        }
+        "id": "10277",
+        "key": "TS-1",
+        "comments": [
+            {"id": "c1", "body": adf_body, "author": {"displayName": "Bot"}},
+        ],
     })
     fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
     with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
@@ -455,13 +449,11 @@ async def test_get_comments_flattens_adf_body_to_plain_text():
 async def test_get_comments_leaves_plain_string_body_unchanged():
     """get_comments() does not alter a comment whose body is already a string."""
     payload = json.dumps({
-        "fields": {
-            "comment": {
-                "comments": [
-                    {"id": "c1", "body": "Plain text comment", "author": {"displayName": "Alice"}},
-                ]
-            }
-        }
+        "id": "10277",
+        "key": "TS-1",
+        "comments": [
+            {"id": "c1", "body": "Plain text comment", "author": {"displayName": "Alice"}},
+        ],
     })
     fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
     with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
@@ -475,7 +467,7 @@ async def test_get_comments_leaves_plain_string_body_unchanged():
 @pytest.mark.asyncio
 async def test_get_comments_uses_jira_cred_headers():
     """get_comments() uses Jira credentials (not Confluence headers)."""
-    payload = json.dumps({"fields": {"comment": {"comments": []}}})
+    payload = json.dumps({"id": "10277", "key": "TS-1", "comments": []})
     headers_used = {}
 
     @asynccontextmanager
@@ -496,6 +488,28 @@ async def test_get_comments_uses_jira_cred_headers():
 
     assert "x-atlassian-jira-url" in headers_used
     assert "x-atlassian-confluence-url" not in headers_used
+
+
+@pytest.mark.asyncio
+async def test_get_comments_falls_back_to_nested_fields_envelope():
+    """get_comments() falls back to fields.comment.comments if top-level key absent."""
+    payload = json.dumps({
+        "fields": {
+            "comment": {
+                "comments": [
+                    {"id": "c1", "body": "Nested comment", "author": {"displayName": "Alice"}},
+                ]
+            }
+        }
+    })
+    fake_streamable, mock_cs_class, mock_session = make_mcp_patches(payload)
+    with patch("hermes.mcp_client.streamablehttp_client", fake_streamable), \
+         patch("hermes.mcp_client.ClientSession", mock_cs_class):
+        client = HermesMCPClient(mcp_url="http://fake:9000/sse")
+        result = await client.get_comments("TS-1", TEST_CREDS)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "c1"
 
 
 # ---------------------------------------------------------------------------
