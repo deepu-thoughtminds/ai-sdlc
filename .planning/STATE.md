@@ -1,6 +1,6 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.7
+milestone: v1.8
 milestone_name: Autonomous QA Stage
 status: planning
 last_updated: "2026-06-23T10:40:41.649Z"
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-06-21)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-06-23 — Milestone v1.7 started
+Last activity: 2026-06-23 — Milestone v1.8 started
 
 ## Milestone History
 

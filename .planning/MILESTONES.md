@@ -9,6 +9,16 @@
 | v1.4 | smart-architecture | 10–13 | ✅ Shipped | 2026-06-19 |
 | v1.5 | github-dev-pipeline | 14–17 | ✅ Shipped | 2026-06-21 |
 | v1.6 | context-aware-codebase-scanning | 18–21 | ✅ Shipped | 2026-06-22 |
+| v1.7 | agentic-codegen | 22 | ✅ Shipped | 2026-06-23 |
+
+## v1.7 Summary — Agentic Codegen via LiteLLM + Claude Agent SDK
+
+**Goal:** Replace the freellmapi one-shot text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs.
+
+**Phases:**
+- Phase 22: Agentic Codegen — `litellm/` Docker service + `config.yaml`, `backend/services/agentic_coder.py`, updated `docker-compose.yml`/`dev_pipeline.py`/`requirements.txt`
+
+**Requirements:** see `.planning/phases/22-agentic-codegen/22-REQUIREMENTS.md`
 
 ## v1.6 Summary — Context-Aware Codebase Scanning
 

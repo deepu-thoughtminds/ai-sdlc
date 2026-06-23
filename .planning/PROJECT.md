@@ -1,6 +1,6 @@
 # AI-SDLC Jira
 
-## Current Milestone: v1.7 Autonomous QA Stage
+## Current Milestone: v1.8 Autonomous QA Stage
 
 **Goal:** Add the QA stage after code generation — triggered both automatically post-merge and via explicit `@jarvis run qa` comment trigger, generating unit tests, static analysis, and Playwright-based E2E tests, executing them in the cloned repo sandbox, attempting a bounded auto-fix loop on failures, and reporting final results back to the Jira comment.
 
@@ -12,11 +12,15 @@
 - Auto-fix loop: on failure, agent attempts to autonomously fix code and re-run QA, up to a bounded retry limit
 - Final QA results (pass/fail summary, failure details after exhausting retries) posted back to the Jira comment
 
-## Previous Milestone: v1.6 Context-Aware Codebase Scanning (complete)
+## Previous Milestone: v1.7 Agentic Codegen via LiteLLM + Claude Agent SDK (complete)
+
+Phase 22 complete. Replaced the freellmapi text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs.
+
+## Milestone Before That: v1.6 Context-Aware Codebase Scanning (complete)
 
 All 4 phases (18-21) complete. Codebase scan service, snapshot refresh, describe pipeline context, and architecture pipeline context all shipped. See `.planning/milestones/v1.6-REQUIREMENTS.md` for full requirement traceability.
 
-## Milestone Before That: v1.5 GitHub Dev Pipeline & LLM Intent Routing (complete)
+## Earlier Milestone: v1.5 GitHub Dev Pipeline & LLM Intent Routing (complete)
 
 **Goal:** Automate the developer stage end-to-end — from reading the published Confluence architecture to cloning the GitHub repo, making code changes, raising a PR, and merging it — all triggered from Jira comment mentions processed by an LLM-based intent router instead of hardcoded keyword matching.
 
@@ -26,7 +30,7 @@ All 4 phases (18-21) complete. Codebase scan service, snapshot refresh, describe
 - `@jarvis merge pr to main branch` trigger: merges the open PR and posts merge status back to Jira comment
 - LLM-based intent router replaces hardcoded `KNOWN_STAGES` whitelist in `mention_parser.py` — the LLM extracts intent and entities from free-text `@jarvis` phrases
 
-## Earlier Milestone: v1.4 Smart Architecture & Confluence Publishing (complete)
+## Even Earlier Milestone: v1.4 Smart Architecture & Confluence Publishing (complete)
 
 **Goal:** Replace all direct Jira REST calls in the platform with mcp-atlassian MCP tool calls routed through the Hermes agent, so every Jira interaction (posting comments, updating descriptions, fetching sprint backlog, assigning issues) uses the MCP protocol.
 
@@ -119,4 +123,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-23 — milestone v1.7 (Autonomous QA Stage) started*
+*Last updated: 2026-06-23 — milestone v1.8 (Autonomous QA Stage) started; v1.7 (Agentic Codegen) recorded as shipped*
