@@ -55,7 +55,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ## Milestone v1.8: Autonomous QA Stage
 
-- [ ] **Phase 23: QA Foundation & Sandbox Execution** - test_executor.py (toolchain detection + subprocess execution with resource limits), qa-sandbox Docker image, qa_pipeline.py skeleton, PipelineState.qa_attempt field, static analysis execution without LLM
+- [x] **Phase 23: QA Foundation & Sandbox Execution** - test_executor.py (toolchain detection + subprocess execution with resource limits), qa-sandbox Docker image, qa_pipeline.py skeleton, PipelineState.qa_attempt field, static analysis execution without LLM (completed 2026-06-23)
 - [ ] **Phase 24: Test Generation** - test_generator.py generates pytest unit tests via freellmapi using cloned repo context + codebase.md, writes tests to workspace, executes via sandbox, posts first QA result to Jira
 - [ ] **Phase 25: Bounded Auto-Fix Loop** - auto_fix_loop.py with 3-attempt iteration cap, non-progress detection (same-error termination), incremental context refresh per iteration, fix commits raised as PRs via pr_creator.py
 - [ ] **Phase 26: E2E + Trigger Wiring** - Playwright E2E test generation with graceful skip when no playwright.config.* exists, auto-chain from merge_pipeline.py, @jarvis run qa comment trigger, shared idempotency guard for both trigger paths
@@ -576,14 +576,14 @@ Plans:
   3. The cloned workspace used for QA is always a fresh clone — never the workspace left by the dev or merge pipeline; the workspace is cleaned up after the run regardless of pass or fail outcome
   4. `PipelineState.qa_attempt` field exists and is incremented at the start of each fix attempt, so a mid-loop crash does not restart the counter from zero
 
-**Plans**: 2 plans
+**Plans**: 2/2 plans complete
 **Wave 1**
 
-- [ ] 23-01-PLAN.md — QA sandbox Dockerfile + docker-compose service + PipelineState.qa_attempt column
+- [x] 23-01-PLAN.md — QA sandbox Dockerfile + docker-compose service + PipelineState.qa_attempt column
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 23-02-PLAN.md — test_executor.py toolchain detection + subprocess execution + qa_pipeline.py skeleton
+- [x] 23-02-PLAN.md — test_executor.py toolchain detection + subprocess execution + qa_pipeline.py skeleton
 
 ### Phase 24: Test Generation
 
@@ -660,7 +660,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 20. Describe Pipeline Context | 1/1 | Complete    | 2026-06-22 |
 | 21. Architecture Pipeline Context | 1/1 | Complete   | 2026-06-22 |
 | 22. Agentic Codegen              | 1/1 | Complete   | 2026-06-23 |
-| 23. QA Foundation & Sandbox Execution | 0/2 | Not started | - |
+| 23. QA Foundation & Sandbox Execution | 2/2 | Complete    | 2026-06-23 |
 | 24. Test Generation | 0/? | Not started | - |
 | 25. Bounded Auto-Fix Loop | 0/? | Not started | - |
 | 26. E2E + Trigger Wiring | 0/? | Not started | - |

@@ -125,6 +125,80 @@ Automate the developer stage end-to-end: from reading the published Confluence a
 
 ---
 
+## Milestone v1.8: Autonomous QA Stage
+
+Add a QA stage to the existing pipeline that auto-chains after PR merge and is also triggerable on-demand, generates unit tests + static analysis + Playwright E2E tests, executes them in the cloned repo sandbox, applies a bounded auto-fix loop on failures, and posts results back to the Jira ticket.
+
+---
+
+## Triggers
+
+- [ ] **QATRIG-01**: QA stage auto-chains after `merge_pipeline.py` reports a successful PR merge — fire-and-forget, never blocks the merge Jira comment
+- [ ] **QATRIG-02**: Developer can trigger QA on-demand via `@jarvis run qa` in a Jira comment, routed through the LLM intent router
+- [ ] **QATRIG-03**: Both trigger paths (auto-chain + comment) share a single idempotency check — if an active QA `PipelineState` exists for the ticket (status ≠ failed), the duplicate trigger is acknowledged and silently skipped
+
+## Test Generation
+
+- [ ] **TESTGEN-01**: Agent generates pytest unit test file(s) grounded in cloned repo files + `.hermes/codebase.md` via freellmapi, using the existing `### FILE:` output convention from `code_generator.py`
+- [x] **TESTGEN-02**: Agent auto-detects project toolchain (Python: ruff/mypy/bandit from `pyproject.toml`/`setup.cfg`; JS/TS: eslint/tsc/npm audit from `package.json`) and runs static analysis commands without LLM invocation
+- [ ] **TESTGEN-03**: Agent generates Playwright E2E test(s) grounded in cloned repo context, gated on detecting existing `playwright.config.*`; posts a skip note to Jira when no E2E infra is found
+
+## Test Execution
+
+- [x] **TESTEXEC-01**: All test and static analysis commands execute via `subprocess.run()` inside the cloned workspace with a hard per-command timeout (default 120s); output captured into a structured `TestResult`
+- [x] **TESTEXEC-02**: Each QA run uses a fresh clone (never reuses dev/merge pipeline workspace); workspace cleaned up after the run regardless of outcome
+
+## Auto-Fix Loop
+
+- [ ] **AUTOFIX-01**: On test failure, agent generates a targeted fix via freellmapi using the specific failing test output + error message (not full regeneration); applies fix and re-runs only the failing tests; up to 3 attempts
+- [ ] **AUTOFIX-02**: Auto-fix loop terminates early when the same error repeats after a fix attempt (non-progress detection)
+- [ ] **AUTOFIX-03**: Auto-fix code changes are committed to a new branch (`jarvis/qa-fix-{issue_key}`) and a PR opened via `pr_creator.py` — never pushed directly to main
+- [x] **AUTOFIX-04**: Auto-fix attempt count tracked in `PipelineState` (`qa_attempt` field) so loop progress is observable
+
+## QA Reporting
+
+- [ ] **QAREP-01**: Agent posts a final pass/fail summary to the Jira ticket comment with per-category results (unit tests, lint, type-check, security scan, E2E); failure details included after retries exhausted; auto-fix PR link included if one was opened
+
+---
+
+## Future Requirements (deferred from v1.8)
+
+- Intermediate "QA in progress, attempt N of M" Jira comment updates during the auto-fix loop — async status updates add complexity; final summary is sufficient for v1
+- Mixed-stack/monorepo toolchain detection refinement — single-stack detection (Python or JS/TS) is sufficient for initial onboarded projects
+- Scaffolding new Playwright E2E infra for repos that have none — only extend existing infra in v1.8
+- Auto-merge on QA pass — preserves the human-review gate in v1
+- Workspace reuse optimization between dev/merge/QA stages — would require changing repo_clone.py's cleanup-on-completion contract; deferred to v1.9+
+
+---
+
+## Out of Scope (v1.8)
+
+- Real-time streaming of test output into Jira — comment-based async final summary is sufficient
+- Cross-ticket or cross-project QA aggregation — per-ticket scope only
+- Self-hosted CI runner integration — Docker subprocess execution in sandbox is sufficient for v1
+
+---
+
+## Traceability (v1.8)
+
+| REQ-ID | Phase | Plan |
+|--------|-------|------|
+| TESTEXEC-01 | Phase 23 | TBD |
+| TESTEXEC-02 | Phase 23 | TBD |
+| TESTGEN-02 | Phase 23 | TBD |
+| AUTOFIX-04 | Phase 23 | TBD |
+| TESTGEN-01 | Phase 24 | TBD |
+| QAREP-01 | Phase 24 | TBD |
+| AUTOFIX-01 | Phase 25 | TBD |
+| AUTOFIX-02 | Phase 25 | TBD |
+| AUTOFIX-03 | Phase 25 | TBD |
+| TESTGEN-03 | Phase 26 | TBD |
+| QATRIG-01 | Phase 26 | TBD |
+| QATRIG-02 | Phase 26 | TBD |
+| QATRIG-03 | Phase 26 | TBD |
+
+---
+
 ## Traceability (v1.4)
 
 | REQ-ID | Phase | Plan |
