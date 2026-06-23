@@ -4,16 +4,16 @@ milestone: v1.4
 milestone_name: Smart Architecture & Confluence Publishing
 current_phase: 21
 current_phase_name: architecture-pipeline-context
-status: milestone-complete
-stopped_at: context exhaustion at 76% (2026-06-22)
-last_updated: "2026-06-22T18:16:41.118Z"
+status: verifying
+stopped_at: context exhaustion at 96% (2026-06-23)
+last_updated: "2026-06-23T05:36:43.878Z"
 last_activity: 2026-06-22
 last_activity_desc: Phase 21 plan 01 executed and complete
 progress:
   total_phases: 4
   completed_phases: 4
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 7
+  completed_plans: 7
   percent: 100
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-21)
 
 Phase: 21 (architecture-pipeline-context) — COMPLETE
 Plan: 1 of 1 (complete)
-Status: Phase 21 complete — milestone v1.6 (Context-Aware Codebase Scanning) all 4 phases done
+Status: Phase complete — ready for verification
 Last activity: 2026-06-22 -- Phase 21 plan 01 executed and complete
 
 ## Milestone History
@@ -90,6 +90,7 @@ Last activity: 2026-06-22 -- Phase 21 plan 01 executed and complete
 | Phase 19-snapshot-refresh-read-fallback P01 | 3min | 1 tasks | 2 files |
 | Phase 19-snapshot-refresh-read-fallback P02 | 2min | 1 tasks | 2 files |
 | Phase 21-architecture-pipeline-context P01 | - | 2 tasks | 4 files |
+| Phase 22 P01 | 25m | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -157,6 +158,8 @@ Recent decisions affecting current work:
 - [Phase ?]: RuntimeError message format uses only owner/repo/status_code — github_token never interpolated (T-18-01 compliance, 18-04)
 - [Phase 19-snapshot-refresh-read-fallback]: Post-merge re-scan hook uses isolated try/except; scan failure never flips state_row.status or modifies Jira comment body (T-19-02 compliance, SNAPSHOT-01)
 - [Phase ?]: Phase 19-02 decision
+- [Phase 22]: Used ghcr.io/berriai/litellm:main-latest per plan (resolves >=1.82.9, past 1.82.7/1.82.8 malware incident)
+- [Phase 22]: Left claude_code_executor.py and code_generator.py as unused dead code per plan instructions (no other module imports them from dev_pipeline)
 
 ### Pending Todos
 
@@ -198,7 +201,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-22T18:16:41.108Z
-Stopped at: context exhaustion at 76% (2026-06-22)
+Last session: 2026-06-23T05:36:20.077Z
+Stopped at: context exhaustion at 96% (2026-06-23)
 Resume file: None
 Next action: Run `/gsd-new-milestone` to plan the next milestone.

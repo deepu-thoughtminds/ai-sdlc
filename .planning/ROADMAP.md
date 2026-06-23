@@ -49,7 +49,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ## Milestone v1.7: Agentic Codegen via LiteLLM + Claude Agent SDK
 
-- [ ] **Phase 22: Agentic Codegen** - Replace the freellmapi text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs. Enables the dev pipeline to handle any complexity of story — from single-line text changes to multi-file architectural features — without Anthropic API costs.
+- [x] **Phase 22: Agentic Codegen** - Replace the freellmapi text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs. Enables the dev pipeline to handle any complexity of story — from single-line text changes to multi-file architectural features — without Anthropic API costs. (completed 2026-06-23)
 
 ## Phase Details
 
@@ -543,6 +543,7 @@ Plans:
 **Goal:** Replace freellmapi one-shot codegen with an agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs.
 
 **Deliverables:**
+
 - `litellm/` Docker service + `config.yaml`
 - `backend/services/agentic_coder.py`
 - Updated `docker-compose.yml`, `dev_pipeline.py`, `requirements.txt`
@@ -579,4 +580,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 19. Snapshot Refresh & Read Fallback | 2/2 | Complete   | 2026-06-22 |
 | 20. Describe Pipeline Context | 1/1 | Complete    | 2026-06-22 |
 | 21. Architecture Pipeline Context | 1/1 | Complete   | 2026-06-22 |
-| 22. Agentic Codegen              | 0/? | Not started | -          |
+| 22. Agentic Codegen              | 1/1 | Complete   | 2026-06-23 |
