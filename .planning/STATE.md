@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-06-23T10:40:41.649Z"
 last_activity: 2026-06-23
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,17 +17,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-21)
+See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 21 — architecture-pipeline-context
+**Current focus:** Phase 23 — qa-foundation-sandbox-execution
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 23 — QA Foundation & Sandbox Execution
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-23 — Milestone v1.8 started
+Status: Roadmap created — ready to plan Phase 23
+Last activity: 2026-06-23 — Milestone v1.8 roadmap created (Phases 23–26)
 
 ## Milestone History
 
@@ -40,6 +40,8 @@ Last activity: 2026-06-23 — Milestone v1.8 started
 | v1.4 smart-architecture | 4 (Phases 10-13) | 2026-06-19 | Complete | All 13 phases, all 24 plans done |
 | v1.5 github-dev-pipeline | 4 (Phases 14-17) | TBD | Complete | 2026-06-21 |
 | v1.6 context-aware-codebase-scanning | 4 (Phases 18-21) | 8 | Complete | 2026-06-22 |
+| v1.7 agentic-codegen | 1 (Phase 22) | 1 | Complete | 2026-06-23 |
+| v1.8 autonomous-qa-stage | 4 (Phases 23-26) | TBD | In Progress | — |
 
 ## Performance Metrics
 
@@ -156,10 +158,16 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 19-02 decision
 - [Phase 22]: Used ghcr.io/berriai/litellm:main-latest per plan (resolves >=1.82.9, past 1.82.7/1.82.8 malware incident)
 - [Phase 22]: Left claude_code_executor.py and code_generator.py as unused dead code per plan instructions (no other module imports them from dev_pipeline)
+- [v1.8 roadmap]: QA test execution uses subprocess.run() inside an ephemeral sibling container (docker>=7.1.0 Python SDK); never reuses dev/merge pipeline workspace; hard 120s per-command timeout (TESTEXEC-01, TESTEXEC-02, Phase 23)
+- [v1.8 roadmap]: QA sandbox image based on mcr.microsoft.com/playwright:v1.49.0-noble with ruff/mypy/bandit/semgrep pre-installed; Playwright package version pinned to match image tag — version mismatch is most common Playwright-in-Docker failure mode (Phase 23)
+- [v1.8 roadmap]: Auto-fix commits use pr_creator.py branch jarvis/qa-fix-{issue_key}; never pushed directly to main — autonomy boundary matches dev pipeline (AUTOFIX-03, Phase 25)
+- [v1.8 roadmap]: Auto-fix loop terminates early on same-error repeat (non-progress detection) as well as 3-attempt cap; PipelineState.qa_attempt persists count across restarts (AUTOFIX-02, AUTOFIX-04, Phase 25)
+- [v1.8 roadmap]: Playwright E2E generation gated on detecting playwright.config.* in cloned repo; skip note posted to Jira when absent — no scaffolding new E2E infra in v1.8 (TESTGEN-03, Phase 26)
+- [v1.8 roadmap]: Both trigger paths (auto-chain from merge_pipeline.py + @jarvis run qa comment) share a single scheduling helper with one idempotency check — mirrors existing architecture/merge_pr pattern (QATRIG-01, QATRIG-02, QATRIG-03, Phase 26)
 
 ### Pending Todos
 
-None — v1.6 roadmap created; ready to begin Phase 18 planning.
+None — v1.8 roadmap created (Phases 23–26); ready to begin Phase 23 planning.
 
 ### Quick Tasks Completed
 
@@ -186,6 +194,11 @@ None.
 | v1.6.x | On-demand refresh trigger (@jarvis refresh codebase) | Deferred | v1.6 planning |
 | v1.6.x | Diff-based incremental scan (re-scan only changed files) | Deferred | v1.6 planning |
 | v2+ | Codebase embedding / vector search | Deferred | v1.6 planning |
+| v1.8+ | Intermediate "QA in progress, attempt N of M" Jira comment updates during auto-fix loop | Deferred | v1.8 planning |
+| v1.8+ | Mixed-stack/monorepo toolchain detection refinement | Deferred | v1.8 planning |
+| v2+ | Scaffolding new Playwright E2E infra for repos that have none | Deferred | v1.8 planning |
+| v2+ | Auto-merge on QA pass | Deferred | v1.8 planning |
+| v1.9+ | Workspace reuse optimization between dev/merge/QA stages | Deferred | v1.8 planning |
 | debug | scrum54-dev-pipeline-missing-arch-url (dev_pipeline.py fails to look up architecture URL published by architecture_pipeline) | Acknowledged — awaiting_human_verify | v1.6 close (2026-06-22) |
 | uat_gap | Phase 17 (17-UAT.md) — 3 scenarios not yet tested | Acknowledged — testing | v1.6 close (2026-06-22) |
 | verification_gap | Phase 15 (15-VERIFICATION.md) — gaps found | Acknowledged — gaps_found | v1.6 close (2026-06-22) |
@@ -197,7 +210,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-23T05:36:20.077Z
-Stopped at: context exhaustion at 96% (2026-06-23)
+Last session: 2026-06-23T10:40:41.649Z
+Stopped at: v1.8 roadmap created
 Resume file: None
-Next action: Run `/gsd-new-milestone` to plan the next milestone.
+Next action: Run `/gsd-plan-phase 23` to plan Phase 23.

@@ -577,7 +577,12 @@ Plans:
   4. `PipelineState.qa_attempt` field exists and is incremented at the start of each fix attempt, so a mid-loop crash does not restart the counter from zero
 
 **Plans**: 2 plans
+**Wave 1**
+
 - [ ] 23-01-PLAN.md — QA sandbox Dockerfile + docker-compose service + PipelineState.qa_attempt column
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 23-02-PLAN.md — test_executor.py toolchain detection + subprocess execution + qa_pipeline.py skeleton
 
 ### Phase 24: Test Generation
