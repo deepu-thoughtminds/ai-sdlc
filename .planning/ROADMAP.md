@@ -16,6 +16,8 @@ Phases 14-17 (milestone v1.5) deliver the GitHub developer pipeline and replace 
 
 Phases 18-21 (milestone v1.6) give every pipeline stage accurate, real codebase context. Phase 18 delivers the codebase scan service: on project onboarding the agent clones the repo, walks the directory tree with targeted file reads, and commits a structured `.hermes/codebase.md` summary to main — no LLM involved. Phase 19 hooks the scan into the post-merge lifecycle: after a successful `@jarvis merge pr` the snapshot is refreshed automatically, and the read path degrades gracefully when the file does not yet exist. Phase 20 wires codebase context into the describe pipeline so story elaborations reference real module names and file paths. Phase 21 wires the same context into both the complexity classifier and architecture generation calls so architecture writeups reference actual components and integration points instead of invented structure.
 
+Phases 23-26 (milestone v1.8) add the Autonomous QA Stage. Phase 23 builds the sandboxed execution foundation — `test_executor.py`, a dedicated `qa-sandbox` Docker image, toolchain auto-detection, and `PipelineState.qa_attempt` tracking — establishing the right architectural boundary (LLM generates files; orchestrator runs them) before any test generation exists. Phase 24 adds LLM-driven unit test generation via freellmapi, reusing the `### FILE:` output convention, executing generated tests in the sandbox, and posting the first QA result to Jira. Phase 25 implements the bounded auto-fix loop: up to 3 freellmapi-driven fix attempts with non-progress detection, context-refreshed prompts per iteration, and fix commits raised as PRs via `pr_creator.py` — never pushed directly to main. Phase 26 wires everything together: Playwright E2E test generation with graceful skip when no `playwright.config.*` exists, auto-chain from `merge_pipeline.py` post-merge, `@jarvis run qa` comment trigger, and a shared idempotency guard covering both trigger paths.
+
 ## Phases
 
 **Phase Numbering:**
@@ -50,6 +52,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Milestone v1.7: Agentic Codegen via LiteLLM + Claude Agent SDK
 
 - [x] **Phase 22: Agentic Codegen** - Replace the freellmapi text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs. Enables the dev pipeline to handle any complexity of story — from single-line text changes to multi-file architectural features — without Anthropic API costs. (completed 2026-06-23)
+
+## Milestone v1.8: Autonomous QA Stage
+
+- [ ] **Phase 23: QA Foundation & Sandbox Execution** - test_executor.py (toolchain detection + subprocess execution with resource limits), qa-sandbox Docker image, qa_pipeline.py skeleton, PipelineState.qa_attempt field, static analysis execution without LLM
+- [ ] **Phase 24: Test Generation** - test_generator.py generates pytest unit tests via freellmapi using cloned repo context + codebase.md, writes tests to workspace, executes via sandbox, posts first QA result to Jira
+- [ ] **Phase 25: Bounded Auto-Fix Loop** - auto_fix_loop.py with 3-attempt iteration cap, non-progress detection (same-error termination), incremental context refresh per iteration, fix commits raised as PRs via pr_creator.py
+- [ ] **Phase 26: E2E + Trigger Wiring** - Playwright E2E test generation with graceful skip when no playwright.config.* exists, auto-chain from merge_pipeline.py, @jarvis run qa comment trigger, shared idempotency guard for both trigger paths
 
 ## Phase Details
 
@@ -552,10 +561,75 @@ Plans:
 
 ---
 
+## Milestone v1.8: Autonomous QA Stage
+
+### Phase 23: QA Foundation & Sandbox Execution
+
+**Goal**: Test and static analysis commands execute safely in an isolated Docker container — the architectural boundary (LLM generates files; orchestrator runs them) is established and validated before any LLM test generation exists
+**Depends on**: Phase 22
+**Milestone**: v1.8 — autonomous-qa-stage
+**Requirements**: TESTEXEC-01, TESTEXEC-02, TESTGEN-02, AUTOFIX-04
+**Success Criteria** (what must be TRUE):
+
+  1. Static analysis commands (ruff, mypy, bandit for Python; eslint, tsc, npm audit for JS/TS) run automatically after toolchain auto-detection reads `pyproject.toml`/`setup.cfg` or `package.json` — no LLM call required for this step
+  2. Each command executes via `subprocess.run()` inside a fresh cloned workspace with a hard 120-second timeout; captured output is returned as a structured `TestResult` object
+  3. The cloned workspace used for QA is always a fresh clone — never the workspace left by the dev or merge pipeline; the workspace is cleaned up after the run regardless of pass or fail outcome
+  4. `PipelineState.qa_attempt` field exists and is incremented at the start of each fix attempt, so a mid-loop crash does not restart the counter from zero
+
+**Plans**: 2 plans
+- [ ] 23-01-PLAN.md — QA sandbox Dockerfile + docker-compose service + PipelineState.qa_attempt column
+- [ ] 23-02-PLAN.md — test_executor.py toolchain detection + subprocess execution + qa_pipeline.py skeleton
+
+### Phase 24: Test Generation
+
+**Goal**: The agent generates pytest unit tests grounded in the cloned repo's actual code, executes them in the sandbox, and posts the first QA result back to the Jira ticket
+**Depends on**: Phase 23
+**Milestone**: v1.8 — autonomous-qa-stage
+**Requirements**: TESTGEN-01, QAREP-01
+**Success Criteria** (what must be TRUE):
+
+  1. Agent calls freellmapi with the cloned repo's file contents and `.hermes/codebase.md` context to generate a pytest unit test file using the `### FILE:` output convention from `code_generator.py`; the generated file is written to the workspace before execution
+  2. Generated unit tests execute in the QA sandbox and produce a structured result (pass count, fail count, error output) without requiring any manual configuration of the target repo
+  3. After test execution completes (pass or fail), a Jira comment is posted to the originating ticket with a per-category summary covering at minimum: unit tests and static analysis results
+
+**Plans**: TBD
+
+### Phase 25: Bounded Auto-Fix Loop
+
+**Goal**: When tests fail, the agent attempts up to 3 targeted fixes using the specific failing output as context, detects non-progress early, and raises fix commits as a PR — never pushing directly to main
+**Depends on**: Phase 24
+**Milestone**: v1.8 — autonomous-qa-stage
+**Requirements**: AUTOFIX-01, AUTOFIX-02, AUTOFIX-03
+**Success Criteria** (what must be TRUE):
+
+  1. On test failure, the agent generates a fix via freellmapi using the specific failing test output and error message (not full test regeneration), applies the fix, and re-runs only the failing tests — repeated up to 3 attempts tracked in `PipelineState.qa_attempt`
+  2. The loop terminates early when the same error repeats after a fix attempt, so the retry budget is not exhausted on a non-converging failure
+  3. Any code changes produced by the auto-fix loop are committed to a branch named `jarvis/qa-fix-{issue_key}` and a PR is opened via `pr_creator.py` — the agent never pushes fix commits directly to main
+
+**Plans**: TBD
+
+### Phase 26: E2E + Trigger Wiring
+
+**Goal**: Playwright E2E tests are generated and run when infra exists; both the auto-chain trigger (post-merge) and the on-demand `@jarvis run qa` trigger reach the same QA pipeline with a single idempotency guard preventing duplicate runs
+**Depends on**: Phase 25
+**Milestone**: v1.8 — autonomous-qa-stage
+**Requirements**: TESTGEN-03, QATRIG-01, QATRIG-02, QATRIG-03
+**Success Criteria** (what must be TRUE):
+
+  1. When a `playwright.config.*` file is detected in the cloned repo, the agent generates Playwright E2E test(s) grounded in repo context and executes them in the QA sandbox; when no Playwright config is found, a skip note is posted to Jira and no E2E failure is recorded
+  2. After a successful PR merge, the QA pipeline starts automatically without any developer action — the merge Jira comment is not delayed by QA startup (fire-and-forget)
+  3. A developer can type `@jarvis run qa` on a Jira story to (re-)trigger QA on demand via the LLM intent router
+  4. If an active QA `PipelineState` already exists for the ticket (status not `failed`), a duplicate trigger from either path is silently acknowledged with no second pipeline run started
+
+**Plans**: TBD
+**UI hint**: no
+
+---
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -581,3 +655,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 20. Describe Pipeline Context | 1/1 | Complete    | 2026-06-22 |
 | 21. Architecture Pipeline Context | 1/1 | Complete   | 2026-06-22 |
 | 22. Agentic Codegen              | 1/1 | Complete   | 2026-06-23 |
+| 23. QA Foundation & Sandbox Execution | 0/2 | Not started | - |
+| 24. Test Generation | 0/? | Not started | - |
+| 25. Bounded Auto-Fix Loop | 0/? | Not started | - |
+| 26. E2E + Trigger Wiring | 0/? | Not started | - |
