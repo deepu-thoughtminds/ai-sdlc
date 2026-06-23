@@ -48,6 +48,10 @@ class PipelineState(Base):
     # Added Phase 10 — requires DB recreation (docker compose down -v) upgrading prior schema
     complexity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     complexity_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Added Phase 23 — tracks QA fix-loop iteration count.
+    # None = ticket not yet in QA; 0 = first attempt started (set before execution).
+    # Incremented before each subsequent fix attempt. Requires DB recreation.
+    qa_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -79,6 +83,7 @@ class PipelineStateCreate(BaseModel):
     draft_content: str | None = None
     complexity: str | None = None
     complexity_rationale: str | None = None
+    qa_attempt: int | None = None
 
 
 class PipelineStatePublic(BaseModel):
@@ -99,5 +104,6 @@ class PipelineStatePublic(BaseModel):
     draft_content: str | None
     complexity: str | None
     complexity_rationale: str | None
+    qa_attempt: int | None
     created_at: datetime
     updated_at: datetime

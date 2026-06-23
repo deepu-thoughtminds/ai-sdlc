@@ -196,3 +196,91 @@ def test_pipeline_state_unique_per_ticket_stage() -> None:
         assert len(rows) == 2, f"Expected 2 rows (multiple runs allowed), got {len(rows)}"
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 23 — qa_attempt column tests
+# ---------------------------------------------------------------------------
+
+
+def test_qa_attempt_defaults_to_none() -> None:
+    """Create PipelineState without setting qa_attempt — defaults to None (not yet in QA)."""
+    db = TestingSession()
+    try:
+        project_id = _make_project(db)
+        ps = PipelineState(
+            project_id=project_id,
+            ticket_key="QATEST-1",
+            stage="qa",
+            status="pending",
+        )
+        db.add(ps)
+        db.commit()
+        db.refresh(ps)
+
+        assert hasattr(ps, "qa_attempt"), "qa_attempt attribute must exist on ORM instance"
+        assert ps.qa_attempt is None, f"Expected qa_attempt=None, got {ps.qa_attempt}"
+    finally:
+        db.close()
+
+
+def test_qa_attempt_zero_on_first_run() -> None:
+    """Set qa_attempt=0 (first run started), commit, re-query — asserts the value persists."""
+    db = TestingSession()
+    try:
+        from sqlalchemy import select
+
+        project_id = _make_project(db)
+        ps = PipelineState(
+            project_id=project_id,
+            ticket_key="QATEST-2",
+            stage="qa",
+            status="processing",
+            qa_attempt=0,
+        )
+        db.add(ps)
+        db.commit()
+        ps_id = ps.id
+
+        row = db.execute(select(PipelineState).where(PipelineState.id == ps_id)).scalar_one()
+        assert row.qa_attempt == 0, f"Expected qa_attempt=0 after first run, got {row.qa_attempt}"
+    finally:
+        db.close()
+
+
+def test_qa_attempt_increments() -> None:
+    """Set qa_attempt=2 (after two fix loops), commit, re-query — asserts the value persists."""
+    db = TestingSession()
+    try:
+        from sqlalchemy import select
+
+        project_id = _make_project(db)
+        ps = PipelineState(
+            project_id=project_id,
+            ticket_key="QATEST-3",
+            stage="qa",
+            status="processing",
+            qa_attempt=2,
+        )
+        db.add(ps)
+        db.commit()
+        ps_id = ps.id
+
+        row = db.execute(select(PipelineState).where(PipelineState.id == ps_id)).scalar_one()
+        assert row.qa_attempt == 2, f"Expected qa_attempt=2, got {row.qa_attempt}"
+    finally:
+        db.close()
+
+
+def test_pipeline_state_create_schema_has_qa_attempt() -> None:
+    """PipelineStateCreate schema exposes qa_attempt field defaulting to None."""
+    obj = PipelineStateCreate(project_id=1, ticket_key="QATEST-4", stage="qa")
+    assert hasattr(obj, "qa_attempt"), "PipelineStateCreate must have qa_attempt field"
+    assert obj.qa_attempt is None, f"Expected qa_attempt=None by default, got {obj.qa_attempt}"
+
+
+def test_pipeline_state_public_schema_has_qa_attempt() -> None:
+    """PipelineStatePublic schema model_fields contains qa_attempt."""
+    assert "qa_attempt" in PipelineStatePublic.model_fields, (
+        "PipelineStatePublic.model_fields must include 'qa_attempt'"
+    )
