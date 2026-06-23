@@ -228,7 +228,9 @@ def apply_commit_push_and_open_pr(
 
     # Step 6: Push branch — token-embedded URL never logged (T-07-01)
     github_host = os.environ.get("GITHUB_HOST", GITHUB_HOST)
-    push_url = f"https://x-access-token:{github_token}@{github_host}/{owner}/{repo}.git"
+    # Use oauth2: scheme — x-access-token: triggers a spurious write-access
+    # check on GitHub's git smart-HTTP backend for fine-grained PATs.
+    push_url = f"https://oauth2:{github_token}@{github_host}/{owner}/{repo}.git"
     _run_git(
         ["push", push_url, branch_name],
         cwd=workspace_path,

@@ -104,8 +104,12 @@ def clone_repository(github_repo: str, github_token: str) -> ClonedRepo:
     owner, repo = parsed
     github_host = os.environ.get("GITHUB_HOST", GITHUB_HOST)
 
-    # Build authenticated URL — NEVER logged (T-05-01)
-    clone_url = f"https://x-access-token:{github_token}@{github_host}/{owner}/{repo}.git"
+    # Build authenticated URL — NEVER logged (T-05-01).
+    # Use oauth2: scheme instead of x-access-token: — the latter triggers
+    # a write-access check on GitHub's git smart-HTTP backend even for
+    # read-only clones, which fails for fine-grained PATs with read-only
+    # Contents permission.
+    clone_url = f"https://oauth2:{github_token}@{github_host}/{owner}/{repo}.git"
 
     # Create temporary workspace directory
     workspace_path = tempfile.mkdtemp(prefix=f"jarvis-{owner}-{repo}-")
@@ -122,8 +126,7 @@ def clone_repository(github_repo: str, github_token: str) -> ClonedRepo:
         )
 
         if result.returncode != 0:
-            # Log only the stderr without the URL (which contains the token)
-            # Replace any occurrence of the token in stderr before logging
+            # Sanitise stderr before logging — strip token (T-05-01)
             safe_stderr = result.stderr.replace(github_token, "***") if github_token else result.stderr
             logger.warning(
                 "git clone failed for %s/%s (exit=%d): %s",
