@@ -23,9 +23,6 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# QA sandbox Docker image — overridable via env var so CI can swap images.
-QA_SANDBOX_IMAGE: str = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-
 
 @dataclass
 class ToolchainCommand:
@@ -79,7 +76,7 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
         Ordered list of ToolchainCommand objects to run. Empty list if no
         recognised indicator files are found.
     """
-    image = QA_SANDBOX_IMAGE
+    image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
     commands: list[ToolchainCommand] = []
 
     # Python detection
