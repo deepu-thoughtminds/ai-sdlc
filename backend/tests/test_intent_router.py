@@ -99,3 +99,8 @@ def test_classify_markdown_fenced_json():
         result = classify_intent("describe")
     assert result is not None
     assert result.action == "describe"
+
+
+# Phase 26-02 RED: run_qa in VALID_ACTIONS — QATRIG-02
+def test_run_qa_is_valid_action():
+    assert "run_qa" in VALID_ACTIONS, "run_qa must be in VALID_ACTIONS for @jarvis run qa trigger"

@@ -489,3 +489,89 @@ async def test_run_no_pr_found_skips_rescan():
     mock_rescan.assert_not_called()
 
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 26-02 RED: QATRIG-01 auto-chain after successful merge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_successful_merge_schedules_qa_auto_chain():
+    """After a successful merge, asyncio.create_task schedules QA pipeline (fire-and-forget)."""
+    project = _make_mock_project()
+    db = TestingSession()
+    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
+    db.add(state_row)
+    db.commit()
+
+    captured = []
+
+    def _capture(coro):
+        captured.append(coro)
+        coro.close()
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=_make_merge_result()),
+        patch("services.merge_pipeline.update_status", new_callable=AsyncMock, return_value=True),
+        patch("services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock),
+        patch("services.merge_pipeline.has_active_qa_run", create=True, return_value=False),
+        patch("services.merge_pipeline.asyncio.create_task", side_effect=_capture),
+    ):
+        from services.merge_pipeline import run
+        result = await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    assert len(captured) == 1, f"Expected 1 create_task call (QA auto-chain), got {len(captured)}"
+    assert "abc123" in result  # merge comment still returned (not delayed)
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_successful_merge_skips_qa_when_already_active():
+    """If QA already running for the ticket, auto-chain is skipped."""
+    project = _make_mock_project()
+    db = TestingSession()
+    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
+    db.add(state_row)
+    db.commit()
+
+    mock_create_task = MagicMock()
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=_make_merge_result()),
+        patch("services.merge_pipeline.update_status", new_callable=AsyncMock, return_value=True),
+        patch("services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.merge_pipeline.codebase_scan_service.run", new_callable=AsyncMock),
+        patch("services.merge_pipeline.has_active_qa_run", create=True, return_value=True),
+        patch("services.merge_pipeline.asyncio.create_task", mock_create_task),
+    ):
+        from services.merge_pipeline import run
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    mock_create_task.assert_not_called()
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_no_open_pr_path_does_not_schedule_qa():
+    """No-PR path (merge_result=None) must never schedule QA auto-chain."""
+    project = _make_mock_project()
+    db = TestingSession()
+    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
+    db.add(state_row)
+    db.commit()
+
+    mock_create_task = MagicMock()
+
+    with (
+        patch("services.merge_pipeline.find_and_merge_pr", return_value=None),
+        patch("services.merge_pipeline.update_status", new_callable=AsyncMock),
+        patch("services.merge_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.merge_pipeline.asyncio.create_task", mock_create_task),
+    ):
+        from services.merge_pipeline import run
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    mock_create_task.assert_not_called()
+    db.close()
