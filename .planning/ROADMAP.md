@@ -56,7 +56,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Milestone v1.8: Autonomous QA Stage
 
 - [x] **Phase 23: QA Foundation & Sandbox Execution** - test_executor.py (toolchain detection + subprocess execution with resource limits), qa-sandbox Docker image, qa_pipeline.py skeleton, PipelineState.qa_attempt field, static analysis execution without LLM (completed 2026-06-23)
-- [ ] **Phase 24: Test Generation** - test_generator.py generates pytest unit tests via freellmapi using cloned repo context + codebase.md, writes tests to workspace, executes via sandbox, posts first QA result to Jira
+- [x] **Phase 24: Test Generation** - test_generator.py generates pytest unit tests via freellmapi using cloned repo context + codebase.md, writes tests to workspace, executes via sandbox, posts first QA result to Jira (completed 2026-06-24)
 - [ ] **Phase 25: Bounded Auto-Fix Loop** - auto_fix_loop.py with 3-attempt iteration cap, non-progress detection (same-error termination), incremental context refresh per iteration, fix commits raised as PRs via pr_creator.py
 - [ ] **Phase 26: E2E + Trigger Wiring** - Playwright E2E test generation with graceful skip when no playwright.config.* exists, auto-chain from merge_pipeline.py, @jarvis run qa comment trigger, shared idempotency guard for both trigger paths
 
@@ -597,10 +597,11 @@ Plans:
   2. Generated unit tests execute in the QA sandbox and produce a structured result (pass count, fail count, error output) without requiring any manual configuration of the target repo
   3. After test execution completes (pass or fail), a Jira comment is posted to the originating ticket with a per-category summary covering at minimum: unit tests and static analysis results
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans complete
 
 Plans:
-- [ ] 24-01-PLAN.md — test_generator.py (LLM-grounded pytest generation) + qa_pipeline.py wiring (generate, sandbox-execute, combined Jira report)
+
+- [x] 24-01-PLAN.md — test_generator.py (LLM-grounded pytest generation) + qa_pipeline.py wiring (generate, sandbox-execute, combined Jira report)
 
 ### Phase 25: Bounded Auto-Fix Loop
 
@@ -614,7 +615,9 @@ Plans:
   2. The loop terminates early when the same error repeats after a fix attempt, so the retry budget is not exhausted on a non-converging failure
   3. Any code changes produced by the auto-fix loop are committed to a branch named `jarvis/qa-fix-{issue_key}` and a PR is opened via `pr_creator.py` — the agent never pushes fix commits directly to main
 
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 25-01-PLAN.md — auto_fix_loop.py (TDD RED + GREEN), llm_router "autofix" stage, qa_pipeline integration
 
 ### Phase 26: E2E + Trigger Wiring
 
@@ -664,6 +667,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 21. Architecture Pipeline Context | 1/1 | Complete   | 2026-06-22 |
 | 22. Agentic Codegen              | 1/1 | Complete   | 2026-06-23 |
 | 23. QA Foundation & Sandbox Execution | 2/2 | Complete    | 2026-06-23 |
-| 24. Test Generation | 0/? | Not started | - |
+| 24. Test Generation | 1/1 | Complete    | 2026-06-24 |
 | 25. Bounded Auto-Fix Loop | 0/? | Not started | - |
 | 26. E2E + Trigger Wiring | 0/? | Not started | - |
