@@ -597,7 +597,10 @@ Plans:
   2. Generated unit tests execute in the QA sandbox and produce a structured result (pass count, fail count, error output) without requiring any manual configuration of the target repo
   3. After test execution completes (pass or fail), a Jira comment is posted to the originating ticket with a per-category summary covering at minimum: unit tests and static analysis results
 
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 24-01-PLAN.md — test_generator.py (LLM-grounded pytest generation) + qa_pipeline.py wiring (generate, sandbox-execute, combined Jira report)
 
 ### Phase 25: Bounded Auto-Fix Loop
 
