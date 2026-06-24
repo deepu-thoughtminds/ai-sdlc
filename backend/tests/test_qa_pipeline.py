@@ -97,6 +97,9 @@ async def test_qa_attempt_set_to_zero_before_execution():
         patch("services.qa_pipeline.run_static_analysis", side_effect=RuntimeError("boom")),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -122,6 +125,9 @@ async def test_workspace_cleaned_up_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -145,6 +151,9 @@ async def test_workspace_cleaned_up_on_failure():
         patch("services.qa_pipeline.run_static_analysis", side_effect=RuntimeError("tool crashed")),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -171,6 +180,9 @@ async def test_workspace_cleaned_up_on_timeout():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -195,6 +207,9 @@ async def test_jira_comment_posted_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -268,6 +283,9 @@ async def test_pipeline_state_status_complete_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -314,6 +332,9 @@ async def test_fresh_clone_not_dev_workspace():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -381,10 +402,12 @@ async def test_run_calls_get_codebase_snapshot_after_clone():
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    mock_snapshot.assert_called_once()
+    mock_snapshot.assert_called_once_with("owner/repo", "gh-secret")
     # The result must be forwarded to generate_unit_tests as codebase_context
-    gen_kwargs = mock_gen.call_args
-    assert gen_kwargs is not None, "generate_unit_tests was never called"
+    _, gen_kwargs = mock_gen.call_args
+    assert gen_kwargs.get("codebase_context") == "snapshot text", (
+        f"codebase_context not forwarded: {gen_kwargs!r}"
+    )
     db.close()
 
 
@@ -412,13 +435,8 @@ async def test_run_calls_generate_unit_tests_with_issue_key():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_gen.assert_called_once()
-    call_kwargs = mock_gen.call_args
-    # issue_key must be "PROJ-1" — check positional or keyword
-    args, kwargs = call_kwargs
-    all_args = {**kwargs}
-    if args:
-        all_args["issue_key"] = args[0] if len(args) > 0 else all_args.get("issue_key")
-    assert "PROJ-1" in str(call_kwargs), f"issue_key='PROJ-1' not found in call: {call_kwargs}"
+    _, kwargs = mock_gen.call_args
+    assert kwargs.get("issue_key") == "PROJ-1", f"Expected issue_key='PROJ-1', got: {kwargs!r}"
     db.close()
 
 
@@ -502,7 +520,7 @@ async def test_path_traversal_rejected_without_raising():
 
 
 @pytest.mark.asyncio
-async def test_comment_contains_unit_test_and_static_analysis_sections():
+async def test_comment_contains_unit_test_and_static_analysis_sections(tmp_path):
     """Jira comment contains both Unit Tests and Static Analysis sections
     when both lists are non-empty.
 
@@ -515,7 +533,11 @@ async def test_comment_contains_unit_test_and_static_analysis_sections():
     db = TestingSession()
     _make_state_row(db)
 
-    cloned = _make_cloned_repo()
+    workspace = tmp_path / "qa-workspace"
+    workspace.mkdir()
+    (workspace / "tests").mkdir()
+
+    cloned = _make_cloned_repo(str(workspace))
     static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
     unit_test_result = TestResult(tool="pytest", returncode=0, stdout="1 passed", stderr="", timed_out=False)
     generated = [FileChange(path="tests/test_foo.py", content="def test_ok(): assert True")]
@@ -528,21 +550,13 @@ async def test_comment_contains_unit_test_and_static_analysis_sections():
         patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
         patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
         patch("services.qa_pipeline.run_command", return_value=unit_test_result),
-        patch("services.qa_pipeline.pathlib.Path") as mock_path,
     ):
-        # Make path-traversal guard pass
-        mock_ws_root = MagicMock()
-        mock_resolved = MagicMock()
-        mock_path.return_value.resolve.return_value = mock_ws_root
-        mock_ws_root.__truediv__ = MagicMock(return_value=MagicMock())
-        mock_ws_root.__str__ = MagicMock(return_value="/tmp/fake-qa-workspace")
-        mock_resolved.__str__ = MagicMock(return_value="/tmp/fake-qa-workspace/tests/test_foo.py")
-        # Patch the pathlib.Path usage directly in qa_pipeline
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_post.assert_called_once()
     comment_body = mock_post.call_args[0][4]
-    # Must contain both sections
+    # Must contain both sections, with actual unit test result rendered (not the fallback note)
+    assert "PASSED" in comment_body, f"Unit test PASSED result not in comment: {comment_body!r}"
     assert "Unit Tests" in comment_body or "unit test" in comment_body.lower(), (
         f"'Unit Tests' section not found in comment: {comment_body!r}"
     )
