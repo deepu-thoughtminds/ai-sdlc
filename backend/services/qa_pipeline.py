@@ -139,11 +139,14 @@ async def run(
 
     except Exception as exc:
         state_row.status = "failed"
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         logger.exception("QA pipeline failed for ticket %s: %s", issue_key, exc)
         comment_text = (
-            f"QA pipeline failed for {issue_key}.\n\n"
-            f"Error: {type(exc).__name__} — {exc}"
+            f"QA pipeline failed for {issue_key}. "
+            "Check server logs for details."
         )
 
     finally:
@@ -197,7 +200,7 @@ def _format_static_analysis_comment(results: list[TestResult], issue_key: str) -
         if r.returncode == 0:
             lines.append(f"- {r.tool}: PASSED")
         elif r.timed_out:
-            lines.append(f"- {r.tool}: TIMED OUT (120s)")
+            lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
         else:
             stderr_snippet = r.stderr[:500] if r.stderr else ""
             lines.append(
