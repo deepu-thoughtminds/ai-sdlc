@@ -23,6 +23,7 @@ VALID_ACTIONS: frozenset[str] = frozenset({
     "architecture",
     "start_coding",
     "merge_pr",
+    "run_qa",
     "assign",
     "approve",
 })

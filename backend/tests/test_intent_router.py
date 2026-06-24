@@ -74,7 +74,7 @@ def test_classify_llm_raises():
 
 
 def test_valid_actions_set():
-    assert VALID_ACTIONS == {"describe", "architecture", "start_coding", "merge_pr", "assign", "approve"}
+    assert VALID_ACTIONS == {"describe", "architecture", "start_coding", "merge_pr", "run_qa", "assign", "approve"}
 
 
 def test_classify_architecture():

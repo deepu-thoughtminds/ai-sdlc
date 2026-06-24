@@ -25,11 +25,13 @@ Threat mitigations:
            (CR-02 session-boundary safety).
 """
 
+import asyncio
 import logging
 import os
 
 from sqlalchemy.orm import Session
 
+from database import SessionLocal
 from models.pipeline_state import PipelineState
 from models.project import Project
 from services import codebase_scan_service
@@ -39,6 +41,8 @@ from services.hermes_client import (
     update_status,
 )
 from services.pr_creator import find_and_merge_pr
+from services.qa_pipeline import has_active_qa_run
+from services.qa_pipeline import run as run_qa_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +220,32 @@ async def run(
         state_row.status = "complete"
         state_row.draft_content = comment_text
         db.commit()
+
+        # Step 8: QA auto-chain (QATRIG-01). Fire-and-forget — never delays the
+        # merge confirmation comment or turns a successful merge into a failure.
+        # T-26-05: scheduling errors are caught and logged only.
+        try:
+            if not has_active_qa_run(issue_key, db):
+                qa_project_id = project.id
+
+                async def _run_qa_background() -> None:
+                    bg_db = SessionLocal()
+                    try:
+                        bg_project = bg_db.query(Project).filter(Project.id == qa_project_id).first()
+                        if bg_project is None:
+                            logger.error(
+                                "Project id=%s not found in background task for issue %s — aborting QA auto-chain",
+                                qa_project_id, issue_key,
+                            )
+                            return
+                        await run_qa_pipeline(bg_project, issue_key, issue_summary, issue_description, bg_db)
+                    finally:
+                        bg_db.close()
+
+                asyncio.create_task(_run_qa_background())
+                logger.info("QA pipeline auto-chained for ticket %s after successful merge", issue_key)
+        except Exception as qa_exc:
+            logger.warning("Failed to schedule QA auto-chain for %s: %s", issue_key, qa_exc)
 
     except Exception as exc:
         state_row.status = "failed"

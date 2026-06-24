@@ -50,7 +50,7 @@ from database import get_db, SessionLocal
 from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent, JiraIssueCreatedEvent
-from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline, merge_pipeline
+from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline, merge_pipeline, qa_pipeline
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
@@ -440,6 +440,58 @@ async def handle_jira_comment(
             "status": "received",
             "action": "merge_pr",
             "routed_to": "merge_pipeline",
+        }
+
+    # Step 4f2: Handle 'run_qa' action (background task — QA sandbox run is heavy)
+    # QATRIG-02: Idempotency guard uses the SAME shared has_active_qa_run() guard
+    # (QATRIG-03) that merge_pipeline.py's auto-chain hook (QATRIG-01) checks.
+    elif mention_result is not None and mention_result.action == "run_qa":
+        if qa_pipeline.has_active_qa_run(event.issue.key, db):
+            logger.info(
+                "QA pipeline already active for issue %s — ignoring duplicate",
+                event.issue.key,
+            )
+            return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
+
+        state_row = PipelineState(
+            project_id=project.id,
+            ticket_key=event.issue.key,
+            stage="qa",
+            status="running",
+        )
+        db.add(state_row)
+        db.commit()
+
+        issue_summary = event.issue.summary
+        issue_description = getattr(event.issue, "description", "") or ""
+        project_id = project.id
+
+        async def _run_qa_background() -> None:
+            bg_db = SessionLocal()
+            try:
+                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
+                if bg_project is None:
+                    logger.error(
+                        "Project id=%s not found in background task for issue %s — aborting run_qa",
+                        project_id, event.issue.key,
+                    )
+                    return
+                await qa_pipeline.run(
+                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+                )
+            finally:
+                bg_db.close()
+
+        asyncio.create_task(_run_qa_background())
+        logger.info(
+            "QA pipeline scheduled for issue %s (state_id=%s)",
+            event.issue.key,
+            state_row.id,
+        )
+        return {
+            "status": "received",
+            "action": "run_qa",
+            "routed_to": "qa_pipeline",
         }
 
     # Step 4g: No recognized mention.
