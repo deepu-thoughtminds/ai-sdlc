@@ -43,6 +43,8 @@ from sqlalchemy.orm import Session
 
 from models.pipeline_state import PipelineState
 from models.project import Project
+from services.auto_fix_loop import MAX_ATTEMPTS as MAX_AUTOFIX_ATTEMPTS
+from services.auto_fix_loop import run_auto_fix_loop
 from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
@@ -265,10 +267,33 @@ async def run(
 
         # (f) empty file_changes: unit_test_results stays [] — no execution
 
+        # Step 4c — Bounded auto-fix loop on unit test failure (AUTOFIX-01/02/03).
+        autofix_pr_url: str | None = None
+        if any(r.returncode != 0 and not r.timed_out for r in unit_test_results):
+            unit_test_results, autofix_pr_url = run_auto_fix_loop(
+                unit_test_results,
+                cloned.workspace_path,
+                issue_key,
+                github_repo,
+                github_token,
+                state_row,
+                db,
+            )
+
         # Step 5 — Run static analysis tools via Docker subprocess.
         static_results = run_static_analysis(cloned.workspace_path)
 
         comment_text = _format_qa_comment(unit_test_results, static_results, issue_key)
+        still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
+        if autofix_pr_url and still_failing:
+            comment_text += (
+                f"\n\nAuto-fix exhausted {MAX_AUTOFIX_ATTEMPTS} attempts — "
+                f"see PR for partial fixes: {autofix_pr_url}"
+            )
+        elif autofix_pr_url:
+            comment_text += f"\n\nAuto-fix PR: {autofix_pr_url}"
+        elif still_failing:
+            comment_text += "\n\nAuto-fix could not generate a fix."
 
         # Mark pipeline complete on success.
         state_row.status = "complete"

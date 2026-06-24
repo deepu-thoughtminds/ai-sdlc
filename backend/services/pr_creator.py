@@ -124,6 +124,7 @@ def apply_commit_push_and_open_pr(
     pr_title: str = "",
     pr_body: str = "",
     base_branch: str = DEFAULT_BASE_BRANCH,
+    branch_name: str = "",
 ) -> PullRequest:
     """Apply file changes to the cloned workspace, commit, push, and open a PR.
 
@@ -171,7 +172,7 @@ def apply_commit_push_and_open_pr(
         raise ValueError(f"Invalid github_repo slug: {github_repo!r}")
 
     owner, repo = parts[0], parts[1]
-    branch_name = f"jarvis/issue-{issue_key}"
+    branch_name = branch_name or f"jarvis/issue-{issue_key}"
 
     if not pr_title:
         pr_title = f"feat: Jarvis autonomous changes for {issue_key}"
