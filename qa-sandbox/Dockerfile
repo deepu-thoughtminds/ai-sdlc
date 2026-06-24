@@ -12,29 +12,33 @@
 # No CMD — backend supplies full command at docker run invocation.
 # No ENTRYPOINT — keep default /bin/bash for ad-hoc inspection.
 
+FROM node:20-slim AS node-base
+
 FROM python:3.12-slim
 
-# Install system dependencies: git + Node.js (nodejs + npm from nodesource)
-# Using nodesource to get a recent LTS node; bookworm backports not always available.
+# Install system dependencies: git (Node.js copied from node-base stage below
+# instead of curl|bash nodesource install — avoids executing an unverified
+# remote script at build time).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
-        curl \
-        ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python QA tools
-RUN pip install --no-cache-dir \
-    ruff \
-    mypy \
-    bandit
+COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-base /usr/local/bin/npm /usr/local/bin/npm
+COPY --from=node-base /usr/local/bin/npx /usr/local/bin/npx
+COPY --from=node-base /usr/local/lib/node_modules /usr/local/lib/node_modules
 
-# Install JS/TS QA tools globally
+# Install Python QA tools (pinned for reproducible builds)
+RUN pip install --no-cache-dir \
+    "ruff==0.4.7" \
+    "mypy==1.10.0" \
+    "bandit==1.7.9"
+
+# Install JS/TS QA tools globally (pinned for reproducible builds)
 RUN npm install -g \
-    eslint \
-    typescript
+    "eslint@8.57.0" \
+    "typescript@5.4.5"
 
 # Set working directory (backend mounts workspace here)
 WORKDIR /workspace
