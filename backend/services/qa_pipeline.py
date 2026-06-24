@@ -89,7 +89,7 @@ def _collect_relevant_files(workspace_path: str) -> dict[str, str]:
         for entry in ws_root.rglob("*"):
             if len(collected) >= _MAX_SOURCE_FILES:
                 break
-            if not entry.is_file():
+            if entry.is_symlink() or not entry.is_file():
                 continue
             if entry.suffix.lower() not in _SOURCE_EXTENSIONS:
                 continue
@@ -347,7 +347,8 @@ def _format_qa_comment(
             if r.returncode == 0:
                 lines.append(f"- {r.tool}: PASSED")
             elif r.timed_out:
-                lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
+                timeout_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(f"- {r.tool}: TIMED OUT ({timeout_snippet})")
             else:
                 stderr_snippet = r.stderr[:500] if r.stderr else ""
                 lines.append(
@@ -368,7 +369,8 @@ def _format_qa_comment(
             if r.returncode == 0:
                 lines.append(f"- {r.tool}: PASSED")
             elif r.timed_out:
-                lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
+                timeout_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(f"- {r.tool}: TIMED OUT ({timeout_snippet})")
             else:
                 stderr_snippet = r.stderr[:500] if r.stderr else ""
                 lines.append(
