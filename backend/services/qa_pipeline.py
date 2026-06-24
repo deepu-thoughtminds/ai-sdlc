@@ -34,6 +34,7 @@ Threat mitigations:
            values are ever forwarded into the test-generation prompt.
 """
 
+import glob
 import logging
 import os
 import pathlib
@@ -50,7 +51,7 @@ from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.repo_clone import clone_repository
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_static_analysis
-from services.test_generator import generate_unit_tests
+from services.test_generator import generate_e2e_tests, generate_unit_tests
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,25 @@ _SOURCE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".rb", ".rs",
     ".c", ".cpp", ".h", ".hpp", ".cs",
 }
+
+
+def has_active_qa_run(ticket_key: str, db: Session) -> bool:
+    """Return True when a QA PipelineState with status='running' exists for ticket_key.
+
+    QATRIG-03: Shared idempotency guard used by both merge_pipeline.py auto-chain
+    (QATRIG-01) and the @jarvis run qa webhook branch (QATRIG-02) to prevent
+    simultaneous duplicate QA runs for the same ticket.
+    """
+    return (
+        db.query(PipelineState)
+        .filter(
+            PipelineState.ticket_key == ticket_key,
+            PipelineState.stage == "qa",
+            PipelineState.status == "running",
+        )
+        .first()
+        is not None
+    )
 
 
 def _collect_relevant_files(workspace_path: str) -> dict[str, str]:
@@ -280,10 +300,65 @@ async def run(
                 db,
             )
 
+        # Step 4d — Playwright E2E tests (TESTGEN-03).
+        # T-26-02: Only generate/run E2E tests when a Playwright config is present.
+        e2e_results: list[TestResult] = []
+        playwright_configs = glob.glob(
+            os.path.join(cloned.workspace_path, "playwright.config.*")
+        )
+        if not playwright_configs:
+            logger.info("No playwright.config.* found in workspace — skipping E2E generation")
+            e2e_skip_note: str | None = "E2E tests skipped (no playwright.config.* detected in repository)."
+        else:
+            e2e_skip_note = None
+            e2e_file_changes = generate_e2e_tests(
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+                codebase_context=codebase_context,
+                relevant_file_contents=relevant_file_contents,
+            )
+            for change in e2e_file_changes:
+                try:
+                    resolved = (workspace_root / change.path).resolve()
+                    # T-26-01: Reject any path escaping the workspace root
+                    if not str(resolved).startswith(str(workspace_root) + "/"):
+                        raise ValueError(
+                            f"E2E FileChange path escapes workspace: '{change.path}' "
+                            f"resolves to '{resolved}'"
+                        )
+                    resolved.parent.mkdir(parents=True, exist_ok=True)
+                    resolved.write_text(change.content, encoding="utf-8")
+                    logger.info("Wrote generated E2E test file: %s", change.path)
+
+                    image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                    cmd = ToolchainCommand(
+                        name="playwright",
+                        command=[
+                            "docker", "run", "--rm",
+                            "-v", f"{cloned.workspace_path}:/workspace",
+                            image,
+                            "npx", "playwright", "test", f"/workspace/{change.path}",
+                        ],
+                    )
+                    result = run_command(cmd)
+                    e2e_results.append(result)
+                    logger.info(
+                        "E2E test %s exit=%d timed_out=%s",
+                        change.path,
+                        result.returncode,
+                        result.timed_out,
+                    )
+                except ValueError as ve:
+                    logger.warning(
+                        "Skipping generated E2E file due to path-traversal violation: %s", ve
+                    )
+                    continue
+
         # Step 5 — Run static analysis tools via Docker subprocess.
         static_results = run_static_analysis(cloned.workspace_path)
 
-        comment_text = _format_qa_comment(unit_test_results, static_results, issue_key)
+        comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note)
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
         if autofix_pr_url and still_failing:
             comment_text += (
@@ -341,8 +416,10 @@ async def run(
 
 def _format_qa_comment(
     unit_test_results: list[TestResult],
+    e2e_results: list[TestResult],
     static_results: list[TestResult],
     issue_key: str,
+    e2e_skip_note: str | None = None,
 ) -> str:
     """Format QA results into a human-readable Jira comment with per-category sections.
 
@@ -381,6 +458,27 @@ def _format_qa_comment(
                 )
 
     lines.append("")  # blank line between sections
+
+    # --- E2E Tests section ---
+    lines.append("**E2E Tests:**")
+    if e2e_skip_note:
+        lines.append(f"- {e2e_skip_note}")
+    elif not e2e_results:
+        lines.append("- No E2E tests were generated (LLM returned no test files).")
+    else:
+        for r in e2e_results:
+            if r.returncode == 0:
+                lines.append(f"- {r.tool}: PASSED")
+            elif r.timed_out:
+                timeout_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(f"- {r.tool}: TIMED OUT ({timeout_snippet})")
+            else:
+                stderr_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(
+                    f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}"
+                )
+
+    lines.append("")  # blank line before Static Analysis
 
     # --- Static Analysis section ---
     lines.append("**Static Analysis:**")

@@ -114,3 +114,63 @@ def generate_unit_tests(
 
     route_result = route_request("testgen", prompt)
     return _parse_file_changes(route_result.content)
+
+
+def generate_e2e_tests(
+    issue_key: str,
+    issue_summary: str,
+    issue_description: str,
+    codebase_context: str | None,
+    relevant_file_contents: dict[str, str],
+) -> list[FileChange]:
+    """Generate Playwright E2E test files for a Jira issue via freellmapi.
+
+    TESTGEN-03: Generates Playwright TypeScript spec files using the same
+    ### FILE: convention as generate_unit_tests(). Returns [] when the LLM
+    returns no parseable test files.
+
+    T-26-02: Callers must gate invocation on playwright.config.* detection.
+    T-24-02 (shared): Only issue_key/summary/description/codebase_context/
+    relevant_file_contents are interpolated — no credentials forwarded.
+    """
+    logger.info("Generating E2E tests for ticket %s", issue_key)
+
+    if relevant_file_contents:
+        file_blocks = "\n\n".join(
+            f"### {path}\n{content}" for path, content in relevant_file_contents.items()
+        )
+        file_contents_section = (
+            "Relevant file contents (READ THESE before writing tests):\n\n"
+            f"{file_blocks}\n\n"
+        )
+    else:
+        file_contents_section = ""
+
+    codebase_section = codebase_context or ""
+
+    prompt = (
+        "You are a senior software engineer writing Playwright E2E tests for a Jira story. "
+        "Write ONLY Playwright TypeScript test files — do not modify source files.\n\n"
+        f"Jira Ticket: {issue_key}\n"
+        f"Summary: {issue_summary}\n"
+        f"Description:\n{issue_description}\n\n"
+        "Codebase context:\n"
+        f"{codebase_section}\n\n"
+        f"{file_contents_section}"
+        "IMPORTANT: Respond with ONLY the test file(s) needed. "
+        "For each test file, use EXACTLY this format:\n\n"
+        "### FILE: tests/e2e/path/to/test.spec.ts\n"
+        "```typescript\n"
+        "<complete test file content here>\n"
+        "```\n\n"
+        "Rules:\n"
+        "- Prefix every generated test file path with e2e/ or tests/e2e/\n"
+        "- Use Playwright test conventions: test(), expect() from @playwright/test\n"
+        "- Write tests ONLY for behaviour visible in the supplied file contents\n"
+        "- Include complete file content for each test file\n"
+        "- Use the exact ### FILE: format for each test file\n"
+        "- Do not include explanations outside of the file blocks"
+    )
+
+    route_result = route_request("testgen", prompt)
+    return _parse_file_changes(route_result.content)
