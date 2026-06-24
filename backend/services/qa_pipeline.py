@@ -1,11 +1,14 @@
 """QA pipeline orchestrator — TESTEXEC-01, TESTEXEC-02, AUTOFIX-04.
 
-Wires repository cloning, toolchain detection, static analysis execution,
-workspace cleanup, and Jira comment posting into a single async run()
-coroutine. Mirrors merge_pipeline.py structure exactly.
+Wires repository cloning, LLM-driven unit test generation, toolchain detection,
+static analysis execution, sandboxed unit test execution, workspace cleanup,
+and Jira comment posting into a single async run() coroutine.
+Mirrors merge_pipeline.py structure exactly.
 
 Phase 23 scope: static analysis only (ruff/mypy/bandit/eslint/tsc).
-Phase 24 will add LLM-generated unit tests.
+Phase 24 scope: LLM-generated unit tests + combined per-category Jira comment
+  (TESTGEN-01: generate_unit_tests via freellmapi testgen stage;
+   QAREP-01: Unit Tests + Static Analysis sections in single comment).
 Phase 25 will add the auto-fix loop (AUTOFIX-04 bounded retry, T-23-05).
 Phase 26 will add the @jarvis run qa trigger and auto-chain after merge.
 
@@ -22,20 +25,30 @@ Threat mitigations:
            never started.
   T-23-05: (Phase 25) Auto-fix loop bounded at 3 attempts; same-error
            repeat detected for early termination (non-progress detection).
+  T-24-01: FileChange.path is resolved against workspace_root and rejected
+           (ValueError, caught per-file and skipped) if it escapes the
+           workspace — mirrors pr_creator.py's T-15-06 guard exactly,
+           preventing the LLM from writing outside the cloned repo.
+  T-24-02: generate_unit_tests() receives only issue_key/summary/description/
+           codebase_context/relevant_file_contents — no token or credential
+           values are ever forwarded into the test-generation prompt.
 """
 
 import logging
 import os
+import pathlib
 import shutil
 
 from sqlalchemy.orm import Session
 
 from models.pipeline_state import PipelineState
 from models.project import Project
+from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.repo_clone import clone_repository
-from services.test_executor import TestResult, run_static_analysis
+from services.test_executor import TestResult, ToolchainCommand, run_command, run_static_analysis
+from services.test_generator import generate_unit_tests
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +57,63 @@ logger = logging.getLogger(__name__)
 # rejects agent-generated comments uniformly across all pipelines.
 AGENT_COMMENT_PREFIX = "\U0001f916 **Jarvis:**\n\n"
 AGENT_BODY_MARKER = "[jarvis-bot]"
+
+# Caps for relevant_file_contents collection (T-24-04: bound prompt size)
+_MAX_SOURCE_FILES = 20
+_MAX_FILE_CHARS = 50_000
+
+# Extensions to include when collecting relevant source files
+_SOURCE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".rb", ".rs",
+    ".c", ".cpp", ".h", ".hpp", ".cs",
+}
+
+
+def _collect_relevant_files(workspace_path: str) -> dict[str, str]:
+    """Walk the cloned workspace and collect source file contents.
+
+    T-24-04: Caps at _MAX_SOURCE_FILES files and _MAX_FILE_CHARS chars per file
+    to prevent oversized prompts. Skips binary files and files exceeding the
+    per-file size cap. Returns a mapping of relative path → content.
+
+    Args:
+        workspace_path: Absolute path to the cloned repository workspace.
+
+    Returns:
+        Dict mapping relative file path → text content (capped).
+    """
+    collected: dict[str, str] = {}
+    ws_root = pathlib.Path(workspace_path)
+
+    try:
+        for entry in ws_root.rglob("*"):
+            if len(collected) >= _MAX_SOURCE_FILES:
+                break
+            if not entry.is_file():
+                continue
+            if entry.suffix.lower() not in _SOURCE_EXTENSIONS:
+                continue
+            # Skip hidden dirs / .git internals
+            parts = entry.relative_to(ws_root).parts
+            if any(p.startswith(".") for p in parts):
+                continue
+
+            try:
+                text = entry.read_text(encoding="utf-8", errors="replace")
+            except (OSError, PermissionError):
+                continue
+
+            if len(text) > _MAX_FILE_CHARS:
+                logger.debug("Skipping large file %s (%d chars)", entry, len(text))
+                continue
+
+            rel_path = str(entry.relative_to(ws_root))
+            collected[rel_path] = text
+
+    except Exception as exc:
+        logger.warning("Error collecting source files from workspace: %s", exc)
+
+    return collected
 
 
 async def run(
@@ -57,8 +127,12 @@ async def run(
 
     TESTEXEC-01: Clone a fresh workspace; auto-detect project toolchain.
     TESTEXEC-02: Execute each tool via Docker subprocess with hard timeout.
+    TESTGEN-01: Generate grounded pytest unit tests via freellmapi.
+    QAREP-01: Post single Jira comment with Unit Tests + Static Analysis sections.
     T-23-03: Always clean up temporary workspace in finally block.
     T-23-04: Commit qa_attempt=0 before any execution begins.
+    T-24-01: Path-traversal guard for generated test files (mirrors T-15-06).
+    T-24-02: No credentials forwarded into generate_unit_tests().
 
     Args:
         project:           Project ORM row with encrypted credentials.
@@ -116,6 +190,8 @@ async def run(
     jira_email = getattr(project, "jira_email", "") or os.environ.get(
         "JIRA_ACCOUNT_EMAIL", ""
     )
+    unit_test_results: list[TestResult] = []
+
     try:
         # Step 3 — Decrypt credentials.
         # T-23-01: decrypted values are passed as function arguments only;
@@ -127,10 +203,72 @@ async def run(
         # Step 4 — Clone a fresh workspace (TESTEXEC-02: never reuse dev workspace).
         cloned = clone_repository(github_repo, github_token)
 
-        # Step 5 — Run static analysis tools via Docker subprocess.
-        results = run_static_analysis(cloned.workspace_path)
+        # Step 4b — Generate and execute LLM-driven unit tests (TESTGEN-01).
+        # T-24-02: codebase_context and file contents only; no credentials forwarded.
 
-        comment_text = _format_static_analysis_comment(results, issue_key)
+        # (a) Fetch codebase snapshot context (.hermes/codebase.md)
+        codebase_context = await get_codebase_snapshot(github_repo, github_token)
+
+        # (b) Collect relevant source files from the cloned workspace (T-24-04: bounded)
+        relevant_file_contents = _collect_relevant_files(cloned.workspace_path)
+
+        # (c) Generate unit tests via freellmapi
+        file_changes = generate_unit_tests(
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            codebase_context=codebase_context,
+            relevant_file_contents=relevant_file_contents,
+        )
+
+        # (d) Write each generated file with path-traversal guard (T-24-01)
+        workspace_root = pathlib.Path(cloned.workspace_path).resolve()
+        for change in file_changes:
+            try:
+                resolved = (workspace_root / change.path).resolve()
+                # T-24-01: Reject any path escaping the workspace root
+                if not str(resolved).startswith(str(workspace_root) + "/"):
+                    raise ValueError(
+                        f"FileChange path escapes workspace: '{change.path}' "
+                        f"resolves to '{resolved}'"
+                    )
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                resolved.write_text(change.content, encoding="utf-8")
+                logger.info("Wrote generated test file: %s", change.path)
+
+                # (e) Execute the generated test file via run_command
+                image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                cmd = ToolchainCommand(
+                    name="pytest",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{cloned.workspace_path}:/workspace",
+                        image,
+                        "pytest", f"/workspace/{change.path}", "-v",
+                    ],
+                )
+                result = run_command(cmd)
+                unit_test_results.append(result)
+                logger.info(
+                    "Generated test %s exit=%d timed_out=%s",
+                    change.path,
+                    result.returncode,
+                    result.timed_out,
+                )
+
+            except ValueError as ve:
+                # T-24-01: Per-file catch — log, skip, continue with remaining files
+                logger.warning(
+                    "Skipping generated test file due to path-traversal violation: %s", ve
+                )
+                continue
+
+        # (f) empty file_changes: unit_test_results stays [] — no execution
+
+        # Step 5 — Run static analysis tools via Docker subprocess.
+        static_results = run_static_analysis(cloned.workspace_path)
+
+        comment_text = _format_qa_comment(unit_test_results, static_results, issue_key)
 
         # Mark pipeline complete on success.
         state_row.status = "complete"
@@ -176,35 +314,65 @@ async def run(
     return comment_text
 
 
-def _format_static_analysis_comment(results: list[TestResult], issue_key: str) -> str:
-    """Format static analysis results into a human-readable Jira comment.
+def _format_qa_comment(
+    unit_test_results: list[TestResult],
+    static_results: list[TestResult],
+    issue_key: str,
+) -> str:
+    """Format QA results into a human-readable Jira comment with per-category sections.
 
-    Truncates per-tool stderr output to 500 characters to avoid enormous
-    comments. Phase 24 will add structured reporting via QAREP-01.
+    QAREP-01: Renders two labeled sections — "Unit Tests" and "Static Analysis" —
+    satisfying the per-category minimum requirement.
+
+    Truncates per-tool stderr output to 500 characters to avoid enormous comments
+    (T-24-05: truncation mirrors existing static-analysis output behaviour).
 
     Args:
-        results:   List of TestResult objects from run_static_analysis().
-        issue_key: Jira issue key (included in the comment header).
+        unit_test_results: List of TestResult from executing generated pytest file(s).
+                           Empty list when no unit tests were generated.
+        static_results:    List of TestResult from run_static_analysis().
+        issue_key:         Jira issue key (included in the comment header).
 
     Returns:
         Multi-line string suitable for posting as a Jira comment body.
     """
-    if not results:
-        return (
-            f"QA static analysis for {issue_key}: no tools detected.\n\n"
-            "No pyproject.toml, setup.cfg, or package.json found in repository."
-        )
+    lines = [f"QA results for {issue_key}:\n"]
 
-    lines = [f"QA static analysis for {issue_key}:\n"]
-    for r in results:
-        if r.returncode == 0:
-            lines.append(f"- {r.tool}: PASSED")
-        elif r.timed_out:
-            lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
-        else:
-            stderr_snippet = r.stderr[:500] if r.stderr else ""
-            lines.append(
-                f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}"
-            )
+    # --- Unit Tests section ---
+    lines.append("**Unit Tests:**")
+    if not unit_test_results:
+        lines.append("- No unit tests were generated (LLM returned no test files).")
+    else:
+        for r in unit_test_results:
+            if r.returncode == 0:
+                lines.append(f"- {r.tool}: PASSED")
+            elif r.timed_out:
+                lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
+            else:
+                stderr_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(
+                    f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}"
+                )
+
+    lines.append("")  # blank line between sections
+
+    # --- Static Analysis section ---
+    lines.append("**Static Analysis:**")
+    if not static_results:
+        lines.append(
+            "- No static analysis tools detected.\n"
+            "  (No pyproject.toml, setup.cfg, or package.json found in repository.)"
+        )
+    else:
+        for r in static_results:
+            if r.returncode == 0:
+                lines.append(f"- {r.tool}: PASSED")
+            elif r.timed_out:
+                lines.append(f"- {r.tool}: TIMED OUT ({r.stderr})")
+            else:
+                stderr_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(
+                    f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}"
+                )
 
     return "\n".join(lines)
