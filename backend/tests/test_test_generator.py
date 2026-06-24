@@ -164,3 +164,76 @@ def test_generate_unit_tests_prompt_contains_tests_and_pytest():
     prompt = captured_prompts[0]
     assert "tests/" in prompt, f"'tests/' not found in prompt"
     assert "pytest" in prompt, f"'pytest' not found in prompt"
+
+
+# ---------------------------------------------------------------------------
+# Phase 26-01 RED: generate_e2e_tests() — TESTGEN-03
+# ---------------------------------------------------------------------------
+
+
+def test_generate_e2e_tests_calls_route_request_once():
+    """generate_e2e_tests calls route_request once with stage='testgen'."""
+    from services.test_generator import generate_e2e_tests
+
+    with patch(
+        "services.test_generator.route_request",
+        return_value=_make_llm_response(
+            "### FILE: tests/e2e/test_login.spec.ts\n```typescript\ntest('ok', () => {});\n```"
+        ),
+    ) as mock_route:
+        result = generate_e2e_tests(
+            issue_key="PROJ-1",
+            issue_summary="Login feature",
+            issue_description="desc",
+            codebase_context="context",
+            relevant_file_contents={"src/login.ts": "export function login() {}"},
+        )
+
+    mock_route.assert_called_once()
+    stage, _ = mock_route.call_args[0]
+    assert stage == "testgen"
+    assert len(result) == 1
+
+
+def test_generate_e2e_tests_stub_response_returns_empty():
+    """Stub/empty LLM response returns []."""
+    from services.test_generator import generate_e2e_tests
+
+    with patch(
+        "services.test_generator.route_request",
+        return_value=_make_llm_response("[stub]"),
+    ):
+        result = generate_e2e_tests(
+            issue_key="PROJ-1",
+            issue_summary="test",
+            issue_description="desc",
+            codebase_context=None,
+            relevant_file_contents={},
+        )
+
+    assert result == []
+
+
+def test_generate_e2e_tests_prompt_contains_playwright_and_e2e_path():
+    """Prompt contains 'Playwright' and 'e2e/' substrings."""
+    from services.test_generator import generate_e2e_tests
+
+    captured: list[str] = []
+
+    def capture(stage, prompt):
+        captured.append(prompt)
+        return _make_llm_response("[stub]")
+
+    with patch("services.test_generator.route_request", side_effect=capture):
+        generate_e2e_tests(
+            issue_key="PROJ-5",
+            issue_summary="E2E tests",
+            issue_description="run playwright",
+            codebase_context="app",
+            relevant_file_contents={},
+        )
+
+    assert captured, "route_request was never called"
+    prompt = captured[0]
+    assert "Playwright" in prompt or "playwright" in prompt.lower(), f"'Playwright' not in prompt"
+    assert "e2e/" in prompt or "e2e\\" in prompt, f"'e2e/' not found in prompt"

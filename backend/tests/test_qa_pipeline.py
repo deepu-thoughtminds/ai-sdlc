@@ -608,3 +608,160 @@ async def test_empty_generate_unit_tests_skips_execution():
         f"Static analysis section missing from comment: {comment_body!r}"
     )
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 26-01 RED: E2E generation + has_active_qa_run() — TESTGEN-03, QATRIG-03
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_generation_skipped_when_no_playwright_config():
+    """When glob finds no playwright.config.*, E2E tests are NOT generated.
+
+    Comment must contain 'E2E Tests' section with a skip note mentioning 'playwright.config'.
+    """
+    from services.qa_pipeline import run
+
+    project = _make_mock_project()
+    db = TestingSession()
+    _make_state_row(db)
+
+    cloned = _make_cloned_repo()
+    static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+
+    mock_glob_module = MagicMock()
+    mock_glob_module.glob.return_value = []
+
+    with (
+        patch("services.qa_pipeline.clone_repository", return_value=cloned),
+        patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
+        patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
+        patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+        patch("services.qa_pipeline.run_command"),
+        patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
+        patch("services.qa_pipeline.generate_e2e_tests", create=True, return_value=[]) as mock_e2e_gen,
+        patch("services.qa_pipeline.glob", mock_glob_module),
+    ):
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    mock_e2e_gen.assert_not_called()
+    comment_body = mock_post.call_args[0][4]
+    assert "E2E Tests" in comment_body, f"'E2E Tests' section not in comment: {comment_body!r}"
+    assert "playwright.config" in comment_body.lower(), (
+        f"'playwright.config' not mentioned in skip note: {comment_body!r}"
+    )
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_generation_runs_when_playwright_config_found():
+    """When glob finds playwright.config.*, E2E tests are generated and executed.
+
+    Comment must contain 'E2E Tests' and 'PASSED'.
+    """
+    from services.qa_pipeline import run
+    from services.code_generator import FileChange
+
+    project = _make_mock_project()
+    db = TestingSession()
+    _make_state_row(db)
+
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as workspace:
+        cloned = _make_cloned_repo(workspace)
+        static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+        e2e_change = FileChange(path="e2e/test_login.spec.ts", content="test('ok', () => {});")
+
+        mock_glob_module = MagicMock()
+        mock_glob_module.glob.return_value = [_os.path.join(workspace, "playwright.config.ts")]
+
+        with (
+            patch("services.qa_pipeline.clone_repository", return_value=cloned),
+            patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
+            patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
+            patch("services.qa_pipeline.shutil.rmtree"),
+            patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+            patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+            patch("services.qa_pipeline.run_command",
+                  return_value=TestResult(tool="playwright", returncode=0, stdout="1 passed", stderr="", timed_out=False)),
+            patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
+            patch("services.qa_pipeline.generate_e2e_tests", create=True, return_value=[e2e_change]) as mock_e2e_gen,
+            patch("services.qa_pipeline.glob", mock_glob_module),
+        ):
+            await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    mock_e2e_gen.assert_called_once()
+    comment_body = mock_post.call_args[0][4]
+    assert "E2E Tests" in comment_body, f"'E2E Tests' section not in comment: {comment_body!r}"
+    assert "PASSED" in comment_body, f"'PASSED' not in E2E comment: {comment_body!r}"
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_path_traversal_rejected():
+    """E2E FileChange.path escaping workspace is rejected per-file; run() still completes.
+
+    T-26-01: mirrors T-24-01 per-file catch-and-continue pattern for E2E files.
+    """
+    from services.qa_pipeline import run
+    from services.code_generator import FileChange
+
+    project = _make_mock_project()
+    db = TestingSession()
+    _make_state_row(db)
+
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as workspace:
+        cloned = _make_cloned_repo(workspace)
+        static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+        bad_change = FileChange(path="../../etc/passwd", content="evil")
+
+        mock_glob_module = MagicMock()
+        mock_glob_module.glob.return_value = [_os.path.join(workspace, "playwright.config.ts")]
+
+        with (
+            patch("services.qa_pipeline.clone_repository", return_value=cloned),
+            patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
+            patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
+            patch("services.qa_pipeline.shutil.rmtree"),
+            patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+            patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
+            patch("services.qa_pipeline.run_command"),
+            patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
+            patch("services.qa_pipeline.generate_e2e_tests", create=True, return_value=[bad_change]),
+            patch("services.qa_pipeline.glob", mock_glob_module),
+        ):
+            await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    db.refresh(db.query(PipelineState).filter(PipelineState.ticket_key == "PROJ-1").first() or MagicMock())
+    db.close()
+    # If run() raised, we'd get an exception above. The fact it returned means the guard worked.
+    # No assert needed beyond "no exception raised" — mirrors test_path_traversal_rejected_without_raising.
+
+
+def test_has_active_qa_run_returns_true_when_running_row_exists():
+    """has_active_qa_run returns True when a stage=qa/status=running row exists."""
+    from services.qa_pipeline import has_active_qa_run
+
+    db = TestingSession()
+    db.add(PipelineState(project_id=1, ticket_key="PROJ-1", stage="qa", status="running"))
+    db.commit()
+
+    assert has_active_qa_run("PROJ-1", db) is True
+    db.close()
+
+
+def test_has_active_qa_run_returns_false_when_no_running_row():
+    """has_active_qa_run returns False when no running qa row exists."""
+    from services.qa_pipeline import has_active_qa_run
+
+    db = TestingSession()
+    # Add a completed row — should NOT count
+    db.add(PipelineState(project_id=1, ticket_key="PROJ-1", stage="qa", status="complete"))
+    db.commit()
+
+    assert has_active_qa_run("PROJ-1", db) is False
+    db.close()

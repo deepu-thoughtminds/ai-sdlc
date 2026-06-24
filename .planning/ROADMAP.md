@@ -632,7 +632,11 @@ Plans:
   3. A developer can type `@jarvis run qa` on a Jira story to (re-)trigger QA on demand via the LLM intent router
   4. If an active QA `PipelineState` already exists for the ticket (status not `failed`), a duplicate trigger from either path is silently acknowledged with no second pipeline run started
 
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 26-01-PLAN.md — Playwright E2E generation/execution (TESTGEN-03) + shared has_active_qa_run() guard
+- [ ] 26-02-PLAN.md — Auto-chain post-merge trigger + @jarvis run qa comment trigger (QATRIG-01/02/03)
 **UI hint**: no
 
 ---
