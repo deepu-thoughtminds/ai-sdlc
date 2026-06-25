@@ -100,6 +100,7 @@ services:
       - ./backend:/app
       - app_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp:/tmp  # share host /tmp so workspace paths created by tempfile.mkdtemp() are visible to the host Docker daemon
     env_file: .env
     environment:
       - HERMES_BASE_URL=http://hermes:8001

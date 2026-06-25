@@ -93,8 +93,13 @@ def _build_fix_prompt(failing: list[TestResult]) -> str:
         sections.append(f"Tool: {r.tool}\nstdout:\n{stdout}\nstderr:\n{stderr}")
     return (
         "The following test(s) are failing. Generate a targeted fix for the "
-        "application source code (NOT the test files) using the "
-        "### FILE: path/to/file.py convention.\n\n" + "\n\n".join(sections)
+        "application source code (NOT the test files). For each file you change, "
+        "use EXACTLY this format:\n\n"
+        "### FILE: path/to/file\n"
+        "```\n"
+        "<complete file content here>\n"
+        "```\n\n"
+        + "\n\n".join(sections)
     )
 
 
