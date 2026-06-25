@@ -765,3 +765,81 @@ def test_has_active_qa_run_returns_false_when_no_running_row():
 
     assert has_active_qa_run("PROJ-1", db) is False
     db.close()
+
+
+@pytest.mark.asyncio
+async def test_js_test_file_dispatches_to_npm_not_pytest(tmp_path):
+    """Generated .test.tsx file must run via npm/sh, never pytest (TESTGEN-04).
+
+    Reproduces the SCRUM-82 failure: pytest invoked against a TypeScript test
+    file. run_command's ToolchainCommand for a .test.tsx file must use
+    "npm"/"sh" in its docker command, not "pytest".
+    """
+    from services.code_generator import FileChange
+    from services.qa_pipeline import run
+
+    project = _make_mock_project()
+    db = TestingSession()
+    _make_state_row(db)
+
+    workspace = tmp_path / "qa-workspace"
+    workspace.mkdir()
+    (workspace / "tests" / "pages").mkdir(parents=True)
+
+    cloned = _make_cloned_repo(str(workspace))
+    static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+    generated = [FileChange(path="tests/pages/LoginPage.test.tsx", content="test('ok', () => {})")]
+
+    with (
+        patch("services.qa_pipeline.clone_repository", return_value=cloned),
+        patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
+        patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
+        patch("services.qa_pipeline.run_command",
+              return_value=TestResult(tool="npm test", returncode=0, stdout="1 passed", stderr="", timed_out=False)) as mock_run_command,
+    ):
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    assert mock_run_command.call_count == 1
+    cmd_obj = mock_run_command.call_args[0][0]
+    assert "pytest" not in cmd_obj.command, f"pytest must not appear in command for a .tsx file: {cmd_obj.command!r}"
+    joined = " ".join(cmd_obj.command)
+    assert "npm" in joined, f"Expected npm in command for a .tsx test file: {cmd_obj.command!r}"
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_py_test_file_still_dispatches_to_pytest(tmp_path):
+    """Generated .py file must still run via pytest — no regression for the Python path."""
+    from services.code_generator import FileChange
+    from services.qa_pipeline import run
+
+    project = _make_mock_project()
+    db = TestingSession()
+    _make_state_row(db)
+
+    workspace = tmp_path / "qa-workspace"
+    workspace.mkdir()
+    (workspace / "tests").mkdir()
+
+    cloned = _make_cloned_repo(str(workspace))
+    static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+    generated = [FileChange(path="tests/test_foo.py", content="def test_ok(): assert True")]
+
+    with (
+        patch("services.qa_pipeline.clone_repository", return_value=cloned),
+        patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
+        patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
+        patch("services.qa_pipeline.shutil.rmtree"),
+        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
+        patch("services.qa_pipeline.run_command",
+              return_value=TestResult(tool="pytest", returncode=0, stdout="1 passed", stderr="", timed_out=False)) as mock_run_command,
+    ):
+        await run(project, "PROJ-1", "Feature X", "desc", db)
+
+    cmd_obj = mock_run_command.call_args[0][0]
+    assert "pytest" in cmd_obj.command, f"Expected pytest still used for a .py file: {cmd_obj.command!r}"
+    db.close()
