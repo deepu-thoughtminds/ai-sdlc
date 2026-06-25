@@ -45,19 +45,44 @@ def _fingerprint(results: list[TestResult]) -> frozenset:
     )
 
 
-def _rerun_failing_tests(workspace_path: str) -> list[TestResult]:
-    """Re-run the generated pytest suite in the workspace via the qa-sandbox container."""
+def _rerun_failing_tests(workspace_path: str, failing: list[TestResult]) -> list[TestResult]:
+    """Re-run each failing test file using the same runner it was originally run with.
+
+    Mirrors the extension-based dispatch in qa_pipeline.py (TESTGEN-04) so
+    .test.ts(x)/.spec.ts(x) files go to npm test, .py files go to pytest.
+    node_modules from a prior npm ci in the same workspace mount are reused.
+    """
     image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-    cmd = ToolchainCommand(
-        name="pytest",
-        command=[
-            "docker", "run", "--rm",
-            "-v", f"{workspace_path}:/workspace",
-            image,
-            "pytest", "/workspace/tests", "-v",
-        ],
-    )
-    return [run_command(cmd)]
+    results: list[TestResult] = []
+    for r in failing:
+        fp = r.file_path
+        if fp.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
+            cmd = ToolchainCommand(
+                name="npm test",
+                command=[
+                    "docker", "run", "--rm",
+                    "-v", f"{workspace_path}:/workspace",
+                    "-w", "/workspace",
+                    image,
+                    "sh", "-c",
+                    f"test -d node_modules || npm ci --silent && npm test -- {fp}",
+                ],
+            )
+            new_result = run_command(cmd, timeout=300)
+        else:
+            cmd = ToolchainCommand(
+                name="pytest",
+                command=[
+                    "docker", "run", "--rm",
+                    "-v", f"{workspace_path}:/workspace",
+                    image,
+                    "pytest", f"/workspace/{fp}", "-v",
+                ],
+            )
+            new_result = run_command(cmd)
+        new_result.file_path = fp
+        results.append(new_result)
+    return results
 
 
 def _build_fix_prompt(failing: list[TestResult]) -> str:
@@ -158,7 +183,7 @@ def run_auto_fix_loop(
             except Exception:
                 logger.exception("Auto-fix PR creation failed for %s", issue_key)
 
-        rerun = _rerun_failing_tests(workspace_path)
+        rerun = _rerun_failing_tests(workspace_path, failing)
         current_results = rerun
         failing = [r for r in rerun if r.returncode != 0 and not r.timed_out]
 

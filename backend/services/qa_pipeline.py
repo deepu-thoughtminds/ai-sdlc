@@ -288,6 +288,7 @@ async def run(
                         ],
                     )
                     result = run_command(cmd)
+                result.file_path = change.path  # for auto_fix_loop re-run dispatch
                 unit_test_results.append(result)
                 logger.info(
                     "Generated test %s exit=%d timed_out=%s",

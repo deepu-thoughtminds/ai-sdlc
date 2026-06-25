@@ -48,6 +48,10 @@ class TestResult:
         stdout:     Captured standard output (text).
         stderr:     Captured standard error (text).
         timed_out:  True when subprocess.TimeoutExpired was caught (T-23-02).
+        file_path:  Relative path of the test file that produced this result
+                    (populated by qa_pipeline for unit test results; empty for
+                    static analysis results). Used by auto_fix_loop to re-run
+                    the same file with the same runner.
     """
 
     tool: str
@@ -55,6 +59,7 @@ class TestResult:
     stdout: str
     stderr: str
     timed_out: bool
+    file_path: str = ""
 
 
 def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
@@ -143,10 +148,13 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
             )
 
         if install_cmd:
-            # ESLint: install repo deps first so eslint-config-next and other
-            # extended configs resolve from the repo's own node_modules.
-            # Subsequent tools reuse node_modules already written to the
-            # mounted workspace (sequential execution — no race condition).
+            # All JS tools: install deps first so eslint-config-next and other
+            # extended configs resolve from the repo's own node_modules. Each
+            # tool checks for node_modules before re-installing — the unit test
+            # step may have already populated it in the same mounted workspace,
+            # so static analysis can reuse those modules (sequential execution,
+            # no race condition).
+            reuse_install = f"test -d node_modules || {install_cmd}"
             commands.append(
                 ToolchainCommand(
                     name="eslint",
@@ -156,13 +164,10 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
                         "-w", "/workspace",
                         image,
                         "sh", "-c",
-                        f"{install_cmd} && npx eslint . --ext .js,.ts,.jsx,.tsx",
+                        f"{reuse_install} && npx eslint . --ext .js,.ts,.jsx,.tsx",
                     ],
                 )
             )
-            # Subsequent tools skip reinstall if node_modules already present
-            # (written by the eslint step above).
-            reuse_install = f"test -d node_modules || {install_cmd}"
             commands.append(
                 ToolchainCommand(
                     name="npm_audit",
