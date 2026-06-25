@@ -37,6 +37,7 @@ from services.hermes_client import (
 )
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.repo_clone import clone_repository
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,14 @@ async def run(
         db.add(state_row)
         db.commit()
 
+    # Ticket-tracking bookkeeping: coding has begun (best-effort).
+    safe_upsert_ticket_status(
+        db, project.id, issue_key, pipeline_stage="dev", current_status="Coding started"
+    )
+    safe_record_transaction(
+        db, project.id, issue_key, "dev", "Coding started", status="in_progress"
+    )
+
     comment_text = ""
     try:
         # Step 2: Fetch Jira comment history and search for a Confluence URL.
@@ -249,6 +258,14 @@ async def run(
                 state_row.status = "complete"
                 state_row.draft_content = comment_text
                 db.commit()
+                safe_upsert_ticket_status(
+                    db, project.id, issue_key, pipeline_stage="dev",
+                    current_status="Coding finished — no code changes generated",
+                )
+                safe_record_transaction(
+                    db, project.id, issue_key, "dev",
+                    "Coding finished — no code changes generated", status="success",
+                )
                 logger.info("Dev pipeline complete for ticket %s (no code changes generated)", issue_key)
                 return comment_text
 
@@ -273,12 +290,29 @@ async def run(
         state_row.draft_content = comment_text
         db.commit()
 
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="dev",
+            current_status="Coding finished and PR sent",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "dev", "Coding finished and PR sent",
+            status="success", result_url=pr.html_url,
+        )
+
     except Exception as exc:
         state_row.status = "failed"
         try:
             db.commit()
         except Exception:
             db.rollback()
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="dev",
+            current_status="Dev pipeline failed",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "dev", "Dev pipeline failed",
+            status="failed", detail=str(exc),
+        )
         # WR-03: Notify the user in Jira so the failure is visible without
         # monitoring server logs.
         try:

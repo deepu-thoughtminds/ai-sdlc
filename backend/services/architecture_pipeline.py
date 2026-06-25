@@ -37,6 +37,7 @@ from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
 from services.crypto import decrypt_credential
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 from services.drawio_service import generate_diagram, generate_viewer_url
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
@@ -227,12 +228,33 @@ async def run(
         state_row.draft_content = comment_text
         db.commit()
 
+        # Ticket-tracking bookkeeping (best-effort). The Confluence page link is
+        # embedded in comment_text, stored here as detail.
+        safe_upsert_ticket_status(
+            db, project.id, issue_key,
+            pipeline_stage="architecture",
+            current_status="Design/Architecture published to Confluence",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "architecture",
+            "Design/Architecture published to Confluence page",
+            status="success", detail=comment_text,
+        )
+
     except Exception as exc:
         state_row.status = "failed"
         try:
             db.commit()
         except Exception:
             db.rollback()
+        safe_upsert_ticket_status(
+            db, project.id, issue_key,
+            pipeline_stage="architecture", current_status="Architecture generation failed",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "architecture",
+            "Architecture generation failed", status="failed", detail=str(exc),
+        )
         # WR-03: Notify user in Jira so the failure is visible without monitoring server logs.
         try:
             jira_token = decrypt_credential(project.jira_token)

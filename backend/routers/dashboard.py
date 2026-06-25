@@ -42,6 +42,9 @@ def _project_to_with_tickets(project: Project) -> ProjectWithTickets:
             id=ts.id,
             ticket_key=ts.ticket_key,
             pipeline_stage=ts.pipeline_stage,
+            summary=ts.summary,
+            issue_type=ts.issue_type,
+            current_status=ts.current_status,
             updated_at=ts.updated_at,
         )
         for ts in project.ticket_statuses

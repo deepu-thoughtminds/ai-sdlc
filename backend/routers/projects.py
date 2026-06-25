@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, get_db
 from models.pipeline_state import PipelineState
 from models.project import Project, ProjectCreate, ProjectListItem, ProjectPublic, ProjectUpdate
+from models.stage_transaction import StageTransaction
 from services import codebase_scan_service
 from services.auth import get_current_user
 from services.crypto import decrypt_credential, encrypt_credential
@@ -214,14 +215,15 @@ def delete_project(project_id: int, db: Session = Depends(get_db)) -> Response:
     """Delete a project and its related rows.
 
     ticket_statuses are removed via the ORM relationship cascade. pipeline_states
-    have no ORM relationship and SQLite does not enforce FK cascades by default,
-    so they are deleted explicitly here to avoid orphan rows. Returns 204;
-    404 if not found.
+    and stage_transactions have no ORM relationship and SQLite does not enforce FK
+    cascades by default, so they are deleted explicitly here to avoid orphan rows.
+    Returns 204; 404 if not found.
     """
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
     db.query(PipelineState).filter(PipelineState.project_id == project_id).delete()
+    db.query(StageTransaction).filter(StageTransaction.project_id == project_id).delete()
     db.delete(project)
     db.commit()
     logger.info("project deleted id=%d", project_id)

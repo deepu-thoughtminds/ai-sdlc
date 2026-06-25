@@ -55,6 +55,7 @@ from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
 from services.mention_parser import parse_mention
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,25 @@ async def handle_jira_comment(
         state_row.draft_content = description
         state_row.updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
         db.commit()
+
+        # Ticket-tracking bookkeeping (best-effort).
+        safe_upsert_ticket_status(
+            db,
+            project.id,
+            event.issue.key,
+            pipeline_stage="description",
+            current_status="Generated description, awaiting approval",
+            summary=getattr(event.issue, "summary", None),
+            issue_type=getattr(event.issue, "issue_type", None),
+        )
+        safe_record_transaction(
+            db,
+            project.id,
+            event.issue.key,
+            "description",
+            "Generated description, awaiting approval",
+            status="success",
+        )
 
         logger.info(
             "Describe pipeline complete for issue %s — awaiting approval",
@@ -659,6 +679,25 @@ async def handle_jira_issue_created(
     db.commit()
     db.refresh(state_row)
 
+    # Ticket-tracking bookkeeping: record the ticket's creation (best-effort).
+    safe_upsert_ticket_status(
+        db,
+        project.id,
+        event.issue.key,
+        pipeline_stage="description",
+        current_status="Ticket created",
+        summary=event.issue.summary,
+        issue_type=event.issue.issue_type,
+    )
+    safe_record_transaction(
+        db,
+        project.id,
+        event.issue.key,
+        "description",
+        "Ticket created",
+        status="in_progress",
+    )
+
     # Step 7: Run describe pipeline via adapter (no comment body on issue_created)
     adapter = _IssueCreatedAdapter(issue=event.issue, comment=_NullComment())
     description = await describe_pipeline.run(adapter, project)
@@ -687,6 +726,21 @@ async def handle_jira_issue_created(
     state_row.draft_content = description
     state_row.updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
     db.commit()
+
+    safe_upsert_ticket_status(
+        db,
+        project.id,
+        event.issue.key,
+        current_status="Generated description, awaiting approval",
+    )
+    safe_record_transaction(
+        db,
+        project.id,
+        event.issue.key,
+        "description",
+        "Generated description, awaiting approval",
+        status="success",
+    )
 
     logger.info(
         "Auto-describe pipeline complete for issue %s (issue_created) — awaiting approval",

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from database import init_db
 import models.ticket_status  # noqa: F401 — registers TicketStatus table with Base.metadata
 import models.pipeline_state  # noqa: F401 — registers PipelineState table with Base.metadata
+import models.stage_transaction  # noqa: F401 — registers StageTransaction table with Base.metadata
 from routers.auth import router as auth_router
 from routers.dashboard import router as dashboard_router
 from routers.projects import router as projects_router
