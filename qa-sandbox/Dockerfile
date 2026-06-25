@@ -24,16 +24,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-base /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=node-base /usr/local/bin/npx /usr/local/bin/npx
-COPY --from=node-base /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node-base /usr/local /usr/local
 
 # Install Python QA tools (pinned for reproducible builds)
 RUN pip install --no-cache-dir \
     "ruff==0.4.7" \
     "mypy==1.10.0" \
-    "bandit==1.7.9"
+    "bandit==1.7.9" \
+    "pytest==8.2.2"
 
 # Install JS/TS QA tools globally (pinned for reproducible builds)
 RUN npm install -g \

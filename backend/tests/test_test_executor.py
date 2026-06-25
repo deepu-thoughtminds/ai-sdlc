@@ -68,13 +68,23 @@ def test_detect_toolchain_python_setup_cfg(tmp_path):
 
 
 def test_detect_toolchain_js_package_json(tmp_path):
-    """package.json present → eslint and npm_audit detected; no ruff."""
+    """package.json + package-lock.json → eslint and npm_audit detected; no ruff."""
     (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
+    (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     result = detect_toolchain(str(tmp_path))
     names = _tool_names(result)
     assert "eslint" in names
     assert "npm_audit" in names
     assert "ruff" not in names
+
+
+def test_detect_toolchain_js_no_lockfile(tmp_path):
+    """package.json without package-lock.json → eslint detected, npm_audit skipped."""
+    (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
+    result = detect_toolchain(str(tmp_path))
+    names = _tool_names(result)
+    assert "eslint" in names
+    assert "npm_audit" not in names
 
 
 def test_detect_toolchain_ts_with_tsconfig(tmp_path):

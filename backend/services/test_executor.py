@@ -118,28 +118,34 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
     has_package_json = os.path.isfile(os.path.join(workspace_path, "package.json"))
 
     if has_package_json:
-        commands.extend([
+        commands.append(
             ToolchainCommand(
                 name="eslint",
                 command=[
                     "docker", "run", "--rm",
                     "-v", f"{workspace_path}:/workspace",
-                    image,
-                    "eslint", "/workspace",
-                    "--ext", ".js,.ts,.jsx,.tsx",
-                ],
-            ),
-            ToolchainCommand(
-                name="npm_audit",
-                command=[
-                    "docker", "run", "--rm",
-                    "-v", f"{workspace_path}:/workspace",
                     "-w", "/workspace",
                     image,
-                    "npm", "audit", "--audit-level=high",
+                    "eslint", ".",
+                    "--ext", ".js,.ts,.jsx,.tsx",
                 ],
-            ),
-        ])
+            )
+        )
+        # npm audit requires package-lock.json; skip if repo uses yarn/pnpm
+        has_package_lock = os.path.isfile(os.path.join(workspace_path, "package-lock.json"))
+        if has_package_lock:
+            commands.append(
+                ToolchainCommand(
+                    name="npm_audit",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{workspace_path}:/workspace",
+                        "-w", "/workspace",
+                        image,
+                        "npm", "audit", "--audit-level=high",
+                    ],
+                )
+            )
 
         # TypeScript detection (tsc only if tsconfig.json present)
         has_tsconfig = os.path.isfile(os.path.join(workspace_path, "tsconfig.json"))
