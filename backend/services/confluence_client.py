@@ -244,7 +244,7 @@ class ConfluenceClient:
             return ""
 
     async def publish_qa_report(
-        self, project: Project, issue_key: str, report_text: str
+        self, project: Project, issue_key: str, report_text: str, remediation_html: str = ""
     ) -> str:
         """Publish a brief QA summary as a Confluence page (find-or-update).
 
@@ -257,6 +257,8 @@ class ConfluenceClient:
             issue_key: Jira issue key (e.g. "PROJ-1").
             report_text: Plain-text QA report body (the same text posted to
                 Jira); HTML-escaped and wrapped in <pre> to preserve formatting.
+            remediation_html: Optional pre-built HTML for the Remediation Steps
+                section. Omitted (empty string) when all checks pass.
 
         Returns:
             The full page URL string on success; "" on any failure.
@@ -267,6 +269,7 @@ class ConfluenceClient:
             body_html = (
                 f"<h1>QA Report: {issue_key}</h1>"
                 f"<pre>{_escape(report_text)}</pre>"
+                + (f"<h2>Remediation Steps</h2>{remediation_html}" if remediation_html else "")
             )
 
             existing_page = await self.find_page(space_key, title)
@@ -442,7 +445,7 @@ async def publish_architecture(
         return ""
 
 
-async def publish_qa_report(project: Project, issue_key: str, report_text: str) -> str:
+async def publish_qa_report(project: Project, issue_key: str, report_text: str, remediation_html: str = "") -> str:
     """Module-level convenience wrapper for ConfluenceClient.publish_qa_report.
 
     Constructs a ConfluenceClient from project credentials and delegates to
@@ -457,7 +460,7 @@ async def publish_qa_report(project: Project, issue_key: str, report_text: str) 
             "JIRA_ACCOUNT_EMAIL", ""
         )
         client = ConfluenceClient(project.confluence_url, conf_token, email=conf_email)
-        return await client.publish_qa_report(project, issue_key, report_text)
+        return await client.publish_qa_report(project, issue_key, report_text, remediation_html)
     except Exception as exc:
         logger.warning(
             "publish_qa_report (module fn) failed for ticket %s: %s — returning empty URL",

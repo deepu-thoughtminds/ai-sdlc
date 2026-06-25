@@ -214,6 +214,10 @@ async def run(
         "JIRA_ACCOUNT_EMAIL", ""
     )
     unit_test_results: list[TestResult] = []
+    e2e_results: list[TestResult] = []
+    static_results: list[TestResult] = []
+    autofix_pr_url: str | None = None
+    still_failing = False
 
     try:
         # Step 3 — Decrypt credentials.
@@ -417,7 +421,10 @@ async def run(
     # Step 5.5 — Publish a brief QA report to Confluence (graceful degradation
     # on failure — same pattern as architecture_pipeline's publish_architecture).
     try:
-        qa_page_url = await publish_qa_report(project, issue_key, comment_text)
+        remediation_html = _build_remediation_html(
+            unit_test_results, e2e_results, static_results, autofix_pr_url, still_failing
+        )
+        qa_page_url = await publish_qa_report(project, issue_key, comment_text, remediation_html)
     except Exception as conf_exc:
         logger.warning(
             "QA pipeline: Confluence publish failed for %s: %s", issue_key, conf_exc
@@ -534,3 +541,56 @@ def _format_qa_comment(
                 )
 
     return "\n".join(lines)
+
+
+def _build_remediation_html(
+    unit_test_results: list[TestResult],
+    e2e_results: list[TestResult],
+    static_results: list[TestResult],
+    autofix_pr_url: str | None,
+    still_failing: bool,
+) -> str:
+    """Build an HTML Remediation Steps section for the Confluence QA page.
+
+    Returns an empty string when all checks passed (no section needed).
+    """
+    items: list[str] = []
+
+    unit_failures = [r for r in unit_test_results if r.returncode != 0 and not r.timed_out]
+    e2e_failures = [r for r in e2e_results if r.returncode != 0 and not r.timed_out]
+    static_failures = [r for r in static_results if r.returncode != 0 and not r.timed_out]
+
+    if not (unit_failures or e2e_failures or static_failures):
+        return ""
+
+    if unit_failures:
+        if autofix_pr_url and still_failing:
+            items.append(
+                f"<li><strong>Unit Tests:</strong> Auto-fix exhausted all attempts. "
+                f"Review the partial fixes in the <a href=\"{autofix_pr_url}\">auto-fix PR</a> "
+                f"and complete the fix manually.</li>"
+            )
+        elif autofix_pr_url:
+            items.append(
+                f"<li><strong>Unit Tests:</strong> Auto-fix applied — "
+                f"review and merge the <a href=\"{autofix_pr_url}\">auto-fix PR</a>.</li>"
+            )
+        else:
+            items.append(
+                "<li><strong>Unit Tests:</strong> Run <code>pytest</code> locally to "
+                "reproduce failures, then fix the implementation or update the tests.</li>"
+            )
+
+    if e2e_failures:
+        items.append(
+            "<li><strong>E2E Tests:</strong> Re-run against a live instance to confirm "
+            "failures, then fix selectors or expectations in the generated test file.</li>"
+        )
+
+    for r in static_failures:
+        items.append(
+            f"<li><strong>{r.tool}:</strong> Run <code>{r.tool}</code> locally to see "
+            f"violations and fix them before re-running QA.</li>"
+        )
+
+    return "<ul>" + "".join(items) + "</ul>"
