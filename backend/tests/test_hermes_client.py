@@ -15,6 +15,7 @@ from services.hermes_client import (
     get_comments,
     get_confluence_page_content,
     update_status,
+    _linkify_urls,
 )
 import services.hermes_client as _hermes_client_mod
 
@@ -29,6 +30,34 @@ async def test_post_comment_returns_dict():
     )
     result = await post_comment("https://x.atlassian.net", "u@x.com", "tok", "TS-1", "Hello")
     assert result == {"comment_id": "c123"}
+
+
+def test_linkify_urls_wraps_bare_url():
+    assert _linkify_urls("PR: https://github.com/x/y/pull/20 done") == (
+        "PR: [https://github.com/x/y/pull/20](https://github.com/x/y/pull/20) done"
+    )
+
+
+def test_linkify_urls_leaves_existing_markdown_link_untouched():
+    text = "See [the PR](https://github.com/x/y/pull/20) for details"
+    assert _linkify_urls(text) == text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_post_comment_linkifies_bare_urls_in_body():
+    route = respx.post(f"{BASE}/jira/comment").mock(
+        return_value=httpx.Response(200, json={"comment_id": "c1"})
+    )
+    await post_comment(
+        "https://x.atlassian.net", "u@x.com", "tok", "TS-1",
+        "Auto-fix PR: https://github.com/o/r/pull/5",
+    )
+    sent_body = route.calls.last.request.content
+    import json
+    assert json.loads(sent_body)["body"] == (
+        "Auto-fix PR: [https://github.com/o/r/pull/5](https://github.com/o/r/pull/5)"
+    )
 
 
 @pytest.mark.asyncio

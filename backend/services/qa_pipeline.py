@@ -47,6 +47,7 @@ from models.project import Project
 from services.auto_fix_loop import MAX_ATTEMPTS as MAX_AUTOFIX_ATTEMPTS
 from services.auto_fix_loop import run_auto_fix_loop
 from services.codebase_snapshot_reader import get_codebase_snapshot
+from services.confluence_client import publish_qa_report
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.repo_clone import clone_repository
@@ -412,6 +413,18 @@ async def run(
         # whether execution succeeded or failed.
         if cloned is not None:
             shutil.rmtree(cloned.workspace_path, ignore_errors=True)
+
+    # Step 5.5 — Publish a brief QA report to Confluence (graceful degradation
+    # on failure — same pattern as architecture_pipeline's publish_architecture).
+    try:
+        qa_page_url = await publish_qa_report(project, issue_key, comment_text)
+    except Exception as conf_exc:
+        logger.warning(
+            "QA pipeline: Confluence publish failed for %s: %s", issue_key, conf_exc
+        )
+        qa_page_url = ""
+    if qa_page_url:
+        comment_text += f"\n\nFull report: {qa_page_url}"
 
     # Step 6 — Post Jira comment. Wrapped in its own try/except so a comment
     # failure does not mask the pipeline outcome.

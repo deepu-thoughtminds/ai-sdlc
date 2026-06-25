@@ -210,6 +210,61 @@ async def test_publish_architecture_diagram_template_contains_drawio_block():
 
 
 @pytest.mark.asyncio
+async def test_publish_qa_report_creates_page_with_title_and_body():
+    mock_find = AsyncMock(return_value=None)
+    mock_create = AsyncMock(return_value=_created_page_dict("777"))
+    mock_update = AsyncMock(return_value=_updated_page_dict())
+
+    with patch("services.confluence_client.find_confluence_page", mock_find), \
+         patch("services.confluence_client.create_confluence_page", mock_create), \
+         patch("services.confluence_client.update_confluence_page", mock_update):
+
+        client = _make_client()
+        mock_project = _make_mock_project()
+
+        result = await client.publish_qa_report(
+            mock_project, "TICKET-1", "QA results for TICKET-1:\n\n- npm test: PASSED"
+        )
+
+    assert result == client.get_page_url("PROJ", "777")
+    _, _, _, space_key, title, body_html = mock_create.call_args[0]
+    assert title == "QA Report: TICKET-1"
+    assert "npm test: PASSED" in body_html
+
+
+@pytest.mark.asyncio
+async def test_publish_qa_report_updates_existing_page():
+    page = _found_page_dict(page_id="555", version=3)
+    mock_find = AsyncMock(return_value=page)
+    mock_update = AsyncMock(return_value=_updated_page_dict())
+    mock_create = AsyncMock(return_value=_created_page_dict("12345"))
+
+    with patch("services.confluence_client.find_confluence_page", mock_find), \
+         patch("services.confluence_client.create_confluence_page", mock_create), \
+         patch("services.confluence_client.update_confluence_page", mock_update):
+
+        client = _make_client()
+        result = await client.publish_qa_report(_make_mock_project(), "TICKET-1", "report")
+
+    mock_create.assert_not_called()
+    mock_update.assert_called_once()
+    assert mock_update.call_args[0][3] == "555"  # page_id arg to update_confluence_page
+    assert mock_update.call_args[0][-1] == 4  # version = current (3) + 1
+    assert result == client.get_page_url("PROJ", "555")
+
+
+@pytest.mark.asyncio
+async def test_publish_qa_report_returns_empty_string_on_exception():
+    mock_find = AsyncMock(side_effect=RuntimeError("network down"))
+
+    with patch("services.confluence_client.find_confluence_page", mock_find):
+        client = _make_client()
+        result = await client.publish_qa_report(_make_mock_project(), "TICKET-1", "report")
+
+    assert result == ""
+
+
+@pytest.mark.asyncio
 async def test_publish_architecture_text_only_template_excludes_diagram_block():
     """is_complex=False produces exactly four text-only headings, no drawio-xml block."""
     mock_find = AsyncMock(return_value=None)

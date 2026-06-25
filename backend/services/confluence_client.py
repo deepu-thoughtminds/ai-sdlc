@@ -243,6 +243,66 @@ class ConfluenceClient:
             )
             return ""
 
+    async def publish_qa_report(
+        self, project: Project, issue_key: str, report_text: str
+    ) -> str:
+        """Publish a brief QA summary as a Confluence page (find-or-update).
+
+        Mirrors publish_architecture's find-or-update-by-title convention and
+        graceful degradation on failure (T-04-03 / T-12-05): every exception
+        is caught here and results in an empty string return.
+
+        Args:
+            project: Project ORM with confluence_url, confluence_token, project_key.
+            issue_key: Jira issue key (e.g. "PROJ-1").
+            report_text: Plain-text QA report body (the same text posted to
+                Jira); HTML-escaped and wrapped in <pre> to preserve formatting.
+
+        Returns:
+            The full page URL string on success; "" on any failure.
+        """
+        try:
+            title = f"QA Report: {issue_key}"
+            space_key = project.project_key
+            body_html = (
+                f"<h1>QA Report: {issue_key}</h1>"
+                f"<pre>{_escape(report_text)}</pre>"
+            )
+
+            existing_page = await self.find_page(space_key, title)
+            if existing_page is not None:
+                existing_page_id = existing_page.get("id", "")
+                current_version = existing_page.get("version", {}).get("number", 0)
+                await self.update_page(
+                    existing_page_id,
+                    space_key,
+                    title,
+                    body_html,
+                    version=current_version + 1,
+                )
+                page_id = existing_page_id
+            else:
+                result = await self.create_page(space_key, title, body_html)
+                page_id = result.get("id", "")
+
+            if not page_id:
+                logger.warning(
+                    "QA report page published but no id returned for ticket %s", issue_key
+                )
+                return ""
+
+            page_url = self.get_page_url(space_key, page_id)
+            logger.info("QA report published to Confluence for ticket %s: %s", issue_key, page_url)
+            return page_url
+
+        except Exception as exc:
+            logger.warning(
+                "publish_qa_report failed for ticket %s: %s — returning empty URL",
+                issue_key,
+                exc,
+            )
+            return ""
+
 
 # ---------------------------------------------------------------------------
 # Module-level HTML-escaping helper and template builders
@@ -376,6 +436,31 @@ async def publish_architecture(
     except Exception as exc:
         logger.warning(
             "publish_architecture (module fn) failed for ticket %s: %s — returning empty URL",
+            issue_key,
+            exc,
+        )
+        return ""
+
+
+async def publish_qa_report(project: Project, issue_key: str, report_text: str) -> str:
+    """Module-level convenience wrapper for ConfluenceClient.publish_qa_report.
+
+    Constructs a ConfluenceClient from project credentials and delegates to
+    the instance method. Used by qa_pipeline for direct import.
+
+    Returns:
+        Page URL string on success; "" on any failure.
+    """
+    try:
+        conf_token = decrypt_credential(project.confluence_token)
+        conf_email = getattr(project, "jira_email", "") or os.environ.get(
+            "JIRA_ACCOUNT_EMAIL", ""
+        )
+        client = ConfluenceClient(project.confluence_url, conf_token, email=conf_email)
+        return await client.publish_qa_report(project, issue_key, report_text)
+    except Exception as exc:
+        logger.warning(
+            "publish_qa_report (module fn) failed for ticket %s: %s — returning empty URL",
             issue_key,
             exc,
         )
