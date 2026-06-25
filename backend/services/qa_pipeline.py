@@ -374,7 +374,8 @@ async def run(
                     continue
 
         # Step 5 — Run static analysis tools via Docker subprocess.
-        static_results = run_static_analysis(cloned.workspace_path)
+        # JS tools run npm ci first, so 300s timeout (vs default 120s).
+        static_results = run_static_analysis(cloned.workspace_path, timeout=300)
 
         comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note)
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)

@@ -33,10 +33,11 @@ RUN pip install --no-cache-dir \
     "bandit==1.7.9" \
     "pytest==8.2.2"
 
-# Install JS/TS QA tools globally (pinned for reproducible builds)
+# Install JS/TS QA tools globally; yarn ships with node:20, add pnpm for pnpm repos
 RUN npm install -g \
     "eslint@8.57.0" \
-    "typescript@5.4.5"
+    "typescript@5.4.5" \
+    "pnpm"
 
 # Set working directory (backend mounts workspace here)
 WORKDIR /workspace

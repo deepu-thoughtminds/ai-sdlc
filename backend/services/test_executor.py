@@ -118,22 +118,51 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
     has_package_json = os.path.isfile(os.path.join(workspace_path, "package.json"))
 
     if has_package_json:
-        commands.append(
-            ToolchainCommand(
-                name="eslint",
-                command=[
-                    "docker", "run", "--rm",
-                    "-v", f"{workspace_path}:/workspace",
-                    "-w", "/workspace",
-                    image,
-                    "eslint", ".",
-                    "--ext", ".js,.ts,.jsx,.tsx",
-                ],
-            )
-        )
-        # npm audit requires package-lock.json; skip if repo uses yarn/pnpm
+        # Detect package manager from lockfile — determines install command and
+        # audit command. Without a lockfile we can't do a reproducible install,
+        # so JS analysis tools are skipped.
         has_package_lock = os.path.isfile(os.path.join(workspace_path, "package-lock.json"))
+        has_yarn_lock = os.path.isfile(os.path.join(workspace_path, "yarn.lock"))
+        has_pnpm_lock = os.path.isfile(os.path.join(workspace_path, "pnpm-lock.yaml"))
+
         if has_package_lock:
+            install_cmd = "npm ci --silent"
+            audit_cmd = "npm audit --audit-level=high"
+        elif has_yarn_lock:
+            install_cmd = "yarn install --frozen-lockfile --silent"
+            audit_cmd = "yarn audit --level high"
+        elif has_pnpm_lock:
+            install_cmd = "pnpm install --frozen-lockfile --silent"
+            audit_cmd = "pnpm audit --audit-level high"
+        else:
+            install_cmd = None
+            audit_cmd = None
+            logger.warning(
+                "No lockfile found for JS project at %s — skipping JS static analysis",
+                workspace_path,
+            )
+
+        if install_cmd:
+            # ESLint: install repo deps first so eslint-config-next and other
+            # extended configs resolve from the repo's own node_modules.
+            # Subsequent tools reuse node_modules already written to the
+            # mounted workspace (sequential execution — no race condition).
+            commands.append(
+                ToolchainCommand(
+                    name="eslint",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{workspace_path}:/workspace",
+                        "-w", "/workspace",
+                        image,
+                        "sh", "-c",
+                        f"{install_cmd} && npx eslint . --ext .js,.ts,.jsx,.tsx",
+                    ],
+                )
+            )
+            # Subsequent tools skip reinstall if node_modules already present
+            # (written by the eslint step above).
+            reuse_install = f"test -d node_modules || {install_cmd}"
             commands.append(
                 ToolchainCommand(
                     name="npm_audit",
@@ -142,26 +171,28 @@ def detect_toolchain(workspace_path: str) -> list[ToolchainCommand]:
                         "-v", f"{workspace_path}:/workspace",
                         "-w", "/workspace",
                         image,
-                        "npm", "audit", "--audit-level=high",
+                        "sh", "-c",
+                        f"{reuse_install} && {audit_cmd}",
                     ],
                 )
             )
 
-        # TypeScript detection (tsc only if tsconfig.json present)
-        has_tsconfig = os.path.isfile(os.path.join(workspace_path, "tsconfig.json"))
-        if has_tsconfig:
-            commands.append(
-                ToolchainCommand(
-                    name="tsc",
-                    command=[
-                        "docker", "run", "--rm",
-                        "-v", f"{workspace_path}:/workspace",
-                        "-w", "/workspace",
-                        image,
-                        "tsc", "--noEmit",
-                    ],
+            # TypeScript detection (tsc only if tsconfig.json present)
+            has_tsconfig = os.path.isfile(os.path.join(workspace_path, "tsconfig.json"))
+            if has_tsconfig:
+                commands.append(
+                    ToolchainCommand(
+                        name="tsc",
+                        command=[
+                            "docker", "run", "--rm",
+                            "-v", f"{workspace_path}:/workspace",
+                            "-w", "/workspace",
+                            image,
+                            "sh", "-c",
+                            f"{reuse_install} && npx tsc --noEmit",
+                        ],
+                    )
                 )
-            )
 
     return commands
 

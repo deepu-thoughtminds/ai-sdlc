@@ -79,17 +79,32 @@ def test_detect_toolchain_js_package_json(tmp_path):
 
 
 def test_detect_toolchain_js_no_lockfile(tmp_path):
-    """package.json without package-lock.json → eslint detected, npm_audit skipped."""
+    """package.json without any lockfile → all JS tools skipped (can't npm ci)."""
     (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
     result = detect_toolchain(str(tmp_path))
     names = _tool_names(result)
-    assert "eslint" in names
+    assert "eslint" not in names
     assert "npm_audit" not in names
+    assert "tsc" not in names
+
+
+def test_detect_toolchain_js_yarn_lock(tmp_path):
+    """yarn.lock present → eslint and npm_audit detected using yarn commands."""
+    (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
+    (tmp_path / "yarn.lock").write_text("# yarn lockfile v1\n")
+    result = detect_toolchain(str(tmp_path))
+    names = _tool_names(result)
+    assert "eslint" in names
+    assert "npm_audit" in names
+    # Verify yarn install is used, not npm ci
+    eslint_cmd = next(c for c in result if c.name == "eslint")
+    assert "yarn" in " ".join(eslint_cmd.command)
 
 
 def test_detect_toolchain_ts_with_tsconfig(tmp_path):
-    """package.json + tsconfig.json → tsc detected."""
+    """package.json + package-lock.json + tsconfig.json → tsc detected."""
     (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
+    (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     (tmp_path / "tsconfig.json").write_text('{"compilerOptions": {}}\n')
     result = detect_toolchain(str(tmp_path))
     names = _tool_names(result)
@@ -97,8 +112,9 @@ def test_detect_toolchain_ts_with_tsconfig(tmp_path):
 
 
 def test_detect_toolchain_ts_without_tsconfig(tmp_path):
-    """package.json only (no tsconfig.json) → tsc NOT detected."""
+    """package.json + lockfile but no tsconfig.json → tsc NOT detected."""
     (tmp_path / "package.json").write_text('{"name": "myapp"}\n')
+    (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     result = detect_toolchain(str(tmp_path))
     names = _tool_names(result)
     assert "tsc" not in names
@@ -123,6 +139,7 @@ def test_detect_toolchain_command_is_list_not_string(tmp_path):
     # Create both Python and JS indicators to get full coverage.
     (tmp_path / "pyproject.toml").write_text("[tool.ruff]\n")
     (tmp_path / "package.json").write_text('{"name": "app"}\n')
+    (tmp_path / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
     (tmp_path / "tsconfig.json").write_text('{"compilerOptions": {}}\n')
 
     commands = detect_toolchain(str(tmp_path))
