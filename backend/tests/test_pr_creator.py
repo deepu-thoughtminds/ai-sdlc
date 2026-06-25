@@ -272,6 +272,67 @@ def test_token_not_logged_on_git_failure(tmp_path, caplog):
     )
 
 
+@respx.mock
+def test_repeated_push_same_workspace_no_refetch_does_not_raise(tmp_path):
+    """Regression: auto_fix_loop calls apply_commit_push_and_open_pr up to 3x in
+    the SAME workspace/branch with no re-clone or `git fetch` between attempts
+    (see auto_fix_loop.run_auto_fix_loop). The push target is a raw token-embedded
+    URL, never a registered `origin` remote, so the local remote-tracking ref is
+    never refreshed by these pushes. `--force-with-lease` (no explicit expected
+    value) falls back to that stale tracking ref and rejects attempt 2/3 with
+    "stale info" even though there is no real concurrent writer — SCRUM-85.
+
+    Uses a real local bare repo (no mocked git) to faithfully reproduce git's
+    lease-comparison behavior; only the GitHub PR-creation HTTP call is mocked.
+    """
+    bare_remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare_remote)], check=True)
+
+    workspace = tmp_path / "workspace"
+    subprocess.run(["git", "clone", "-q", str(bare_remote), str(workspace)], check=True)
+    (workspace / "README.md").write_text("init\n")
+    subprocess.run(["git", "-C", str(workspace), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(workspace), "-c", "user.email=t@t.test", "-c", "user.name=t",
+         "commit", "-q", "-m", "init"],
+        check=True,
+    )
+    # Push initial commit to `main` so the branch's base exists on the remote.
+    subprocess.run(["git", "-C", str(workspace), "push", "-q", str(bare_remote), "HEAD:main"], check=True)
+
+    respx.post(f"{GITHUB_API_BASE}/repos/acme/my-app/pulls").mock(
+        return_value=httpx.Response(201, json=_make_pr_api_response())
+    )
+
+    # The production code always builds an https://oauth2:<token>@<host>/... push
+    # URL (real network format). To exercise real git push/lease mechanics against
+    # a local bare repo (no network), wrap subprocess.run: for the `git push` call
+    # only, rewrite the bogus https URL arg to the local bare-repo path before
+    # delegating to the real subprocess.run. Every other git call passes through
+    # untouched.
+    real_run = subprocess.run
+
+    def _rewriting_run(args, *a, **kw):
+        if isinstance(args, list) and len(args) >= 2 and args[0] == "git" and args[1] == "push":
+            args = list(args)
+            for i, arg in enumerate(args):
+                if arg.startswith("https://oauth2:"):
+                    args[i] = str(bare_remote)
+        return real_run(args, *a, **kw)
+
+    with patch("services.pr_creator.subprocess.run", side_effect=_rewriting_run):
+        for attempt in range(1, 4):
+            result = apply_commit_push_and_open_pr(
+                workspace_path=str(workspace),
+                github_repo=GITHUB_REPO,
+                github_token="dummy-token",
+                issue_key=ISSUE_KEY,
+                file_changes=[FileChange(path=f"src/attempt_{attempt}.py", content=f"x = {attempt}\n")],
+                branch_name="jarvis/qa-fix-SCRUM-85",
+            )
+            assert isinstance(result, PullRequest), f"attempt {attempt} failed to return a PullRequest"
+
+
 # ---------------------------------------------------------------------------
 # PRMERGE-01 tests — find_and_merge_pr (Phase 17 Plan 01)
 # ---------------------------------------------------------------------------

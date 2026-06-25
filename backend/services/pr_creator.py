@@ -241,8 +241,17 @@ def apply_commit_push_and_open_pr(
     # Use oauth2: scheme — x-access-token: triggers a spurious write-access
     # check on GitHub's git smart-HTTP backend for fine-grained PATs.
     push_url = f"https://oauth2:{github_token}@{github_host}/{owner}/{repo}.git"
+    # ponytail: plain --force, not --force-with-lease. The push target is a raw
+    # URL, never a registered `origin` remote, so git's local remote-tracking ref
+    # is never refreshed by these pushes — --force-with-lease compares against
+    # that stale ref and rejects attempt 2/3 of auto_fix_loop's retries in the
+    # same workspace as "stale info", even with no real concurrent writer
+    # (SCRUM-85). This branch (jarvis/issue-{key} or jarvis/qa-fix-{key}) is
+    # exclusively written by this single workspace/process (T-25-04), so the
+    # lease's safety guarantee against concurrent pushers doesn't apply here.
+    # Revisit if two Hermes workers can ever target the same branch concurrently.
     _run_git(
-        ["push", "--force-with-lease", push_url, branch_name],
+        ["push", "--force", push_url, branch_name],
         cwd=workspace_path,
         github_token=github_token,
     )
