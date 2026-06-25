@@ -21,11 +21,13 @@ from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from models.project import Project
 from models.ticket_status import ProjectWithTickets, TicketStatus, TicketStatusCreate, TicketStatusPublic
+from services.auth import get_current_user
 from services.crypto import decrypt_credential
 
 logger = logging.getLogger("backend.dashboard")
 
-router = APIRouter()
+# All dashboard routes require a valid JWT.
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def _project_to_with_tickets(project: Project) -> ProjectWithTickets:

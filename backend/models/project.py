@@ -90,6 +90,37 @@ class ProjectCreate(BaseModel):
     github_repo: str = Field(..., min_length=1, max_length=500, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+class ProjectUpdate(BaseModel):
+    """Inbound schema for updating an existing project (PUT /projects/{id}).
+
+    All fields are optional — only provided fields are changed. Token and
+    github_repo fields, when omitted or sent empty, leave the stored ciphertext
+    unchanged; when provided non-empty they are re-encrypted by the router.
+
+    Validation mirrors ProjectCreate so an update can never weaken the
+    constraints enforced at creation (T-02-01/05/06, T-15-01).
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    project_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        pattern=r"^[A-Z0-9_-]+$",
+    )
+    jira_url: HttpUrl | None = None
+    jira_email: str | None = Field(default=None, max_length=500)
+    confluence_url: HttpUrl | None = None
+    jira_token: str | None = Field(default=None, max_length=500)
+    github_token: str | None = Field(default=None, max_length=500)
+    confluence_token: str | None = Field(default=None, max_length=500)
+    github_repo: str | None = Field(
+        default=None,
+        max_length=500,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
+
+
 class ProjectPublic(BaseModel):
     """Outbound schema for a single project — NO token fields.
 
