@@ -85,9 +85,40 @@ def generate_unit_tests(
     # T-24-02: use empty string when codebase_context is falsy — never concatenate None
     codebase_section = codebase_context or ""
 
+    # Detect repo language from file extensions to pick the right test conventions.
+    js_ts_exts = {".ts", ".tsx", ".js", ".jsx"}
+    is_js_ts = any(
+        path.endswith(tuple(js_ts_exts)) for path in relevant_file_contents
+    )
+
+    if is_js_ts:
+        test_conventions = (
+            "Use vitest + @testing-library/react conventions:\n"
+            "  - import { render, screen } from '@testing-library/react'\n"
+            "  - import { describe, it, expect } from 'vitest'\n"
+            "  - Test file extension: .test.tsx for React components, .test.ts otherwise\n"
+            "  - Place tests in tests/pages/ComponentName.test.tsx (mirror src/ paths "
+            "under tests/, NOT under tests/src/). A file at src/pages/Foo.tsx gets a "
+            "test at tests/pages/Foo.test.tsx with import path '../../src/pages/Foo'.\n"
+            "  - CRITICAL for headings with <br /> elements: the accessible name will "
+            "NOT contain a space between lines. Use screen.getByRole('heading') then "
+            "check .textContent with a regex, e.g.:\n"
+            "    const h = screen.getByRole('heading', { level: 3 });\n"
+            "    expect(h.textContent).toMatch(/Welcome.*Pivot/i);\n"
+            "  - Do NOT import hooks or utilities that are not visible in the provided "
+            "file contents — only import what is exported from the files you can see"
+        )
+        file_format = "### FILE: tests/pages/ComponentName.test.tsx\n```tsx\n<complete test file>\n```"
+    else:
+        test_conventions = (
+            "Use pytest conventions: def test_...() functions, assert statements, "
+            "no unittest.TestCase"
+        )
+        file_format = "### FILE: tests/path/to/test_module.py\n```python\n<complete test file>\n```"
+
     # T-24-02: prompt contains only issue data + codebase context + file content
     prompt = (
-        "You are a senior software engineer writing pytest unit tests for a Jira story. "
+        "You are a senior software engineer writing unit tests for a Jira story. "
         "Write ONLY unit tests — do not modify source files.\n\n"
         f"Jira Ticket: {issue_key}\n"
         f"Summary: {issue_summary}\n"
@@ -97,14 +128,9 @@ def generate_unit_tests(
         f"{file_contents_section}"
         "IMPORTANT: Respond with ONLY the test file(s) needed. "
         "For each test file, use EXACTLY this format:\n\n"
-        "### FILE: tests/path/to/test_module.py\n"
-        "```python\n"
-        "<complete test file content here>\n"
-        "```\n\n"
+        f"{file_format}\n\n"
         "Rules:\n"
-        "- Prefix every generated test file path with tests/ (e.g. tests/test_foo.py)\n"
-        "- Use pytest conventions: def test_...() functions, assert statements, "
-        "no unittest.TestCase\n"
+        f"- {test_conventions}\n"
         "- Write tests ONLY for behaviour visible in the supplied file contents — "
         "do not fabricate APIs or functions not present in the code\n"
         "- Include complete file content for each test file\n"

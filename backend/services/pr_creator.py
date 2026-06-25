@@ -199,9 +199,18 @@ def apply_commit_push_and_open_pr(
         github_token=github_token,
     )
 
-    # Step 2: Create and checkout new branch
-    _run_git(["checkout", "-b", branch_name], cwd=workspace_path, github_token=github_token)
-    logger.info("Created branch %s in workspace %s", branch_name, workspace_path)
+    # Step 2: Create and checkout branch (idempotent — branch may already exist
+    # from a previous auto-fix iteration on the same workspace).
+    import subprocess as _sp
+    _exists = _sp.run(
+        ["git", "rev-parse", "--verify", branch_name],
+        cwd=workspace_path, capture_output=True,
+    ).returncode == 0
+    _run_git(
+        ["checkout", branch_name] if _exists else ["checkout", "-b", branch_name],
+        cwd=workspace_path, github_token=github_token,
+    )
+    logger.info("%s branch %s in workspace %s", "Checked out" if _exists else "Created", branch_name, workspace_path)
 
     if not file_changes:
         raise ValueError("file_changes must not be empty — nothing to commit")
@@ -233,7 +242,7 @@ def apply_commit_push_and_open_pr(
     # check on GitHub's git smart-HTTP backend for fine-grained PATs.
     push_url = f"https://oauth2:{github_token}@{github_host}/{owner}/{repo}.git"
     _run_git(
-        ["push", push_url, branch_name],
+        ["push", "--force-with-lease", push_url, branch_name],
         cwd=workspace_path,
         github_token=github_token,
     )
