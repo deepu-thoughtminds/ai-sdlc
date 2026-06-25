@@ -628,7 +628,7 @@ async def handle_jira_issue_created(
         .filter(
             PipelineState.ticket_key == event.issue.key,
             PipelineState.stage == "describe",
-            PipelineState.status.in_(["processing", "awaiting_approval"]),
+            PipelineState.status.in_(["processing", "awaiting_approval", "approved"]),
         )
         .first()
     )

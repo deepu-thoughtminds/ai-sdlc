@@ -189,6 +189,7 @@ None — v1.8 roadmap created (Phases 23–26); ready to begin Phase 23 planning
 | 260622-p0f | Replace graphify indexing with codebase-memory-mcp in backend container; remove /graphify + /gsd-graphify from executor prompt; use codebase-memory-mcp index + /gsd-quick | 2026-06-22 |
 | 260622-fix-executor-prompt | Fix executor prompt to enforce targeted edits via get_code_snippet; remove /gsd-quick; revert LoginPage.tsx in test-blog broken by SCRUM-70 PR | 2026-06-22 |
 | 260625-6tz | scripts/seed_dev_data.py (dump/seed) to restore backend test project + freellmapi routing settings after `docker compose down -v` wipes volumes | 2026-06-25 |
+| 260625-7z1 | Fix qa_pipeline.py to dispatch .test.ts/.test.tsx/.spec.ts/.spec.tsx files to `npm ci && npm test` inside qa-sandbox instead of hardcoding pytest; .py files unchanged | 2026-06-25 |
 
 ### Blockers/Concerns
 
