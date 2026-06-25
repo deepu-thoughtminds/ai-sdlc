@@ -258,18 +258,36 @@ async def run(
                 resolved.write_text(change.content, encoding="utf-8")
                 logger.info("Wrote generated test file: %s", change.path)
 
-                # (e) Execute the generated test file via run_command
+                # (e) Execute the generated test file via run_command —
+                # dispatch by extension (TESTGEN-04): pytest for .py, the
+                # repo's own `npm test` for .test.ts(x)/.spec.ts(x) so
+                # whatever JS runner the repo already uses (vitest/jest)
+                # actually applies, instead of always shelling to pytest.
                 image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                cmd = ToolchainCommand(
-                    name="pytest",
-                    command=[
-                        "docker", "run", "--rm",
-                        "-v", f"{cloned.workspace_path}:/workspace",
-                        image,
-                        "pytest", f"/workspace/{change.path}", "-v",
-                    ],
-                )
-                result = run_command(cmd)
+                if change.path.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
+                    cmd = ToolchainCommand(
+                        name="npm test",
+                        command=[
+                            "docker", "run", "--rm",
+                            "-v", f"{cloned.workspace_path}:/workspace",
+                            "-w", "/workspace",
+                            image,
+                            "sh", "-c",
+                            f"npm ci --silent && npm test -- {change.path}",
+                        ],
+                    )
+                    result = run_command(cmd, timeout=300)
+                else:
+                    cmd = ToolchainCommand(
+                        name="pytest",
+                        command=[
+                            "docker", "run", "--rm",
+                            "-v", f"{cloned.workspace_path}:/workspace",
+                            image,
+                            "pytest", f"/workspace/{change.path}", "-v",
+                        ],
+                    )
+                    result = run_command(cmd)
                 unit_test_results.append(result)
                 logger.info(
                     "Generated test %s exit=%d timed_out=%s",
