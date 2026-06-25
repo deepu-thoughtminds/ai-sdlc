@@ -7,4 +7,3 @@ node_modules/
 .next/
 .gstack/
 frontend/next-env.d.ts
-scripts/seeds/*.sql
