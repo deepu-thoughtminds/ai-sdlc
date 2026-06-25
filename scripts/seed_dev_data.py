@@ -23,14 +23,25 @@ from pathlib import Path
 SEEDS_DIR = Path(__file__).parent / "seeds"
 BACKEND_DUMP = SEEDS_DIR / "backend_dump.sql"
 FREELLMAPI_DUMP = SEEDS_DIR / "freellmapi_dump.sql"
+FREELLMAPI_ROUTING_DUMP = SEEDS_DIR / "freellmapi_routing.sql"
 
-# freellmapi tables worth seeding. Only `settings` — fallback_config/models/
-# profiles/profile_models are already populated by freellmapi's own startup
-# migration on a fresh DB (with their own autoincrement ids), so replaying a
-# captured snapshot of those verbatim hits FK/PK conflicts. `settings` is the
-# one table where the auto-seeded default (an `active_profile_id` row) would
-# silently override the manually-tuned `fallback_config` routing order.
-FREELLMAPI_TABLES = ["settings"]
+# freellmapi tables worth seeding: `settings` (routing config — see seed()'s
+# active_profile_id handling) and `api_keys` (provider keys). api_keys is
+# safe to dump/replay because FREELLMAPI_ENCRYPTION_KEY lives in .env on the
+# host, not in the wiped freellmapi_data volume — the encrypted_key/iv/
+# auth_tag blobs in the dump stay decryptable across a volume wipe as long as
+# .env is untouched. Still gitignored: ciphertext only, never plaintext, but
+# still a credential artifact you don't want in git history.
+#
+# fallback_config/models/profiles/profile_models are excluded from raw
+# table replay — already populated by freellmapi's own startup migration on
+# a fresh DB (with their own autoincrement ids), so replaying a captured
+# snapshot of those verbatim hits FK/PK conflicts. The custom priority order
+# within fallback_config (which model is tried first) is instead captured
+# separately in freellmapi_routing.sql as UPDATE statements keyed by
+# (platform, model_id) rather than raw row id — portable across catalog
+# version changes. See dump()/seed() below.
+FREELLMAPI_TABLES = ["settings", "api_keys"]
 
 # backend tables worth seeding. Excludes pipeline_states — that's run-time
 # state, not seed data.
@@ -92,7 +103,24 @@ fs.writeFileSync('/tmp/freellmapi_dump.sql', out.join('\\n'));
     run_script(["docker", "compose", "exec", "-T", "freellmapi", "node"], freellmapi_script)
     run(["docker", "compose", "cp", "freellmapi:/tmp/freellmapi_dump.sql", str(FREELLMAPI_DUMP)])
 
-    print(f"Dumped {BACKEND_DUMP} and {FREELLMAPI_DUMP}")
+    # Custom fallback_config priority/enabled order, captured by
+    # (platform, model_id) — not raw row id — so it survives the catalog
+    # being re-seeded with different autoincrement ids on a fresh DB.
+    routing_script = """
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const db = new Database('/app/server/data/freeapi.db', { readonly: true });
+const rows = db.prepare(`
+  SELECT m.platform, m.model_id, fc.priority, fc.enabled
+  FROM fallback_config fc JOIN models m ON m.id = fc.model_db_id
+`).all();
+const out = rows.map(r => `UPDATE fallback_config SET priority=${r.priority}, enabled=${r.enabled} WHERE model_db_id = (SELECT id FROM models WHERE platform='${r.platform}' AND model_id='${r.model_id.replace(/'/g, "''")}');`);
+fs.writeFileSync('/tmp/freellmapi_routing.sql', out.join('\\n'));
+"""
+    run_script(["docker", "compose", "exec", "-T", "freellmapi", "node"], routing_script)
+    run(["docker", "compose", "cp", "freellmapi:/tmp/freellmapi_routing.sql", str(FREELLMAPI_ROUTING_DUMP)])
+
+    print(f"Dumped {BACKEND_DUMP}, {FREELLMAPI_DUMP}, and {FREELLMAPI_ROUTING_DUMP}")
 
 
 def _to_insert_or_ignore(sql_text: str) -> str:
@@ -100,7 +128,7 @@ def _to_insert_or_ignore(sql_text: str) -> str:
 
 
 def seed() -> None:
-    if not BACKEND_DUMP.exists() or not FREELLMAPI_DUMP.exists():
+    if not BACKEND_DUMP.exists() or not FREELLMAPI_DUMP.exists() or not FREELLMAPI_ROUTING_DUMP.exists():
         sys.exit(f"Missing seed files — run `python3 {__file__} dump` first while the old data is still up.")
 
     backend_sql = _to_insert_or_ignore(BACKEND_DUMP.read_text())
@@ -126,6 +154,18 @@ db.exec({freellmapi_sql!r});
 console.log('freellmapi seeded');
 """
     run_script(["docker", "compose", "exec", "-T", "freellmapi", "node"], freellmapi_script)
+
+    # Apply custom fallback_config priority/enabled order. UPDATE-by-name,
+    # not raw row replay, so models absent from this catalog version (the
+    # subquery returns NULL) are silently skipped instead of erroring.
+    routing_sql = FREELLMAPI_ROUTING_DUMP.read_text()
+    routing_script = f"""
+const Database = require('better-sqlite3');
+const db = new Database('/app/server/data/freeapi.db');
+db.exec({routing_sql!r});
+console.log('routing order applied');
+"""
+    run_script(["docker", "compose", "exec", "-T", "freellmapi", "node"], routing_script)
 
     print("Seed complete.")
 

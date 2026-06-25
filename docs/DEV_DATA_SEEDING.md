@@ -14,11 +14,13 @@ every time.
 |--------|-------|-----|
 | Backend (`app_data` volume) | `projects` | Your test Jira project (name, URL, encrypted tokens) |
 | FreeLLMAPI (`freellmapi_data` volume) | `settings` | Routing config — specifically clears `active_profile_id`, which FreeLLMAPI auto-recreates on a fresh DB and which otherwise silently overrides your tuned `fallback_config` model priority order |
+| FreeLLMAPI (`freellmapi_data` volume) | `api_keys` | Provider API keys (Groq, Google, NVIDIA, OpenRouter, OpenCode, etc.), encrypted at rest. Safe to seed because `FREELLMAPI_ENCRYPTION_KEY` lives in `.env` on the host, not in the wiped volume — ciphertext stays decryptable across a wipe as long as `.env` is untouched |
+| FreeLLMAPI (`freellmapi_data` volume) | `fallback_config` priority/enabled (captured as `(platform, model_id)` → `UPDATE` statements in `freellmapi_routing.sql`, not raw rows) | Your custom manual routing order (e.g. deepseek-v4-flash / gpt-oss first) — keyed by platform+model_id so it survives the catalog being re-seeded with different autoincrement ids on a fresh DB |
 
 **Not seeded (by design):**
 - `pipeline_states` (backend) — run-time state, regenerates naturally
-- `api_keys`, `users`, `sessions`, `requests`, `rate_limit_usage`, `quirks*` (freellmapi) — secrets and transient data, not config
-- `fallback_config` / `models` / `profiles` / `profile_models` (freellmapi) — already populated by freellmapi's own startup migration on a fresh DB; replaying a captured snapshot of those verbatim hits primary-key/foreign-key conflicts against the auto-seeded rows
+- `users`, `sessions`, `requests`, `rate_limit_usage`, `quirks*` (freellmapi) — auth/transient data, not config
+- Raw `fallback_config` / `models` / `profiles` / `profile_models` rows (freellmapi) — already populated by freellmapi's own startup migration on a fresh DB; replaying a captured snapshot of those verbatim hits primary-key/foreign-key conflicts against the auto-seeded rows. Only the priority/enabled *values* are seeded, via the name-keyed `UPDATE` approach above.
 
 The dump files (`scripts/seeds/*.sql`) are **gitignored**. They contain your
 project's real Jira URL and email in plaintext columns (only the
@@ -54,13 +56,9 @@ docker compose up -d
 python3 scripts/seed_dev_data.py seed
 ```
 
-This re-creates the test project row and resets freellmapi's routing
-settings to your last-dumped state. Idempotent — safe to re-run against an
-already-seeded DB (`INSERT OR IGNORE` for projects, `INSERT OR REPLACE` for
-settings).
-
-You will still need to re-add provider API keys via the freellmapi
-dashboard — those are intentionally not seeded.
+This re-creates the test project row, restores your provider API keys, and
+resets freellmapi's routing settings and priority order to your
+last-dumped state. Idempotent — safe to re-run against an already-seeded DB.
 
 ---
 
