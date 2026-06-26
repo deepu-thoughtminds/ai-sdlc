@@ -32,6 +32,14 @@ Threat mitigations:
   T-24-02: generate_unit_tests() receives only issue_key/summary/description/
            codebase_context/relevant_file_contents — no token or credential
            values are ever forwarded into the test-generation prompt.
+
+Phase 28 scope: live app container E2E (PWGEN-01..03, EXEC-01..02).
+  T-28-01: ValueError from _detect_serve_command (no preview/start/dev script) →
+           caught in Step 4d except clause; E2E skipped with skip note;
+           unit tests and static analysis continue.
+  T-28-02: ContainerStartError from managed_app_container (build failure or
+           health-check timeout) → same except clause; skip note set; pipeline
+           continues to Step 5.
 """
 
 import glob
@@ -55,6 +63,7 @@ from services.repo_clone import clone_repository
 from services.code_generator import FileChange
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
+from services.app_container import ContainerStartError, managed_app_container
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 
@@ -80,22 +89,39 @@ _SOURCE_EXTENSIONS = {
 def _resolve_compose_network() -> str:
     """Return the Docker network name to use for playwright containers.
 
-    Prefers COMPOSE_NETWORK env var when set. Otherwise finds the network
-    whose name ends with '_ai-sdlc-net' (the compose-prefixed form of the
-    ai-sdlc-net network defined in docker-compose.yml), falling back to the
-    bare name 'ai-sdlc-net' if discovery fails.
+    Prefers COMPOSE_NETWORK env var when set. Otherwise inspects the backend
+    container's own networks to find the one ending with '_ai-sdlc-net' — this
+    guarantees we join the same network that the frontend service is on.
+    Falls back to a docker network ls scan, then the bare name.
     """
     if override := os.environ.get("COMPOSE_NETWORK"):
         return override
+    # Ask Docker which networks this container is connected to
+    try:
+        hostname = subprocess.run(
+            ["hostname"], capture_output=True, text=True, timeout=3
+        ).stdout.strip()
+        out = subprocess.run(
+            ["docker", "inspect", hostname, "--format", "{{json .NetworkSettings.Networks}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            import json as _json
+            nets = _json.loads(out.stdout)
+            for name in nets:
+                if name.endswith("_ai-sdlc-net"):
+                    return name
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: pick the shortest matching network name (most likely the direct compose project)
     try:
         out = subprocess.run(
             ["docker", "network", "ls", "--format", "{{.Name}}", "--filter", "name=ai-sdlc-net"],
             capture_output=True, text=True, timeout=5,
         )
-        for name in out.stdout.splitlines():
-            name = name.strip()
-            if name.endswith("_ai-sdlc-net"):
-                return name
+        candidates = [n.strip() for n in out.stdout.splitlines() if n.strip().endswith("_ai-sdlc-net")]
+        if candidates:
+            return min(candidates, key=len)  # shortest = least-nested compose project
     except Exception:  # noqa: BLE001
         pass
     return "ai-sdlc-net"
@@ -244,8 +270,11 @@ async def run(
     unit_test_results: list[TestResult] = []
     e2e_results: list[TestResult] = []
     static_results: list[TestResult] = []
+    playwright_py_results: list[TestResult] = []
     autofix_pr_url: str | None = None
+    e2e_live_url: str | None = None
     still_failing = False
+    compose_network = _resolve_compose_network()
 
     try:
         # Step 3 — Decrypt credentials.
@@ -353,108 +382,112 @@ async def run(
                 db,
             )
 
-        # Step 4d — Playwright E2E tests (TESTGEN-03).
-        # T-26-02: Only generate/run E2E tests when a Playwright config is present.
-        e2e_results: list[TestResult] = []
-        playwright_configs = glob.glob(
-            os.path.join(cloned.workspace_path, "playwright.config.*")
-        )
-        if not playwright_configs:
-            logger.info("No playwright.config.* found in workspace — skipping E2E generation")
-            e2e_skip_note: str | None = "E2E tests skipped (no playwright.config.* detected in repository)."
-        else:
-            e2e_skip_note = None
-            e2e_file_changes = generate_e2e_tests(
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-                codebase_context=codebase_context,
-                relevant_file_contents=relevant_file_contents,
-            )
-            for change in e2e_file_changes:
-                try:
-                    resolved = (workspace_root / change.path).resolve()
-                    # T-26-01: Reject any path escaping the workspace root
-                    if not str(resolved).startswith(str(workspace_root) + "/"):
-                        raise ValueError(
-                            f"E2E FileChange path escapes workspace: '{change.path}' "
-                            f"resolves to '{resolved}'"
-                        )
-                    resolved.parent.mkdir(parents=True, exist_ok=True)
-                    resolved.write_text(change.content, encoding="utf-8")
-                    logger.info("Wrote generated E2E test file: %s", change.path)
+        # Step 4d/4e — Playwright E2E tests (PWGEN-01..03, EXEC-01).
+        # T-28-01: ValueError = no serve script → graceful skip.
+        # T-28-02: ContainerStartError = build/timeout failure → graceful skip.
+        # managed_app_container yields network-internal http://<name>:<port> after
+        # a confirmed HTTP 200 health-check (PWGEN-02: generation only after 200).
+        e2e_skip_note: str | None = None
+        try:
+            with managed_app_container(cloned.workspace_path, compose_network) as playwright_deployment_url:
+                e2e_live_url = playwright_deployment_url
+                playwright_configs = glob.glob(
+                    os.path.join(cloned.workspace_path, "playwright.config.*")
+                )
+                if not playwright_configs:
+                    logger.info("No playwright.config.* found in workspace — skipping E2E generation")
+                    e2e_skip_note = "E2E tests skipped (no playwright.config.* detected in repository)."
+                else:
+                    e2e_file_changes = generate_e2e_tests(
+                        issue_key=issue_key,
+                        issue_summary=issue_summary,
+                        issue_description=issue_description,
+                        codebase_context=codebase_context,
+                        relevant_file_contents=relevant_file_contents,
+                    )
+                    for change in e2e_file_changes:
+                        try:
+                            resolved = (workspace_root / change.path).resolve()
+                            if not str(resolved).startswith(str(workspace_root) + "/"):
+                                raise ValueError(
+                                    f"E2E FileChange path escapes workspace: '{change.path}' "
+                                    f"resolves to '{resolved}'"
+                                )
+                            resolved.parent.mkdir(parents=True, exist_ok=True)
+                            resolved.write_text(change.content, encoding="utf-8")
+                            logger.info("Wrote generated E2E test file: %s", change.path)
+
+                            image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                            cmd = ToolchainCommand(
+                                name="playwright",
+                                command=[
+                                    "docker", "run", "--rm",
+                                    "--network", compose_network,
+                                    "-v", f"{cloned.workspace_path}:/workspace",
+                                    "-e", f"BASE_URL={playwright_deployment_url}",
+                                    image,
+                                    "npx", "playwright", "test", f"/workspace/{change.path}",
+                                ],
+                            )
+                            result = run_command(cmd)
+                            e2e_results.append(result)
+                            logger.info(
+                                "E2E test %s exit=%d timed_out=%s",
+                                change.path,
+                                result.returncode,
+                                result.timed_out,
+                            )
+                        except ValueError as ve:
+                            logger.warning(
+                                "Skipping generated E2E file due to path-traversal violation: %s", ve
+                            )
+                            continue
+
+                # Step 4e — Python Playwright evaluation via Claude Code CLI.
+                pw_py_file_changes = await run_claude_playwright_generator(
+                    workspace_path=cloned.workspace_path,
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    issue_description=issue_description,
+                    codebase_context=codebase_context,
+                    relevant_file_contents=relevant_file_contents,
+                )
+                for change in pw_py_file_changes:
+                    try:
+                        resolved = (workspace_root / change.path).resolve()
+                        if not str(resolved).startswith(str(workspace_root) + "/"):
+                            raise ValueError(
+                                f"Playwright path escapes workspace: '{change.path}' → '{resolved}'"
+                            )
+                    except ValueError as ve:
+                        logger.warning("Skipping Playwright file (path-traversal): %s", ve)
+                        continue
 
                     image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                    compose_network = _resolve_compose_network()
-                    frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
                     cmd = ToolchainCommand(
-                        name="playwright",
+                        name=f"playwright-py:{change.path}",
                         command=[
                             "docker", "run", "--rm",
                             "--network", compose_network,
                             "-v", f"{cloned.workspace_path}:/workspace",
-                            "-e", f"BASE_URL={frontend_url}",
+                            "-e", f"BASE_URL={playwright_deployment_url}",
                             image,
-                            "npx", "playwright", "test", f"/workspace/{change.path}",
+                            "python", "-m", "pytest", f"/workspace/{change.path}",
+                            "--browser", "chromium", "--tb=short", "-q",
                         ],
                     )
                     result = run_command(cmd)
-                    e2e_results.append(result)
+                    playwright_py_results.append(result)
                     logger.info(
-                        "E2E test %s exit=%d timed_out=%s",
-                        change.path,
-                        result.returncode,
-                        result.timed_out,
+                        "Python Playwright test %s exit=%d timed_out=%s",
+                        change.path, result.returncode, result.timed_out,
                     )
-                except ValueError as ve:
-                    logger.warning(
-                        "Skipping generated E2E file due to path-traversal violation: %s", ve
-                    )
-                    continue
 
-        # Step 4e — Python Playwright evaluation via Claude Code CLI.
-        playwright_py_results: list[TestResult] = []
-        pw_py_file_changes = await run_claude_playwright_generator(
-            workspace_path=cloned.workspace_path,
-            issue_key=issue_key,
-            issue_summary=issue_summary,
-            issue_description=issue_description,
-            codebase_context=codebase_context,
-            relevant_file_contents=relevant_file_contents,
-        )
-        # Agent wrote files directly; validate path then execute each.
-        for change in pw_py_file_changes:
-            try:
-                resolved = (workspace_root / change.path).resolve()
-                if not str(resolved).startswith(str(workspace_root) + "/"):
-                    raise ValueError(
-                        f"Playwright path escapes workspace: '{change.path}' → '{resolved}'"
-                    )
-            except ValueError as ve:
-                logger.warning("Skipping Playwright file (path-traversal): %s", ve)
-                continue
-
-            image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-            compose_network = os.environ.get("COMPOSE_NETWORK", "ai-sdlc-net")
-            frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
-            cmd = ToolchainCommand(
-                name=f"playwright-py:{change.path}",
-                command=[
-                    "docker", "run", "--rm",
-                    "--network", compose_network,
-                    "-v", f"{cloned.workspace_path}:/workspace",
-                    "-e", f"BASE_URL={frontend_url}",
-                    image,
-                    "python", "-m", "pytest", f"/workspace/{change.path}",
-                    "--browser", "chromium", "--tb=short", "-q",
-                ],
-            )
-            result = run_command(cmd)
-            playwright_py_results.append(result)
-            logger.info(
-                "Python Playwright test %s exit=%d timed_out=%s",
-                change.path, result.returncode, result.timed_out,
-            )
+        except (ValueError, ContainerStartError) as exc:
+            # T-28-01 / T-28-02: No serve script or container failed to start.
+            # E2E is skipped; unit tests and static analysis continue (Step 5 below).
+            e2e_skip_note = f"E2E tests skipped: {exc}"
+            logger.warning("E2E stage skipped for %s: %s", issue_key, exc)
 
         # Step 5 — Run static analysis tools via Docker subprocess.
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
@@ -495,7 +528,10 @@ async def run(
                 except Exception:
                     logger.exception("npm audit fix PR creation failed for %s", issue_key)
 
-        comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note, playwright_py_results)
+        comment_text = _format_qa_comment(
+            unit_test_results, e2e_results, static_results, issue_key,
+            e2e_skip_note, playwright_py_results, e2e_live_url=e2e_live_url,
+        )
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
         if autofix_pr_url and still_failing:
             comment_text += (
@@ -580,6 +616,7 @@ def _format_qa_comment(
     issue_key: str,
     e2e_skip_note: str | None = None,
     playwright_py_results: list[TestResult] | None = None,
+    e2e_live_url: str | None = None,
 ) -> str:
     """Format QA results into a human-readable Jira comment with per-category sections.
 
@@ -620,7 +657,8 @@ def _format_qa_comment(
     lines.append("")  # blank line between sections
 
     # --- E2E Tests section ---
-    lines.append("**E2E Tests:**")
+    e2e_header = f"**E2E Tests (live: {e2e_live_url}):**" if e2e_live_url else "**E2E Tests:**"
+    lines.append(e2e_header)
     if e2e_skip_note:
         lines.append(f"- {e2e_skip_note}")
     elif not e2e_results:
