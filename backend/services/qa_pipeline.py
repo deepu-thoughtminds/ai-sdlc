@@ -46,6 +46,7 @@ import glob
 import logging
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 
@@ -345,7 +346,7 @@ async def run(
                             "-w", "/workspace",
                             image,
                             "sh", "-c",
-                            f"npm ci --silent && npm test -- {change.path}",
+                            f"npm ci --silent && npm test -- {shlex.quote(change.path)}",
                         ],
                     )
                     result = run_command(cmd, timeout=300)
