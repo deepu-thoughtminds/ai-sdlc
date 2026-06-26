@@ -310,63 +310,57 @@ async def run(
         # (d) Write each generated file with path-traversal guard (T-24-01)
         workspace_root = pathlib.Path(cloned.workspace_path).resolve()
         for change in file_changes:
-            try:
-                resolved = (workspace_root / change.path).resolve()
-                # T-24-01: Reject any path escaping the workspace root
-                if not str(resolved).startswith(str(workspace_root) + "/"):
-                    raise ValueError(
-                        f"FileChange path escapes workspace: '{change.path}' "
-                        f"resolves to '{resolved}'"
-                    )
-                resolved.parent.mkdir(parents=True, exist_ok=True)
-                resolved.write_text(change.content, encoding="utf-8")
-                logger.info("Wrote generated test file: %s", change.path)
-
-                # (e) Execute the generated test file via run_command —
-                # dispatch by extension (TESTGEN-04): pytest for .py, the
-                # repo's own `npm test` for .test.ts(x)/.spec.ts(x) so
-                # whatever JS runner the repo already uses (vitest/jest)
-                # actually applies, instead of always shelling to pytest.
-                image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                if change.path.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
-                    cmd = ToolchainCommand(
-                        name="npm test",
-                        command=[
-                            "docker", "run", "--rm",
-                            "-v", f"{cloned.workspace_path}:/workspace",
-                            "-w", "/workspace",
-                            image,
-                            "sh", "-c",
-                            f"npm ci --silent && npm test -- {shlex.quote(change.path)}",
-                        ],
-                    )
-                    result = run_command(cmd, timeout=300)
-                else:
-                    cmd = ToolchainCommand(
-                        name="pytest",
-                        command=[
-                            "docker", "run", "--rm",
-                            "-v", f"{cloned.workspace_path}:/workspace",
-                            image,
-                            "pytest", f"/workspace/{change.path}", "-v",
-                        ],
-                    )
-                    result = run_command(cmd)
-                result.file_path = change.path  # for auto_fix_loop re-run dispatch
-                unit_test_results.append(result)
-                logger.info(
-                    "Generated test %s exit=%d timed_out=%s",
-                    change.path,
-                    result.returncode,
-                    result.timed_out,
-                )
-
-            except ValueError as ve:
-                # T-24-01: Per-file catch — log, skip, continue with remaining files
+            # T-24-01: Reject any path escaping the workspace root (traversal guard only)
+            resolved = (workspace_root / change.path).resolve()
+            if not str(resolved).startswith(str(workspace_root) + "/"):
                 logger.warning(
-                    "Skipping generated test file due to path-traversal violation: %s", ve
+                    "Skipping generated test file due to path-traversal violation: %s", change.path
                 )
                 continue
+
+            # File I/O and execution outside the narrow traversal catch
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(change.content, encoding="utf-8")
+            logger.info("Wrote generated test file: %s", change.path)
+
+            # (e) Execute the generated test file via run_command —
+            # dispatch by extension (TESTGEN-04): pytest for .py, the
+            # repo's own `npm test` for .test.ts(x)/.spec.ts(x) so
+            # whatever JS runner the repo already uses (vitest/jest)
+            # actually applies, instead of always shelling to pytest.
+            image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+            if change.path.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")):
+                cmd = ToolchainCommand(
+                    name="npm test",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{cloned.workspace_path}:/workspace",
+                        "-w", "/workspace",
+                        image,
+                        "sh", "-c",
+                        f"npm ci --silent && npm test -- {shlex.quote(change.path)}",
+                    ],
+                )
+                result = run_command(cmd, timeout=300)
+            else:
+                cmd = ToolchainCommand(
+                    name="pytest",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{cloned.workspace_path}:/workspace",
+                        image,
+                        "pytest", f"/workspace/{change.path}", "-v",
+                    ],
+                )
+                result = run_command(cmd)
+            result.file_path = change.path  # for auto_fix_loop re-run dispatch
+            unit_test_results.append(result)
+            logger.info(
+                "Generated test %s exit=%d timed_out=%s",
+                change.path,
+                result.returncode,
+                result.timed_out,
+            )
 
         # (f) empty file_changes: unit_test_results stays [] — no execution
 
@@ -407,42 +401,39 @@ async def run(
                         relevant_file_contents=relevant_file_contents,
                     )
                     for change in e2e_file_changes:
-                        try:
-                            resolved = (workspace_root / change.path).resolve()
-                            if not str(resolved).startswith(str(workspace_root) + "/"):
-                                raise ValueError(
-                                    f"E2E FileChange path escapes workspace: '{change.path}' "
-                                    f"resolves to '{resolved}'"
-                                )
-                            resolved.parent.mkdir(parents=True, exist_ok=True)
-                            resolved.write_text(change.content, encoding="utf-8")
-                            logger.info("Wrote generated E2E test file: %s", change.path)
-
-                            image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                            cmd = ToolchainCommand(
-                                name="playwright",
-                                command=[
-                                    "docker", "run", "--rm",
-                                    "--network", compose_network,
-                                    "-v", f"{cloned.workspace_path}:/workspace",
-                                    "-e", f"BASE_URL={playwright_deployment_url}",
-                                    image,
-                                    "npx", "playwright", "test", f"/workspace/{change.path}",
-                                ],
-                            )
-                            result = run_command(cmd)
-                            e2e_results.append(result)
-                            logger.info(
-                                "E2E test %s exit=%d timed_out=%s",
-                                change.path,
-                                result.returncode,
-                                result.timed_out,
-                            )
-                        except ValueError as ve:
+                        # T-24-01: traversal guard only
+                        resolved = (workspace_root / change.path).resolve()
+                        if not str(resolved).startswith(str(workspace_root) + "/"):
                             logger.warning(
-                                "Skipping generated E2E file due to path-traversal violation: %s", ve
+                                "Skipping generated E2E file due to path-traversal violation: %s",
+                                change.path,
                             )
                             continue
+
+                        resolved.parent.mkdir(parents=True, exist_ok=True)
+                        resolved.write_text(change.content, encoding="utf-8")
+                        logger.info("Wrote generated E2E test file: %s", change.path)
+
+                        image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                        cmd = ToolchainCommand(
+                            name="playwright",
+                            command=[
+                                "docker", "run", "--rm",
+                                "--network", compose_network,
+                                "-v", f"{cloned.workspace_path}:/workspace",
+                                "-e", f"BASE_URL={playwright_deployment_url}",
+                                image,
+                                "npx", "playwright", "test", f"/workspace/{change.path}",
+                            ],
+                        )
+                        result = run_command(cmd)
+                        e2e_results.append(result)
+                        logger.info(
+                            "E2E test %s exit=%d timed_out=%s",
+                            change.path,
+                            result.returncode,
+                            result.timed_out,
+                        )
 
                 # Step 4e — Python Playwright evaluation via Claude Code CLI.
                 pw_py_file_changes = await run_claude_playwright_generator(
@@ -454,14 +445,10 @@ async def run(
                     relevant_file_contents=relevant_file_contents,
                 )
                 for change in pw_py_file_changes:
-                    try:
-                        resolved = (workspace_root / change.path).resolve()
-                        if not str(resolved).startswith(str(workspace_root) + "/"):
-                            raise ValueError(
-                                f"Playwright path escapes workspace: '{change.path}' → '{resolved}'"
-                            )
-                    except ValueError as ve:
-                        logger.warning("Skipping Playwright file (path-traversal): %s", ve)
+                    # T-24-01: traversal guard only
+                    resolved = (workspace_root / change.path).resolve()
+                    if not str(resolved).startswith(str(workspace_root) + "/"):
+                        logger.warning("Skipping Playwright file (path-traversal): %s", change.path)
                         continue
 
                     image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
