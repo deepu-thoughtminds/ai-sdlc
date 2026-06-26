@@ -1,6 +1,17 @@
 # AI-SDLC Jira
 
-## Current Milestone: v1.8 Autonomous QA Stage
+## Current Milestone: v1.9 Playwright E2E Live Testing
+
+**Goal:** Enable the QA pipeline to spin up the cloned target app in a live Docker container, generate accurate Playwright assertions against its real running URL, execute them, and surface pass/fail results back to Jira and Confluence.
+
+**Target features:**
+- Detect target app type (Vite/React, Next.js, etc.) from cloned repo and serve it in an ephemeral Docker container on the compose network
+- Pass the live container URL as BASE_URL to the Claude playwright generator so assertions reflect actual running app content
+- Playwright test execution runs against the live target app URL (not the ai-sdlc frontend)
+- Container torn down after test run (ephemeral, per QA ticket run)
+- QA report in Confluence and Jira comment includes E2E pass/fail results
+
+## Previous Milestone: v1.8 Autonomous QA Stage (complete)
 
 **Goal:** Add the QA stage after code generation — triggered both automatically post-merge and via explicit `@jarvis run qa` comment trigger, generating unit tests, static analysis, and Playwright-based E2E tests, executing them in the cloned repo sandbox, attempting a bounded auto-fix loop on failures, and reporting final results back to the Jira comment.
 

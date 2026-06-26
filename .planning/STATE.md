@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.8
-milestone_name: Autonomous QA Stage
-current_phase: 26
-status: complete
-stopped_at: Phase 26 complete — v1.8 milestone done (2026-06-24)
-last_updated: "2026-06-24T13:10:00.000Z"
-last_activity: 2026-06-24
-last_activity_desc: Phase 26 (E2E + Trigger Wiring) implemented, secured, and marked complete — v1.8 milestone finished
+milestone: v1.9
+milestone_name: Playwright E2E Live Testing
+status: planning
+last_updated: "2026-06-26T08:31:32.842Z"
+last_activity: 2026-06-26
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
-current_phase_name: e2e-trigger-wiring
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-23)
 
 ## Current Position
 
-Phase: 26 — COMPLETE (final phase of v1.8)
-Plan: Both 26-01 and 26-02 complete
-Status: v1.8 milestone (Autonomous QA Stage) complete — all 4 phases (23-26) done
-Last activity: 2026-06-24 — Phase 26 implemented inline (planner subagent hit session limit before plan-checker; plans were already written), TDD RED→GREEN for both plans, security audit passed (7/7 threats closed)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-26 — Milestone v1.9 started
 
 ## Milestone History
 
@@ -189,6 +185,7 @@ None — v1.8 roadmap created (Phases 23–26); ready to begin Phase 23 planning
 | 260622-p0f | Replace graphify indexing with codebase-memory-mcp in backend container; remove /graphify + /gsd-graphify from executor prompt; use codebase-memory-mcp index + /gsd-quick | 2026-06-22 |
 | 260622-fix-executor-prompt | Fix executor prompt to enforce targeted edits via get_code_snippet; remove /gsd-quick; revert LoginPage.tsx in test-blog broken by SCRUM-70 PR | 2026-06-22 |
 | 260625-6tz | scripts/seed_dev_data.py (dump/seed) to restore backend test project + freellmapi routing settings after `docker compose down -v` wipes volumes | 2026-06-25 |
+| 20260626-playwright-python-e2e | Python Playwright evaluation via Claude Code CLI in QA pipeline: generate pytest-playwright scripts, run in Docker, include results in Jira comment + Confluence QA report | 2026-06-26 |
 | 260625-7z1 | Fix qa_pipeline.py to dispatch .test.ts/.test.tsx/.spec.ts/.spec.tsx files to `npm ci && npm test` inside qa-sandbox instead of hardcoding pytest; .py files unchanged | 2026-06-25 |
 
 ### Blockers/Concerns
