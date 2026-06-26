@@ -484,8 +484,10 @@ async def run(
                         change.path, result.returncode, result.timed_out,
                     )
 
-        except (ValueError, ContainerStartError) as exc:
+        except (ValueError, ContainerStartError, OSError) as exc:
             # T-28-01 / T-28-02: No serve script or container failed to start.
+            # OSError covers FileNotFoundError from _detect_serve_command when
+            # package.json is absent (Python-only projects).
             # E2E is skipped; unit tests and static analysis continue (Step 5 below).
             e2e_skip_note = f"E2E tests skipped: {exc}"
             logger.warning("E2E stage skipped for %s: %s", issue_key, exc)
