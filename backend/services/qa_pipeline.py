@@ -47,10 +47,13 @@ from models.project import Project
 from services.auto_fix_loop import MAX_ATTEMPTS as MAX_AUTOFIX_ATTEMPTS
 from services.auto_fix_loop import run_auto_fix_loop
 from services.codebase_snapshot_reader import get_codebase_snapshot
+from services.confluence_client import publish_qa_report
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
 from services.repo_clone import clone_repository
-from services.test_executor import TestResult, ToolchainCommand, run_command, run_static_analysis
+from services.code_generator import FileChange
+from services.pr_creator import apply_commit_push_and_open_pr
+from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
@@ -223,6 +226,10 @@ async def run(
         "JIRA_ACCOUNT_EMAIL", ""
     )
     unit_test_results: list[TestResult] = []
+    e2e_results: list[TestResult] = []
+    static_results: list[TestResult] = []
+    autofix_pr_url: str | None = None
+    still_failing = False
 
     try:
         # Step 3 — Decrypt credentials.
@@ -388,6 +395,42 @@ async def run(
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
         static_results = run_static_analysis(cloned.workspace_path, timeout=300)
 
+        # Step 5.1 — npm audit auto-fix: if npm_audit failed, run `npm audit fix`
+        # in Docker and open a PR with the updated lockfile.
+        npm_audit_fix_pr_url: str | None = None
+        npm_audit_failed = any(
+            r.tool == "npm_audit" and r.returncode != 0 and not r.timed_out
+            for r in static_results
+        )
+        if npm_audit_failed:
+            changed_paths = run_npm_audit_fix(cloned.workspace_path)
+            if changed_paths:
+                file_changes = [
+                    FileChange(
+                        path=p,
+                        content=pathlib.Path(cloned.workspace_path, p).read_text(errors="replace"),
+                    )
+                    for p in changed_paths
+                ]
+                try:
+                    npm_pr = apply_commit_push_and_open_pr(
+                        cloned.workspace_path,
+                        github_repo,
+                        github_token,
+                        issue_key,
+                        file_changes,
+                        pr_title=f"fix: npm audit fix for {issue_key}",
+                        pr_body=(
+                            f"Auto-fix for npm audit vulnerabilities detected during QA "
+                            f"for {issue_key}. Review and merge to resolve security findings."
+                        ),
+                        branch_name=f"jarvis/npm-audit-fix-{issue_key}",
+                    )
+                    npm_audit_fix_pr_url = npm_pr.html_url
+                    logger.info("npm audit fix PR opened for %s: %s", issue_key, npm_audit_fix_pr_url)
+                except Exception:
+                    logger.exception("npm audit fix PR creation failed for %s", issue_key)
+
         comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note)
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
         if autofix_pr_url and still_failing:
@@ -399,6 +442,11 @@ async def run(
             comment_text += f"\n\nAuto-fix PR: {autofix_pr_url}"
         elif still_failing:
             comment_text += "\n\nAuto-fix could not generate a fix."
+
+        if npm_audit_fix_pr_url:
+            comment_text += f"\n\nnpm audit fix PR: {npm_audit_fix_pr_url}"
+        elif npm_audit_failed:
+            comment_text += "\n\nnpm audit fix: could not auto-fix — review manually."
 
         # Mark pipeline complete on success.
         state_row.status = "complete"
@@ -439,6 +487,22 @@ async def run(
         # whether execution succeeded or failed.
         if cloned is not None:
             shutil.rmtree(cloned.workspace_path, ignore_errors=True)
+
+    # Step 5.5 — Publish a brief QA report to Confluence (graceful degradation
+    # on failure — same pattern as architecture_pipeline's publish_architecture).
+    try:
+        remediation_html = _build_remediation_html(
+            unit_test_results, e2e_results, static_results, autofix_pr_url, still_failing,
+            npm_audit_fix_pr_url=npm_audit_fix_pr_url,
+        )
+        qa_page_url = await publish_qa_report(project, issue_key, comment_text, remediation_html)
+    except Exception as conf_exc:
+        logger.warning(
+            "QA pipeline: Confluence publish failed for %s: %s", issue_key, conf_exc
+        )
+        qa_page_url = ""
+    if qa_page_url:
+        comment_text += f"\n\nFull report: {qa_page_url}"
 
     # Step 6 — Post Jira comment. Wrapped in its own try/except so a comment
     # failure does not mask the pipeline outcome.
@@ -548,3 +612,70 @@ def _format_qa_comment(
                 )
 
     return "\n".join(lines)
+
+
+def _build_remediation_html(
+    unit_test_results: list[TestResult],
+    e2e_results: list[TestResult],
+    static_results: list[TestResult],
+    autofix_pr_url: str | None,
+    still_failing: bool,
+    npm_audit_fix_pr_url: str | None = None,
+) -> str:
+    """Build an HTML Remediation Steps section for the Confluence QA page.
+
+    Returns an empty string when all checks passed (no section needed).
+    """
+    items: list[str] = []
+
+    unit_failures = [r for r in unit_test_results if r.returncode != 0 and not r.timed_out]
+    e2e_failures = [r for r in e2e_results if r.returncode != 0 and not r.timed_out]
+    static_failures = [r for r in static_results if r.returncode != 0 and not r.timed_out]
+
+    if not (unit_failures or e2e_failures or static_failures):
+        return ""
+
+    if unit_failures:
+        if autofix_pr_url and still_failing:
+            items.append(
+                f"<li><strong>Unit Tests:</strong> Auto-fix exhausted all attempts. "
+                f"Review the partial fixes in the <a href=\"{autofix_pr_url}\">auto-fix PR</a> "
+                f"and complete the fix manually.</li>"
+            )
+        elif autofix_pr_url:
+            items.append(
+                f"<li><strong>Unit Tests:</strong> Auto-fix applied — "
+                f"review and merge the <a href=\"{autofix_pr_url}\">auto-fix PR</a>.</li>"
+            )
+        else:
+            items.append(
+                "<li><strong>Unit Tests:</strong> Run <code>pytest</code> locally to "
+                "reproduce failures, then fix the implementation or update the tests.</li>"
+            )
+
+    if e2e_failures:
+        items.append(
+            "<li><strong>E2E Tests:</strong> Re-run against a live instance to confirm "
+            "failures, then fix selectors or expectations in the generated test file.</li>"
+        )
+
+    for r in static_failures:
+        if r.tool == "npm_audit":
+            if npm_audit_fix_pr_url:
+                items.append(
+                    f"<li><strong>npm audit:</strong> Auto-fix PR raised — "
+                    f"review and merge <a href=\"{npm_audit_fix_pr_url}\">the fix PR</a> "
+                    f"to resolve vulnerabilities.</li>"
+                )
+            else:
+                items.append(
+                    "<li><strong>npm audit:</strong> Run <code>npm audit fix</code> locally "
+                    "to resolve vulnerabilities, then commit the updated lockfile.</li>"
+                )
+        else:
+            items.append(
+                f"<li><strong>{r.tool}:</strong> Run <code>{r.tool}</code> locally to see "
+                f"violations and fix them before re-running QA.</li>"
+            )
+
+    return "<ul>" + "".join(items) + "</ul>"

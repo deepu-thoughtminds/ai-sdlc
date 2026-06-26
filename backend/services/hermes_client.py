@@ -11,11 +11,26 @@ Threat mitigations:
 """
 import logging
 import os
+import re
 
 import httpx
 
 HERMES_BASE_URL: str = os.getenv("HERMES_BASE_URL", "http://hermes:8001")
 logger = logging.getLogger(__name__)
+
+# Bare URL not already inside markdown link syntax `[text](url)`.
+_BARE_URL_RE = re.compile(r"(?<!\]\()(https?://[^\s<>\])]+)")
+
+
+def _linkify_urls(text: str) -> str:
+    """Wrap bare URLs in markdown link syntax.
+
+    mcp-atlassian's jira_add_comment converts markdown to ADF; a bare URL
+    is rendered as plain text rather than a clickable link mark, while
+    `[url](url)` becomes a real ADF link node. Jira renders external link
+    marks in a new tab by default, so no extra target attribute is needed.
+    """
+    return _BARE_URL_RE.sub(lambda m: f"[{m.group(1)}]({m.group(1)})", text)
 
 
 async def post_comment(
@@ -32,7 +47,7 @@ async def post_comment(
         "jira_email": jira_email,
         "jira_token": jira_token,
         "issue_key": issue_key,
-        "body": body,
+        "body": _linkify_urls(body),
     }
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(f"{HERMES_BASE_URL}/jira/comment", json=payload)

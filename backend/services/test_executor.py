@@ -276,3 +276,59 @@ def run_static_analysis(workspace_path: str, timeout: int = 120) -> list[TestRes
             result.timed_out,
         )
     return results
+
+
+def run_npm_audit_fix(workspace_path: str, timeout: int = 300) -> list[str]:
+    """Run `npm audit fix` in Docker; return relative paths of files that changed.
+
+    Called after an `npm_audit` tool failure to attempt automatic remediation.
+    Runs the fix command against the bind-mounted workspace so npm mutates
+    package-lock.json (and package.json for non-breaking semver bumps) in place.
+
+    T-23-01: list-form args — shell=True is never used.
+
+    Returns:
+        Relative file paths (e.g. ["package-lock.json"]) that were modified by
+        the fix. Empty list if nothing changed, no package.json exists, or no
+        lockfile is present (same skip conditions as detect_toolchain).
+    """
+    has_package_json = os.path.isfile(os.path.join(workspace_path, "package.json"))
+    if not has_package_json:
+        return []
+
+    has_package_lock = os.path.isfile(os.path.join(workspace_path, "package-lock.json"))
+    has_yarn_lock = os.path.isfile(os.path.join(workspace_path, "yarn.lock"))
+    has_pnpm_lock = os.path.isfile(os.path.join(workspace_path, "pnpm-lock.yaml"))
+
+    if has_package_lock:
+        fix_cmd = "npm ci --silent && npm audit fix"
+    elif has_yarn_lock:
+        fix_cmd = "yarn install --frozen-lockfile --silent && yarn audit --fix"
+    elif has_pnpm_lock:
+        fix_cmd = "pnpm install --frozen-lockfile --silent && pnpm audit --fix"
+    else:
+        return []
+
+    image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+    cmd = subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "-v", f"{workspace_path}:/workspace",
+            "-w", "/workspace",
+            image,
+            "sh", "-c", fix_cmd,
+        ],
+        capture_output=True,
+        timeout=timeout,
+    )
+    logger.info("npm audit fix exit=%d", cmd.returncode)
+
+    # Detect which files changed by asking git — workspace is a git clone.
+    diff = subprocess.run(
+        ["git", "-C", workspace_path, "diff", "--name-only"],
+        capture_output=True,
+        text=True,
+    )
+    changed = [p.strip() for p in diff.stdout.splitlines() if p.strip()]
+    logger.info("npm audit fix changed files: %s", changed)
+    return changed
