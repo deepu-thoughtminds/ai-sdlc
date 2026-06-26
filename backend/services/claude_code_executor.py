@@ -23,8 +23,9 @@ picks it up automatically without LLM involvement.
 
 import logging
 import os
-import re
 import subprocess
+
+from claude_agent_sdk import ClaudeAgentOptions, query
 
 from services.code_generator import FileChange
 
@@ -101,87 +102,66 @@ def run_claude_code_executor(
     return _collect_file_changes(workspace_path)
 
 
-def run_claude_playwright_generator(
+async def run_claude_playwright_generator(
     workspace_path: str,
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    architecture_content: str,
     codebase_context: str | None,
     relevant_file_contents: dict[str, str],
 ) -> list[FileChange]:
-    """Use Claude Code CLI to generate Python Playwright evaluation scripts.
+    """Generate Python Playwright evaluation tests via Claude Agent SDK + LiteLLM proxy.
 
-    Asks Claude to write pytest-playwright tests that evaluate the code changes
-    described in the Jira story. Returns FileChange objects with the generated
-    .py test files so the caller can write them and run pytest.
-
-    Returns [] when CLAUDE_API_KEY is not set, claude CLI is missing, or
-    the run exits non-zero.
+    Uses the same routing as agentic_coder.py (ANTHROPIC_BASE_URL → litellm:4000)
+    so no Anthropic API key is needed. The agent writes test files directly into
+    workspace_path/tests/playwright/; changed files are discovered via git diff.
     """
-    if not os.environ.get("CLAUDE_API_KEY"):
-        logger.info("CLAUDE_API_KEY not set — skipping Claude Playwright generation for %s", issue_key)
-        return []
-
     file_blocks = "\n\n".join(
         f"### {path}\n{content}" for path, content in relevant_file_contents.items()
     ) if relevant_file_contents else ""
 
     prompt = (
-        f"You are writing Python Playwright evaluation tests for Jira story {issue_key}: {issue_summary}\n\n"
+        "You are a QA engineer writing Python Playwright evaluation tests for "
+        f"Jira story {issue_key}: {issue_summary}\n\n"
         f"Description:\n{issue_description}\n\n"
-        f"Architecture:\n{architecture_content}\n\n"
-        + (f"Codebase context:\n{codebase_context}\n\n" if codebase_context else "")
-        + (f"Relevant source files:\n{file_blocks}\n\n" if file_blocks else "")
-        + "Write Python Playwright tests (using pytest-playwright) that evaluate whether the "
-        "changes described in the story work correctly from a user perspective.\n\n"
+        + (f"Codebase context:\n{codebase_context[:6000]}\n\n" if codebase_context else "")
+        + (f"Relevant source files:\n{file_blocks[:8000]}\n\n" if file_blocks else "")
+        + "Write Python Playwright tests (pytest-playwright) that evaluate whether the "
+        "story's changes work correctly from a user perspective.\n\n"
         "RULES:\n"
-        "- Use Python + pytest-playwright ONLY (from playwright.sync_api import sync_playwright, Page, expect)\n"
-        "- Tests must be self-contained and runnable with: pytest <file> --browser chromium\n"
-        "- Use BASE_URL env var (default http://localhost:3000) for the app URL\n"
+        "- Use Python + pytest-playwright: `from playwright.sync_api import Page, expect`\n"
+        "- Tests run with: pytest tests/playwright/ --browser chromium\n"
+        "- Use os.environ.get('BASE_URL', 'http://localhost:3000') for the app URL\n"
         "- Each test function must start with test_\n"
-        "- Do NOT modify any source files — only write test files\n"
-        "- Output EXACTLY in this format for each file:\n\n"
-        "### FILE: tests/playwright/test_<slug>.py\n"
-        "```python\n"
-        "<complete test file>\n"
-        "```\n"
+        "- Write test files to tests/playwright/test_<slug>.py using the Write tool\n"
+        "- Do NOT modify any source files — only write files under tests/playwright/\n"
+        "- Write at least one test that exercises the main acceptance criterion\n"
     )
 
-    logger.info("Running Claude Playwright generator for %s", issue_key)
-    try:
-        result = subprocess.run(
-            ["claude", "--dangerously-skip-permissions", "-p", prompt],
-            cwd=workspace_path,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.error("Claude CLI failed for playwright generation %s: %s", issue_key, exc)
-        return []
-
-    if result.returncode != 0:
-        logger.error("Claude CLI exited %d for playwright gen %s: %s", result.returncode, issue_key, result.stderr)
-        return []
-
-    return _parse_file_blocks(result.stdout, extension=".py")
-
-
-def _parse_file_blocks(output: str, extension: str) -> list[FileChange]:
-    """Parse ### FILE: ... ``` blocks from Claude CLI output."""
-    pattern = re.compile(
-        r"### FILE:\s*(\S+)\n```[a-z]*\n(.*?)```",
-        re.DOTALL,
+    options = ClaudeAgentOptions(
+        cwd=workspace_path,
+        permission_mode="acceptEdits",
+        max_turns=15,
+        model="sonnet",
+        env={
+            "ANTHROPIC_BASE_URL": "http://litellm:4000",
+            "ANTHROPIC_AUTH_TOKEN": os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local"),
+            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+        },
+        allowed_tools=["Read", "Write", "Glob", "Grep"],
     )
-    changes: list[FileChange] = []
-    for m in pattern.finditer(output):
-        path, content = m.group(1).strip(), m.group(2)
-        if not path.endswith(extension):
-            continue
-        changes.append(FileChange(path=path, content=content))
-        logger.info("Parsed playwright test file: %s", path)
-    return changes
+
+    logger.info("Running Claude Playwright generator for ticket %s via LiteLLM proxy", issue_key)
+
+    async for _message in query(prompt=prompt, options=options):
+        pass
+
+    # Collect only files written under tests/playwright/
+    all_changes = _collect_file_changes(workspace_path)
+    pw_changes = [c for c in all_changes if c.path.startswith("tests/playwright/") and c.path.endswith(".py")]
+    if not pw_changes:
+        logger.warning("Playwright generator produced no test files for ticket %s", issue_key)
+    return pw_changes
 
 
 def _collect_file_changes(workspace_path: str) -> list[FileChange]:
