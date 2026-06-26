@@ -360,11 +360,15 @@ async def run(
                     logger.info("Wrote generated E2E test file: %s", change.path)
 
                     image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                    compose_network = os.environ.get("COMPOSE_NETWORK", "ai-sdlc-net")
+                    frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
                     cmd = ToolchainCommand(
                         name="playwright",
                         command=[
                             "docker", "run", "--rm",
+                            "--network", compose_network,
                             "-v", f"{cloned.workspace_path}:/workspace",
+                            "-e", f"BASE_URL={frontend_url}",
                             image,
                             "npx", "playwright", "test", f"/workspace/{change.path}",
                         ],
@@ -406,11 +410,15 @@ async def run(
                 continue
 
             image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+            compose_network = os.environ.get("COMPOSE_NETWORK", "ai-sdlc-net")
+            frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
             cmd = ToolchainCommand(
                 name=f"playwright-py:{change.path}",
                 command=[
                     "docker", "run", "--rm",
+                    "--network", compose_network,
                     "-v", f"{cloned.workspace_path}:/workspace",
+                    "-e", f"BASE_URL={frontend_url}",
                     image,
                     "python", "-m", "pytest", f"/workspace/{change.path}",
                     "--browser", "chromium", "--tb=short", "-q",
