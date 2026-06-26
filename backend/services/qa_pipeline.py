@@ -39,6 +39,7 @@ import logging
 import os
 import pathlib
 import shutil
+import subprocess
 
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,30 @@ _SOURCE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".rb", ".rs",
     ".c", ".cpp", ".h", ".hpp", ".cs",
 }
+
+
+def _resolve_compose_network() -> str:
+    """Return the Docker network name to use for playwright containers.
+
+    Prefers COMPOSE_NETWORK env var when set. Otherwise finds the network
+    whose name ends with '_ai-sdlc-net' (the compose-prefixed form of the
+    ai-sdlc-net network defined in docker-compose.yml), falling back to the
+    bare name 'ai-sdlc-net' if discovery fails.
+    """
+    if override := os.environ.get("COMPOSE_NETWORK"):
+        return override
+    try:
+        out = subprocess.run(
+            ["docker", "network", "ls", "--format", "{{.Name}}", "--filter", "name=ai-sdlc-net"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for name in out.stdout.splitlines():
+            name = name.strip()
+            if name.endswith("_ai-sdlc-net"):
+                return name
+    except Exception:  # noqa: BLE001
+        pass
+    return "ai-sdlc-net"
 
 
 def has_active_qa_run(ticket_key: str, db: Session) -> bool:
@@ -370,7 +395,7 @@ async def run(
                     logger.info("Wrote generated E2E test file: %s", change.path)
 
                     image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                    compose_network = os.environ.get("COMPOSE_NETWORK", "ai-sdlc-net")
+                    compose_network = _resolve_compose_network()
                     frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
                     cmd = ToolchainCommand(
                         name="playwright",
