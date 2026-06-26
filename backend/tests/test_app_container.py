@@ -1,4 +1,4 @@
-"""Unit tests for services.app_container — SERVE-01..04.
+"""Unit tests for services.app_container — SERVE-01..04 + multi-stack.
 
 All tests mock subprocess.run and httpx.get — no Docker daemon, no network,
 no real sleep required.
@@ -8,11 +8,14 @@ Coverage:
 - SERVE-02: docker run argv is list-form with correct flags; non-zero exit raises ContainerStartError.
 - SERVE-03: _wait_until_healthy returns on 200, raises ContainerStartError when deadline passes.
 - SERVE-04: managed_app_container calls docker rm -f on success, ContainerStartError, arbitrary
-            exception; does NOT call docker rm -f when _detect_serve_command raises ValueError.
+            exception; does NOT call docker rm -f when stack detection raises ValueError.
+- Multi-stack: _detect_stack picks npm vs Python; Python entry-point detection via Procfile,
+  pyproject.toml, main.py/app.py; unknown stack raises ValueError.
 """
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import httpx
@@ -20,8 +23,11 @@ import pytest
 
 from services.app_container import (
     ContainerStartError,
+    StackInfo,
     _build_serve_script,
+    _detect_python_entry,
     _detect_serve_command,
+    _detect_stack,
     _remove_container,
     _start_container,
     _wait_until_healthy,
@@ -267,12 +273,13 @@ def _make_subprocess_side_effect(container_name_holder):
 def test_managed_app_container_success_then_removes():
     """Happy path: yields URL, removes container on exit."""
     holder = {"rm_called": False}
-    with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
-        with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
-            with patch("httpx.get", return_value=_make_httpx_response(200)):
-                with patch("time.sleep"):
-                    with managed_app_container("/ws", "net") as url:
-                        assert "http://" in url
+    with patch("pathlib.Path.exists", _make_ws_exists({"package.json"})):
+        with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
+            with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
+                with patch("httpx.get", return_value=_make_httpx_response(200)):
+                    with patch("time.sleep"):
+                        with managed_app_container("/ws", "net") as url:
+                            assert "http://" in url
     assert holder["rm_called"], "docker rm -f should be called after success"
     assert "-f" in holder["rm_argv"]
 
@@ -287,14 +294,15 @@ def test_managed_app_container_removes_on_container_start_error():
     monotonic_values = [0.0, 100.0]
     mono_iter = iter(monotonic_values)
 
-    with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
-        with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
-            with patch("httpx.get", side_effect=health_fail):
-                with patch("time.sleep"):
-                    with patch("time.monotonic", side_effect=lambda: next(mono_iter)):
-                        with pytest.raises(ContainerStartError):
-                            with managed_app_container("/ws", "net", timeout_secs=5):
-                                pass
+    with patch("pathlib.Path.exists", _make_ws_exists({"package.json"})):
+        with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
+            with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
+                with patch("httpx.get", side_effect=health_fail):
+                    with patch("time.sleep"):
+                        with patch("time.monotonic", side_effect=lambda: next(mono_iter)):
+                            with pytest.raises(ContainerStartError):
+                                with managed_app_container("/ws", "net", timeout_secs=5):
+                                    pass
 
     assert holder["rm_called"], "docker rm -f must run even after ContainerStartError"
 
@@ -302,19 +310,20 @@ def test_managed_app_container_removes_on_container_start_error():
 def test_managed_app_container_removes_on_arbitrary_exception():
     """Exception raised inside the with-body still triggers docker rm -f."""
     holder = {"rm_called": False}
-    with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
-        with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
-            with patch("httpx.get", return_value=_make_httpx_response(200)):
-                with patch("time.sleep"):
-                    with pytest.raises(RuntimeError, match="boom"):
-                        with managed_app_container("/ws", "net") as url:
-                            raise RuntimeError("boom")
+    with patch("pathlib.Path.exists", _make_ws_exists({"package.json"})):
+        with patch("pathlib.Path.read_text", return_value=_PKG_DEV_ONLY):
+            with patch("subprocess.run", side_effect=_make_subprocess_side_effect(holder)):
+                with patch("httpx.get", return_value=_make_httpx_response(200)):
+                    with patch("time.sleep"):
+                        with pytest.raises(RuntimeError, match="boom"):
+                            with managed_app_container("/ws", "net") as url:
+                                raise RuntimeError("boom")
 
     assert holder["rm_called"], "docker rm -f must run even when body raises"
 
 
 def test_managed_app_container_no_rm_when_detect_fails():
-    """ValueError from _detect_serve_command → container never started → no docker rm -f."""
+    """ValueError from stack detection → container never started → no docker rm -f."""
     rm_calls = []
 
     def fake_subprocess(argv, **kw):
@@ -322,10 +331,156 @@ def test_managed_app_container_no_rm_when_detect_fails():
             rm_calls.append(argv)
         return _make_proc()
 
-    with patch("pathlib.Path.read_text", return_value=_PKG_NO_SERVE):
+    # Simulate a workspace with no recognizable stack files
+    with patch("pathlib.Path.exists", return_value=False):
         with patch("subprocess.run", side_effect=fake_subprocess):
-            with pytest.raises(ValueError, match="No serve script"):
+            with pytest.raises(ValueError, match="Cannot detect project stack"):
                 with managed_app_container("/ws", "net"):
                     pass
 
     assert rm_calls == [], "docker rm -f must NOT be called when no container was started"
+
+
+# ---------------------------------------------------------------------------
+# Multi-stack — _detect_stack
+# ---------------------------------------------------------------------------
+
+
+def _make_ws_exists(present: set):
+    """Return a Path.exists side_effect that returns True for paths whose name is in `present`."""
+    def _exists(self):
+        return self.name in present
+    return _exists
+
+
+def test_detect_stack_npm_preview():
+    pkg = json.dumps({"scripts": {"preview": "vite preview", "build": "vite build"}})
+    with patch("pathlib.Path.exists", _make_ws_exists({"package.json"})):
+        with patch("pathlib.Path.read_text", return_value=pkg):
+            info = _detect_stack("/ws", 3000, "qa-sandbox", "python:3.12-slim")
+    assert info.stack == "npm"
+    assert info.image == "qa-sandbox"
+    assert "npm run preview" in info.serve_script
+
+
+def test_detect_stack_npm_falls_back_to_python_when_no_serve_script():
+    """package.json exists but has no serve script → falls through to Python detection."""
+    pkg = json.dumps({"scripts": {"build": "vite build"}})
+    present = {"package.json", "requirements.txt", "Procfile"}
+
+    def fake_exists(self):
+        return self.name in present
+
+    def fake_read_text(self, **kw):
+        if self.name == "package.json":
+            return pkg
+        if self.name == "Procfile":
+            return "web: uvicorn main:app --port 8000"
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            info = _detect_stack("/ws", 3000, "qa-sandbox", "python:3.12-slim")
+    assert info.stack == "python"
+    assert info.image == "python:3.12-slim"
+
+
+def test_detect_stack_python_requirements_txt():
+    def fake_exists(self):
+        return self.name in {"requirements.txt", "Procfile"}
+
+    def fake_read_text(self, **kw):
+        if self.name == "Procfile":
+            return "web: uvicorn main:app\n"
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            info = _detect_stack("/ws", 3000, "qa-sandbox", "python:3.12-slim")
+    assert info.stack == "python"
+    assert info.image == "python:3.12-slim"
+    assert "pip install" in info.serve_script
+    assert "uvicorn main:app" in info.serve_script
+
+
+def test_detect_stack_unknown_raises():
+    with patch("pathlib.Path.exists", return_value=False):
+        with pytest.raises(ValueError, match="Cannot detect project stack"):
+            _detect_stack("/ws", 3000, "qa-sandbox", "python:3.12-slim")
+
+
+# ---------------------------------------------------------------------------
+# _detect_python_entry
+# ---------------------------------------------------------------------------
+
+
+def test_python_entry_procfile():
+    def fake_exists(self):
+        return self.name in {"Procfile", "requirements.txt"}
+
+    def fake_read_text(self, **kw):
+        return "web: uvicorn main:app\n"
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            script = _detect_python_entry(Path("/ws"), 8000)
+    assert "uvicorn main:app" in script
+    assert "--port 8000" in script
+
+
+def test_python_entry_procfile_skips_non_web_lines():
+    def fake_exists(self):
+        return self.name in {"Procfile", "requirements.txt", "main.py"}
+
+    def fake_read_text(self, **kw):
+        if self.name == "Procfile":
+            return "worker: celery worker\n"
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            script = _detect_python_entry(Path("/ws"), 8000)
+    # Falls through to main.py fallback
+    assert "uvicorn main:app" in script
+
+
+def test_python_entry_pyproject_uvicorn():
+    def fake_exists(self):
+        return self.name in {"pyproject.toml", "requirements.txt", "main.py"}
+
+    def fake_read_text(self, **kw):
+        if self.name == "pyproject.toml":
+            return "[tool.poetry.dependencies]\nuvicorn = \"*\"\nfastapi = \"*\"\n"
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            script = _detect_python_entry(Path("/ws"), 8000)
+    assert "uvicorn main:app" in script
+
+
+def test_python_entry_fallback_main_py():
+    def fake_exists(self):
+        return self.name in {"requirements.txt", "main.py"}
+
+    def fake_read_text(self, **kw):
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            script = _detect_python_entry(Path("/ws"), 8000)
+    assert "uvicorn main:app" in script
+    assert "--port 8000" in script
+
+
+def test_python_entry_no_entry_raises():
+    def fake_exists(self):
+        return self.name == "requirements.txt"
+
+    def fake_read_text(self, **kw):
+        return ""
+
+    with patch.object(Path, "exists", fake_exists):
+        with patch.object(Path, "read_text", fake_read_text):
+            with pytest.raises(ValueError, match="no serve entry point"):
+                _detect_python_entry(Path("/ws"), 8000)
