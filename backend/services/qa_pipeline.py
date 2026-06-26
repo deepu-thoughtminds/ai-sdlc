@@ -54,6 +54,7 @@ from services.repo_clone import clone_repository
 from services.code_generator import FileChange
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
+from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
@@ -391,6 +392,52 @@ async def run(
                     )
                     continue
 
+        # Step 4e — Python Playwright evaluation via Claude Code CLI.
+        playwright_py_results: list[TestResult] = []
+        pw_py_file_changes = run_claude_playwright_generator(
+            workspace_path=cloned.workspace_path,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            architecture_content=architecture_content,
+            codebase_context=codebase_context,
+            relevant_file_contents=relevant_file_contents,
+        )
+        for change in pw_py_file_changes:
+            try:
+                resolved = (workspace_root / change.path).resolve()
+                if not str(resolved).startswith(str(workspace_root) + "/"):
+                    raise ValueError(
+                        f"Playwright FileChange path escapes workspace: '{change.path}' "
+                        f"resolves to '{resolved}'"
+                    )
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                resolved.write_text(change.content, encoding="utf-8")
+                logger.info("Wrote Python Playwright test file: %s", change.path)
+
+                image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                cmd = ToolchainCommand(
+                    name=f"playwright-py:{change.path}",
+                    command=[
+                        "docker", "run", "--rm",
+                        "-v", f"{cloned.workspace_path}:/workspace",
+                        image,
+                        "python", "-m", "pytest", f"/workspace/{change.path}",
+                        "--browser", "chromium", "--tb=short", "-q",
+                    ],
+                )
+                result = run_command(cmd)
+                playwright_py_results.append(result)
+                logger.info(
+                    "Python Playwright test %s exit=%d timed_out=%s",
+                    change.path,
+                    result.returncode,
+                    result.timed_out,
+                )
+            except ValueError as ve:
+                logger.warning("Skipping Playwright file due to path-traversal violation: %s", ve)
+                continue
+
         # Step 5 — Run static analysis tools via Docker subprocess.
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
         static_results = run_static_analysis(cloned.workspace_path, timeout=300)
@@ -431,7 +478,7 @@ async def run(
                 except Exception:
                     logger.exception("npm audit fix PR creation failed for %s", issue_key)
 
-        comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note)
+        comment_text = _format_qa_comment(unit_test_results, e2e_results, static_results, issue_key, e2e_skip_note, playwright_py_results)
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
         if autofix_pr_url and still_failing:
             comment_text += (
@@ -494,6 +541,7 @@ async def run(
         remediation_html = _build_remediation_html(
             unit_test_results, e2e_results, static_results, autofix_pr_url, still_failing,
             npm_audit_fix_pr_url=npm_audit_fix_pr_url,
+            playwright_py_results=playwright_py_results,
         )
         qa_page_url = await publish_qa_report(project, issue_key, comment_text, remediation_html)
     except Exception as conf_exc:
@@ -531,6 +579,7 @@ def _format_qa_comment(
     static_results: list[TestResult],
     issue_key: str,
     e2e_skip_note: str | None = None,
+    playwright_py_results: list[TestResult] | None = None,
 ) -> str:
     """Format QA results into a human-readable Jira comment with per-category sections.
 
@@ -611,6 +660,22 @@ def _format_qa_comment(
                     f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}"
                 )
 
+    # --- Python Playwright Evaluation section ---
+    lines.append("")
+    lines.append("**Python Playwright Evaluation:**")
+    if not playwright_py_results:
+        lines.append("- Skipped (CLAUDE_API_KEY not set or no tests generated).")
+    else:
+        for r in playwright_py_results:
+            if r.returncode == 0:
+                lines.append(f"- {r.tool}: PASSED")
+            elif r.timed_out:
+                timeout_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(f"- {r.tool}: TIMED OUT ({timeout_snippet})")
+            else:
+                stderr_snippet = r.stderr[:500] if r.stderr else ""
+                lines.append(f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}")
+
     return "\n".join(lines)
 
 
@@ -621,6 +686,7 @@ def _build_remediation_html(
     autofix_pr_url: str | None,
     still_failing: bool,
     npm_audit_fix_pr_url: str | None = None,
+    playwright_py_results: list[TestResult] | None = None,
 ) -> str:
     """Build an HTML Remediation Steps section for the Confluence QA page.
 
@@ -631,8 +697,9 @@ def _build_remediation_html(
     unit_failures = [r for r in unit_test_results if r.returncode != 0 and not r.timed_out]
     e2e_failures = [r for r in e2e_results if r.returncode != 0 and not r.timed_out]
     static_failures = [r for r in static_results if r.returncode != 0 and not r.timed_out]
+    pw_py_failures = [r for r in (playwright_py_results or []) if r.returncode != 0 and not r.timed_out]
 
-    if not (unit_failures or e2e_failures or static_failures):
+    if not (unit_failures or e2e_failures or static_failures or pw_py_failures):
         return ""
 
     if unit_failures:
@@ -677,5 +744,12 @@ def _build_remediation_html(
                 f"<li><strong>{r.tool}:</strong> Run <code>{r.tool}</code> locally to see "
                 f"violations and fix them before re-running QA.</li>"
             )
+
+    if pw_py_failures:
+        items.append(
+            "<li><strong>Python Playwright Evaluation:</strong> Run "
+            "<code>pytest tests/playwright/ --browser chromium</code> locally to reproduce "
+            "failures and fix the implementation or test selectors.</li>"
+        )
 
     return "<ul>" + "".join(items) + "</ul>"
