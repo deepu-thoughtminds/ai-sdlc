@@ -1,28 +1,28 @@
-"""JWT authentication core: token issuance, credential check, and the
-``get_current_user`` FastAPI dependency used to protect ``/api`` routes.
+"""JWT verification + the ``get_current_user`` FastAPI dependency used to
+protect ``/api`` routes.
 
-Design:
-  - Stateless HS256 access tokens signed with ``JWT_SECRET_KEY``. A token carries
-    ``sub`` (the username) and ``exp`` (expiry). No server-side session store.
-  - Credentials are validated against a single admin seeded from env vars
-    (``AUTH_ADMIN_USERNAME`` / ``AUTH_ADMIN_PASSWORD``). A real users table can be
-    added later by swapping the lookup in ``verify_credentials`` — the token logic
-    and the ``get_current_user`` dependency stay unchanged.
+Design (static-token model):
+  - There is no login endpoint. Instead a single long-lived HS256 token is
+    generated once (see ``backend/generate_token.py``), stored in env as
+    ``API_TOKEN``, and handed to the frontend. The FE sends it on every request
+    as ``Authorization: Bearer <token>``.
+  - The backend still validates it as a real JWT — signature check against
+    ``JWT_SECRET_KEY`` — so a tampered/forged token is rejected. Nothing is
+    stored server-side; validation is pure signature math.
 
 Env vars (read lazily inside functions so tests can set them before import,
 mirroring services/crypto.py):
-  JWT_SECRET_KEY       required — HMAC signing secret; functions raise if unset.
-  JWT_EXPIRE_MINUTES   optional — access token lifetime in minutes (default 720).
-  AUTH_ADMIN_USERNAME  required for login — the single admin username.
-  AUTH_ADMIN_PASSWORD  required for login — the single admin password.
+  JWT_SECRET_KEY     required — HMAC signing secret; functions raise if unset.
+  JWT_EXPIRE_MINUTES optional — default lifetime for create_access_token (min).
+  API_TOKEN          the generated token handed to the FE (not read here for
+                     validation — kept in env purely as the canonical copy to
+                     share; any token signed with JWT_SECRET_KEY is accepted).
 
 Security notes:
-  - The signing secret and admin password are never logged.
-  - Username/password comparison uses hmac.compare_digest (constant-time) to avoid
-    leaking validity via timing.
+  - The signing secret is never logged.
+  - To revoke the FE's token, rotate JWT_SECRET_KEY and re-issue.
 """
 
-import hmac
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -32,11 +32,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 ALGORITHM = "HS256"
 DEFAULT_EXPIRE_MINUTES = 720  # 12 hours
+# Default lifetime for a generated static/frontend token: 10 years.
+STATIC_TOKEN_MINUTES = 60 * 24 * 365 * 10
 
 # HTTPBearer (not OAuth2PasswordBearer) so Swagger's Authorize dialog shows a
-# single "paste your token" box that pairs with our JSON login endpoint.
-# auto_error=False lets us return 401 (not HTTPBearer's default 403) for a
-# missing/malformed Authorization header.
+# single "paste your token" box. auto_error=False lets us return 401 (not
+# HTTPBearer's default 403) for a missing/malformed Authorization header.
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -61,37 +62,26 @@ def _expire_minutes() -> int:
         return DEFAULT_EXPIRE_MINUTES
 
 
-def create_access_token(username: str) -> str:
-    """Issue a signed HS256 access token for ``username`` with an ``exp`` claim."""
+def create_access_token(subject: str = "frontend", expires_minutes: int | None = None) -> str:
+    """Issue a signed HS256 token for ``subject`` with an ``exp`` claim.
+
+    expires_minutes defaults to JWT_EXPIRE_MINUTES. Pass STATIC_TOKEN_MINUTES
+    (used by generate_token.py) to mint the long-lived token handed to the FE.
+    """
+    minutes = expires_minutes if expires_minutes is not None else _expire_minutes()
     now = datetime.now(tz=timezone.utc)
     payload = {
-        "sub": username,
+        "sub": subject,
         "iat": now,
-        "exp": now + timedelta(minutes=_expire_minutes()),
+        "exp": now + timedelta(minutes=minutes),
     }
     return jwt.encode(payload, _secret_key(), algorithm=ALGORITHM)
-
-
-def verify_credentials(username: str, password: str) -> bool:
-    """Constant-time check of ``username``/``password`` against the env admin.
-
-    Returns False (deny) if the admin env vars are not configured, so a
-    misconfigured deployment never accidentally authenticates anyone.
-    """
-    expected_user = os.environ.get("AUTH_ADMIN_USERNAME", "")
-    expected_pass = os.environ.get("AUTH_ADMIN_PASSWORD", "")
-    if not expected_user or not expected_pass:
-        return False
-    # Evaluate both comparisons (no short-circuit) to keep timing uniform.
-    user_ok = hmac.compare_digest(username, expected_user)
-    pass_ok = hmac.compare_digest(password, expected_pass)
-    return user_ok and pass_ok
 
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
-    """FastAPI dependency: validate the bearer token and return its username.
+    """FastAPI dependency: validate the bearer token and return its subject.
 
     Raises 401 (with a ``WWW-Authenticate: Bearer`` header) for any
     missing/expired/invalid token.
