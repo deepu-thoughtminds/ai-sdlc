@@ -1,5 +1,22 @@
 # Milestones
 
+## v1.9 Playwright E2E Live Testing (Shipped: 2026-06-26)
+
+**Phases completed:** 2 phases (27–28), 2 plans, 3 tasks
+**Files changed:** 18 | **Lines:** +2489 / -375 | **Commits:** 15
+**Timeline:** 2026-06-26 (single day)
+**Known gaps at close:** SERVE-01..04 checkboxes not ticked in REQUIREMENTS.md (satisfied in Phase 27 VERIFICATION.md; tech debt only)
+
+**Key accomplishments:**
+
+- Built `app_container.py` — detects Node.js serve command (preview > start > dev), spins ephemeral Docker container on compose network, health-polls HTTP 200, guarantees teardown via `finally` (SERVE-01..04)
+- Wired `managed_app_container` into `qa_pipeline.py` Step 4d — live container URL replaces hardcoded `PLAYWRIGHT_BASE_URL` env var (PWGEN-01)
+- E2E generation gated on health-check confirmation; graceful skip note + pipeline continuation on `ValueError`/`ContainerStartError` (PWGEN-02, PWGEN-03)
+- Both JS and Python Playwright docker run commands receive `-e BASE_URL=<live-url>` from context manager; E2E results in Confluence report and Jira comment (EXEC-01, EXEC-02)
+- 25 unit tests covering all 9 requirements; 4/4 UAT scenarios passed
+
+---
+
 | Milestone | Name | Phases | Status | Shipped |
 |-----------|------|--------|--------|---------|
 | v1.0 | Core Platform | 1–4 | ✅ Shipped | 2026-06-18 |
@@ -10,12 +27,15 @@
 | v1.5 | github-dev-pipeline | 14–17 | ✅ Shipped | 2026-06-21 |
 | v1.6 | context-aware-codebase-scanning | 18–21 | ✅ Shipped | 2026-06-22 |
 | v1.7 | agentic-codegen | 22 | ✅ Shipped | 2026-06-23 |
+| v1.8 | autonomous-qa-stage | 23–26 | ✅ Shipped | 2026-06-24 |
+| v1.9 | playwright-e2e-live-testing | 27–28 | ✅ Shipped | 2026-06-26 |
 
 ## v1.7 Summary — Agentic Codegen via LiteLLM + Claude Agent SDK
 
 **Goal:** Replace the freellmapi one-shot text-completion codegen path with a fully agentic coding loop: Claude Agent SDK → LiteLLM proxy (Anthropic→OpenAI translation) → freellmapi → free LLMs.
 
 **Phases:**
+
 - Phase 22: Agentic Codegen — `litellm/` Docker service + `config.yaml`, `backend/services/agentic_coder.py`, updated `docker-compose.yml`/`dev_pipeline.py`/`requirements.txt`
 
 **Requirements:** see `.planning/phases/22-agentic-codegen/22-REQUIREMENTS.md`
@@ -25,6 +45,7 @@
 **Goal:** Give every pipeline stage accurate codebase context by scanning the project repo at onboarding, committing a structured `.hermes/codebase.md` summary, and feeding it into description and architecture generation.
 
 **Phases:**
+
 - Phase 18: Codebase scan service — git clone + directory walk + targeted file reads → `.hermes/codebase.md`
 - Phase 19: Snapshot refresh — post-merge hook re-runs scan; graceful degradation if file absent
 - Phase 20: Describe pipeline integration — elaborations reference real module names and file paths
@@ -33,6 +54,7 @@
 **Requirements:** 9/9 complete — see `.planning/milestones/v1.6-REQUIREMENTS.md`
 
 **Key decisions:**
+
 - Scan uses git clone + directory tree walk + targeted file reads (no LLM, no token cost)
 - Output committed directly to main as `.hermes/codebase.md`
 - Scan triggered automatically on project onboarding when `github_repo` saved

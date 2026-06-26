@@ -1,15 +1,10 @@
 # AI-SDLC Jira
 
-## Current Milestone: v1.9 Playwright E2E Live Testing
+## Current State: v1.9 Shipped — Planning Next Milestone
 
-**Goal:** Enable the QA pipeline to spin up the cloned target app in a live Docker container, generate accurate Playwright assertions against its real running URL, execute them, and surface pass/fail results back to Jira and Confluence.
+**v1.9 Playwright E2E Live Testing — shipped 2026-06-26**
 
-**Target features:**
-- Detect target app type (Vite/React, Next.js, etc.) from cloned repo and serve it in an ephemeral Docker container on the compose network
-- Pass the live container URL as BASE_URL to the Claude playwright generator so assertions reflect actual running app content
-- Playwright test execution runs against the live target app URL (not the ai-sdlc frontend)
-- Container torn down after test run (ephemeral, per QA ticket run)
-- QA report in Confluence and Jira comment includes E2E pass/fail results
+The QA pipeline now spins up the target app in an ephemeral Docker container on the compose network, gates Playwright generation on a confirmed HTTP 200 health-check, and tears down the container on every exit path. E2E pass/fail results surface in the Confluence QA report and Jira comment.
 
 ## Previous Milestone: v1.8 Autonomous QA Stage (complete)
 
@@ -63,10 +58,11 @@ Team members trigger AI-powered SDLC automation directly from Jira comment histo
 
 ### Validated
 
-- ✓ QA pipeline runs E2E tests against live ephemeral Docker container URL — Phase 28
-- ✓ Container torn down after test run; ephemeral per QA ticket — Phase 27
-- ✓ E2E header in Jira comment shows live URL when available — Phase 28
-- ✓ Container failure gracefully skips E2E, pipeline continues — Phase 28
+- ✓ QA pipeline runs E2E tests against live ephemeral Docker container URL — v1.9 Phase 28
+- ✓ Container torn down after test run; ephemeral per QA ticket — v1.9 Phase 27
+- ✓ E2E header in Jira comment shows live URL when available — v1.9 Phase 28
+- ✓ Container failure gracefully skips E2E, pipeline continues — v1.9 Phase 28
+- ✓ Playwright generator receives confirmed-live BASE_URL; generation gated on HTTP 200 health-check — v1.9 Phase 27-28
 
 ### Active
 
@@ -112,12 +108,14 @@ Team members trigger AI-powered SDLC automation directly from Jira comment histo
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Jira webhook for trigger (not polling) | Real-time response, no polling overhead | — Pending |
-| freellmapi for all heavy LLM tasks | Cost control; free coding models sufficient for code/arch/test gen | — Pending |
-| Comment history as the UX surface | Keeps all AI interaction in Jira without a separate UI per stage | — Pending |
-| v1 = description + architecture stages only | Reduces risk; these stages have clearest requirements and least autonomy risk | — Pending |
-| Credentials in web app DB (encrypted) | Simple for multi-project setup; avoid per-deployment env var complexity | — Pending |
-| Next.js + FastAPI stack | Next.js for rich dashboard UI; FastAPI for async webhook handling and agent orchestration | — Pending |
+| Jira webhook for trigger (not polling) | Real-time response, no polling overhead | ✓ Good — zero polling overhead confirmed |
+| freellmapi for all heavy LLM tasks | Cost control; free coding models sufficient for code/arch/test gen | ✓ Good — used through v1.9 |
+| Comment history as the UX surface | Keeps all AI interaction in Jira without a separate UI per stage | ✓ Good — consistent pattern across all stages |
+| v1 = description + architecture stages only | Reduces risk; these stages have clearest requirements and least autonomy risk | ✓ Good — dev/QA expanded incrementally in v1.5–v1.9 |
+| Credentials in web app DB (encrypted) | Simple for multi-project setup; avoid per-deployment env var complexity | ✓ Good — used for all pipeline stages |
+| Next.js + FastAPI stack | Next.js for rich dashboard UI; FastAPI for async webhook handling and agent orchestration | ✓ Good — stable through v1.9 |
+| app_container uses network-internal URL as BASE_URL | Playwright containers run as siblings on ai-sdlc-net; internal URL reachable by docker DNS | ✓ Good — host port used only for debug |
+| E2E generation gated on SERVE-03 health-check (not URL presence) | Prevents test generation against an unresponsive server; avoids flaky tests | ✓ Good — validated in UAT 4/4 |
 
 ## Evolution
 
@@ -137,4 +135,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-26 — milestone v1.9 (Playwright E2E Live Testing) complete; Phase 28 wired managed_app_container into QA pipeline*
+*Last updated: 2026-06-26 after v1.9 milestone — Playwright E2E Live Testing shipped*
