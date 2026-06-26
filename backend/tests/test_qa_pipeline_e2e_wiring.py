@@ -124,6 +124,35 @@ async def _run_e2e_step(
                     result = _qap.run_command(cmd)
                     e2e_results.append(result)
 
+                # Step 4e — Python Playwright via Claude Code CLI (mirrors production)
+                pw_py_file_changes = await _qap.run_claude_playwright_generator(
+                    workspace_path=workspace_path,
+                    issue_key=issue_key,
+                    issue_summary=issue_summary,
+                    issue_description=issue_description,
+                    codebase_context=codebase_context,
+                    relevant_file_contents=relevant_file_contents,
+                )
+                for change in pw_py_file_changes:
+                    resolved = (workspace_root / change.path).resolve()
+                    if not str(resolved).startswith(str(workspace_root) + "/"):
+                        continue
+                    image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                    cmd = ToolchainCommand(
+                        name=f"playwright-py:{change.path}",
+                        command=[
+                            "docker", "run", "--rm",
+                            "--network", compose_network,
+                            "-v", f"{workspace_path}:/workspace",
+                            "-e", f"BASE_URL={playwright_deployment_url}",
+                            image,
+                            "python", "-m", "pytest", f"/workspace/{change.path}",
+                            "--browser", "chromium", "--tb=short", "-q",
+                        ],
+                    )
+                    result = _qap.run_command(cmd)
+                    playwright_py_results.append(result)
+
     except (ValueError, ContainerStartError) as exc:
         e2e_skip_note = f"E2E tests skipped: {exc}"
 
@@ -249,3 +278,46 @@ def test_format_qa_comment_without_live_url_omits_url():
     )
     assert "live:" not in comment
     assert "**E2E Tests:**" in comment
+
+
+# ---------------------------------------------------------------------------
+# Case E — run_claude_playwright_generator invoked after container is healthy
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_claude_playwright_generator_called_after_container_healthy():
+    """EXEC-02: run_claude_playwright_generator is called with correct args after URL yields."""
+    live_url = "http://jarvis-app-test2:3000"
+    py_change = _make_file_change("tests/pw/test_home.py")
+    passing_result = _make_passing_result("playwright-py")
+
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=live_url)
+    mock_cm.__exit__ = MagicMock(return_value=False)
+
+    with patch("services.qa_pipeline.managed_app_container", return_value=mock_cm), \
+         patch("services.qa_pipeline.generate_e2e_tests", return_value=[]) as mock_gen, \
+         patch(
+             "services.qa_pipeline.run_claude_playwright_generator",
+             new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock,
+             return_value=[py_change],
+         ) as mock_pw_gen, \
+         patch("services.qa_pipeline.run_command", return_value=passing_result), \
+         patch("glob.glob", return_value=["/workspace/playwright.config.ts"]):
+
+        _, playwright_py_results, e2e_live_url, e2e_skip_note = await _run_e2e_step(
+            issue_key="TEST-2",
+            issue_summary="Home page test",
+            issue_description="Verify home page loads",
+        )
+
+    # Generator must be called once the container is healthy
+    mock_pw_gen.assert_called_once()
+    call_kwargs = mock_pw_gen.call_args.kwargs
+    assert call_kwargs["issue_key"] == "TEST-2"
+    assert call_kwargs["issue_summary"] == "Home page test"
+
+    # Result from the Python Playwright run is captured
+    assert len(playwright_py_results) == 1
+    assert playwright_py_results[0].returncode == 0
+    assert e2e_skip_note is None
