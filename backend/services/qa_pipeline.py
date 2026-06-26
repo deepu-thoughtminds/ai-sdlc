@@ -315,6 +315,7 @@ async def run(
         # (f) empty file_changes: unit_test_results stays [] — no execution
 
         # Step 4c — Bounded auto-fix loop on unit test failure (AUTOFIX-01/02/03).
+        npm_audit_fix_pr_url: str | None = None  # declared early so finally/except can reference it
         autofix_pr_url: str | None = None
         if any(r.returncode != 0 and not r.timed_out for r in unit_test_results):
             unit_test_results, autofix_pr_url = run_auto_fix_loop(
@@ -389,7 +390,7 @@ async def run(
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
-            architecture_content=architecture_content,
+            architecture_content="",
             codebase_context=codebase_context,
             relevant_file_contents=relevant_file_contents,
         )
@@ -434,7 +435,6 @@ async def run(
 
         # Step 5.1 — npm audit auto-fix: if npm_audit failed, run `npm audit fix`
         # in Docker and open a PR with the updated lockfile.
-        npm_audit_fix_pr_url: str | None = None
         npm_audit_failed = any(
             r.tool == "npm_audit" and r.returncode != 0 and not r.timed_out
             for r in static_results
