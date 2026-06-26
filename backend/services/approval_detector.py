@@ -30,6 +30,7 @@ from models.project import Project
 from models.webhook import JiraCommentEvent
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment, put_description as hermes_put_description
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,20 @@ async def detect_and_apply_approval(
         row.status = "approved"
         row.updated_at = datetime.now(tz=timezone.utc)
         db.commit()
+
+        # Ticket-tracking bookkeeping (best-effort).
+        txn_stage = "description" if stage == "describe" else "architecture"
+        event_msg = (
+            "Description approved and inserted to ticket"
+            if stage == "describe"
+            else "Architecture approved"
+        )
+        safe_upsert_ticket_status(
+            db, project.id, event.issue.key, current_status=event_msg
+        )
+        safe_record_transaction(
+            db, project.id, event.issue.key, txn_stage, event_msg, status="success"
+        )
 
         logger.info(
             "Approval applied (subcmd=%r) for ticket %s (pipeline_state_id=%s)",

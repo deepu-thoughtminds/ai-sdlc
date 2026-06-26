@@ -59,6 +59,12 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
+# Dashboard routes now require a valid JWT. These tests focus on dashboard
+# behavior, not auth, so bypass token verification with a stub authenticated user.
+from services.auth import get_current_user  # noqa: E402
+
+app.dependency_overrides[get_current_user] = lambda: "test-admin"
+
 from fastapi.testclient import TestClient  # noqa: E402
 import pytest  # noqa: E402
 

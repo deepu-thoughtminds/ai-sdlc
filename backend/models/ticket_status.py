@@ -27,7 +27,9 @@ from database import Base
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_STAGES: frozenset = frozenset({"description", "architecture", "dev", "qa", "done"})
+VALID_STAGES: frozenset = frozenset(
+    {"description", "architecture", "dev", "merge", "qa", "deploy", "done"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +55,15 @@ class TicketStatus(Base):
     )
     ticket_key: Mapped[str] = mapped_column(String(100), nullable=False)
     pipeline_stage: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Enriched ticket detail (nullable — populated by the issue-created webhook
+    # and pipeline wiring; legacy rows / dashboard upserts leave these null).
+    summary: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    issue_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Latest human-readable status, e.g. "PR merged".
+    current_status: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -93,6 +104,9 @@ class TicketStatusPublic(BaseModel):
     id: int
     ticket_key: str
     pipeline_stage: str
+    summary: str | None = None
+    issue_type: str | None = None
+    current_status: str | None = None
     updated_at: datetime
 
 

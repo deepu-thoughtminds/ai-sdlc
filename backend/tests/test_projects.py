@@ -70,6 +70,12 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
+# Project routes now require a valid JWT. These tests focus on CRUD behavior,
+# not auth, so bypass token verification with a stub authenticated user.
+from services.auth import get_current_user  # noqa: E402
+
+app.dependency_overrides[get_current_user] = lambda: "test-admin"
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
@@ -362,3 +368,116 @@ def test_create_project_with_github_repo_schedules_scan_run(monkeypatch) -> None
     assert scheduled[0] == "_run_scan_background", (
         f"Expected background coroutine '_run_scan_background', got '{scheduled[0]}'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Update (PUT) and Delete (DELETE) tests
+# ---------------------------------------------------------------------------
+
+
+def test_update_project_changes_name() -> None:
+    """PUT /api/projects/{id} updates a provided field and reflects it on GET."""
+    create = client.post("/api/projects", json=_unique_payload())
+    assert create.status_code == 201, create.text
+    project_id = create.json()["id"]
+
+    put = client.put(f"/api/projects/{project_id}", json={"name": "Renamed Project"})
+    assert put.status_code == 200, put.text
+    assert put.json()["name"] == "Renamed Project"
+
+    get = client.get(f"/api/projects/{project_id}")
+    assert get.json()["name"] == "Renamed Project"
+
+
+def test_update_project_omits_tokens_in_response() -> None:
+    """PUT response must never include token fields."""
+    create = client.post("/api/projects", json=_unique_payload())
+    project_id = create.json()["id"]
+    put = client.put(f"/api/projects/{project_id}", json={"name": "X"})
+    data = put.json()
+    for token_field in TOKEN_FIELD_NAMES:
+        assert token_field not in data
+
+
+def test_update_project_reencrypts_supplied_token() -> None:
+    """Supplying a new jira_token re-encrypts it; omitted tokens stay unchanged."""
+    payload = _unique_payload()
+    create = client.post("/api/projects", json=payload)
+    project_id = create.json()["id"]
+
+    from models.project import Project
+    db = TestingSession()
+    try:
+        before = db.get(Project, project_id).jira_token
+    finally:
+        db.close()
+
+    put = client.put(f"/api/projects/{project_id}", json={"jira_token": "new-secret"})
+    assert put.status_code == 200, put.text
+
+    db = TestingSession()
+    try:
+        row = db.get(Project, project_id)
+        assert row.jira_token != before, "jira_token should change when supplied"
+        assert row.jira_token.startswith("gAAAAA"), "must be Fernet ciphertext"
+        assert "new-secret" not in row.jira_token, "must not store plaintext"
+        # github_token was not supplied — must be untouched ciphertext
+        assert row.github_token.startswith("gAAAAA")
+    finally:
+        db.close()
+
+
+def test_update_project_not_found_returns_404() -> None:
+    """PUT to a non-existent id returns 404."""
+    resp = client.put("/api/projects/999999", json={"name": "Nope"})
+    assert resp.status_code == 404, resp.text
+
+
+def test_update_project_duplicate_key_returns_409() -> None:
+    """Changing project_key to one already used by another project returns 409."""
+    first = client.post("/api/projects", json=_unique_payload())
+    first_key = first.json()["project_key"]
+    second = client.post("/api/projects", json=_unique_payload())
+    second_id = second.json()["id"]
+
+    resp = client.put(f"/api/projects/{second_id}", json={"project_key": first_key})
+    assert resp.status_code == 409, resp.text
+
+
+def test_delete_project_returns_204_then_404() -> None:
+    """DELETE returns 204 and the project is gone afterward."""
+    create = client.post("/api/projects", json=_unique_payload())
+    project_id = create.json()["id"]
+
+    delete = client.delete(f"/api/projects/{project_id}")
+    assert delete.status_code == 204, delete.text
+
+    get = client.get(f"/api/projects/{project_id}")
+    assert get.status_code == 404
+
+
+def test_delete_project_not_found_returns_404() -> None:
+    """DELETE on a non-existent id returns 404."""
+    resp = client.delete("/api/projects/999999")
+    assert resp.status_code == 404, resp.text
+
+
+def test_delete_project_removes_pipeline_states() -> None:
+    """DELETE also clears the project's pipeline_states (no orphan rows)."""
+    from models.pipeline_state import PipelineState
+
+    create = client.post("/api/projects", json=_unique_payload())
+    project_id = create.json()["id"]  # onboarding scan creates a PipelineState row
+
+    client.delete(f"/api/projects/{project_id}")
+
+    db = TestingSession()
+    try:
+        remaining = (
+            db.query(PipelineState)
+            .filter(PipelineState.project_id == project_id)
+            .count()
+        )
+        assert remaining == 0, "pipeline_states should be removed with the project"
+    finally:
+        db.close()

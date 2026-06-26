@@ -43,6 +43,7 @@ from services.hermes_client import (
 from services.pr_creator import find_and_merge_pr
 from services.qa_pipeline import has_active_qa_run
 from services.qa_pipeline import run as run_qa_pipeline
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,17 @@ async def run(
         state_row.draft_content = comment_text
         db.commit()
 
+        # Ticket-tracking bookkeeping (best-effort).
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="merge",
+            current_status="PR merged",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "merge", "PR merged", status="success",
+            result_url=merge_result.pr_url,
+            detail=f"Merge commit SHA: {merge_result.sha}",
+        )
+
         # Step 8: QA auto-chain (QATRIG-01). Fire-and-forget — never delays the
         # merge confirmation comment or turns a successful merge into a failure.
         # T-26-05: scheduling errors are caught and logged only.
@@ -253,6 +265,15 @@ async def run(
             db.commit()
         except Exception:
             db.rollback()
+
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="merge",
+            current_status="Merge pipeline failed",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "merge", "Merge pipeline failed",
+            status="failed", detail=str(exc),
+        )
 
         # WR-02 fix: Do not interpolate the exception message into the Jira
         # comment. The raw exception string may contain internal URLs, stack

@@ -55,6 +55,7 @@ from services.code_generator import FileChange
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
 from services.test_generator import generate_e2e_tests, generate_unit_tests
+from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +204,15 @@ async def run(
     # T-23-04: Commit qa_attempt=0 BEFORE any execution begins.
     state_row.qa_attempt = 0
     db.commit()
+
+    # Ticket-tracking bookkeeping (best-effort).
+    safe_upsert_ticket_status(
+        db, project.id, issue_key, pipeline_stage="qa",
+        current_status="QA pipeline started",
+    )
+    safe_record_transaction(
+        db, project.id, issue_key, "qa", "QA pipeline started", status="in_progress"
+    )
 
     cloned = None
     # Bug fix (post-execution review): jira_token/jira_email must be bound
@@ -443,12 +453,29 @@ async def run(
         state_row.draft_content = comment_text
         db.commit()
 
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="qa",
+            current_status="QA pipeline completed",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "qa", "QA pipeline completed",
+            status="success", result_url=autofix_pr_url or None,
+        )
+
     except Exception as exc:
         state_row.status = "failed"
         try:
             db.commit()
         except Exception:
             db.rollback()
+        safe_upsert_ticket_status(
+            db, project.id, issue_key, pipeline_stage="qa",
+            current_status="QA pipeline failed",
+        )
+        safe_record_transaction(
+            db, project.id, issue_key, "qa", "QA pipeline failed",
+            status="failed", detail=str(exc),
+        )
         logger.exception("QA pipeline failed for ticket %s: %s", issue_key, exc)
         comment_text = (
             f"QA pipeline failed for {issue_key}. "

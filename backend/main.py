@@ -10,8 +10,11 @@ from fastapi.responses import JSONResponse
 from database import init_db
 import models.ticket_status  # noqa: F401 — registers TicketStatus table with Base.metadata
 import models.pipeline_state  # noqa: F401 — registers PipelineState table with Base.metadata
+import models.stage_transaction  # noqa: F401 — registers StageTransaction table with Base.metadata
+from routers.auth import router as auth_router
 from routers.dashboard import router as dashboard_router
 from routers.projects import router as projects_router
+from routers.tickets import router as tickets_router
 from routers.webhook import router as webhook_router
 
 logging.basicConfig(
@@ -71,8 +74,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
+app.include_router(auth_router, prefix="/api", tags=["auth"])
 app.include_router(projects_router, prefix="/api", tags=["projects"])
 app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
+app.include_router(tickets_router, prefix="/api", tags=["tickets"])
 
 
 @app.on_event("startup")
