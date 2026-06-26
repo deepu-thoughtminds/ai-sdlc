@@ -18,6 +18,8 @@ Phases 18-21 (milestone v1.6) give every pipeline stage accurate, real codebase 
 
 Phases 23-26 (milestone v1.8) add the Autonomous QA Stage. Phase 23 builds the sandboxed execution foundation — `test_executor.py`, a dedicated `qa-sandbox` Docker image, toolchain auto-detection, and `PipelineState.qa_attempt` tracking — establishing the right architectural boundary (LLM generates files; orchestrator runs them) before any test generation exists. Phase 24 adds LLM-driven unit test generation via freellmapi, reusing the `### FILE:` output convention, executing generated tests in the sandbox, and posting the first QA result to Jira. Phase 25 implements the bounded auto-fix loop: up to 3 freellmapi-driven fix attempts with non-progress detection, context-refreshed prompts per iteration, and fix commits raised as PRs via `pr_creator.py` — never pushed directly to main. Phase 26 wires everything together: Playwright E2E test generation with graceful skip when no `playwright.config.*` exists, auto-chain from `merge_pipeline.py` post-merge, `@jarvis run qa` comment trigger, and a shared idempotency guard covering both trigger paths.
 
+Phases 27-28 (milestone v1.9) add Playwright E2E Live Testing. Phase 27 builds the new `app_container.py` service that detects the target app's serve command, spins up an ephemeral Node.js container on the compose network, polls until HTTP 200, and guarantees teardown. Phase 28 wires the live container URL into `qa_pipeline.py` as the authoritative `BASE_URL` for the Playwright generator, gates generation on the health-check result, handles graceful skip when the app cannot be served, and threads the live URL through to test execution and the Confluence/Jira QA report.
+
 ## Phases
 
 **Phase Numbering:**
@@ -59,6 +61,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 24: Test Generation** - test_generator.py generates pytest unit tests via freellmapi using cloned repo context + codebase.md, writes tests to workspace, executes via sandbox, posts first QA result to Jira (completed 2026-06-24)
 - [x] **Phase 25: Bounded Auto-Fix Loop** - auto_fix_loop.py with 3-attempt iteration cap, non-progress detection (same-error termination), incremental context refresh per iteration, fix commits raised as PRs via pr_creator.py (completed 2026-06-24)
 - [x] **Phase 26: E2E + Trigger Wiring** - Playwright E2E test generation with graceful skip when no playwright.config.* exists, auto-chain from merge_pipeline.py, @jarvis run qa comment trigger, shared idempotency guard for both trigger paths (completed 2026-06-24)
+
+## Milestone v1.9: Playwright E2E Live Testing
+
+- [x] **Phase 27: App Container Service** - app_container.py: detect serve command from package.json, spin up ephemeral Node.js Docker container on compose network, health-check polling until HTTP 200, guaranteed teardown in finally block (completed 2026-06-26)
+- [ ] **Phase 28: QA Pipeline Integration** - Wire live container URL as BASE_URL into qa_pipeline.py, gate playwright generator on health-check, graceful skip on serve failure, thread live URL through test execution and Confluence/Jira QA report
 
 ## Phase Details
 
@@ -617,6 +624,7 @@ Plans:
 
 **Plans**: 1 plan
 Plans:
+
 - [ ] 25-01-PLAN.md — auto_fix_loop.py (TDD RED + GREEN), llm_router "autofix" stage, qa_pipeline integration
 
 ### Phase 26: E2E + Trigger Wiring
@@ -635,16 +643,53 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
+
 - [ ] 26-01-PLAN.md — Playwright E2E generation/execution (TESTGEN-03) + shared has_active_qa_run() guard
 - [ ] 26-02-PLAN.md — Auto-chain post-merge trigger + @jarvis run qa comment trigger (QATRIG-01/02/03)
+
 **UI hint**: no
 
 ---
 
+## Milestone v1.9: Playwright E2E Live Testing
+
+### Phase 27: App Container Service
+
+**Goal**: The QA pipeline can reliably start the target app in an isolated container, confirm it is reachable, and always clean up — before any test generation touches the live URL
+**Depends on**: Phase 26
+**Milestone**: v1.9 — playwright-e2e-live-testing
+**Requirements**: SERVE-01, SERVE-02, SERVE-03, SERVE-04
+**Success Criteria** (what must be TRUE):
+
+  1. Given a cloned repo with a `package.json`, `app_container.py` reads the scripts block and selects `preview` over `start` over `dev` — the chosen command is logged and traceable
+  2. A Docker container built from a Node.js base image starts, joins the compose network (`ai-sdlc-net`), and serves the app on a dynamically allocated host port — no port conflicts with existing services
+  3. `GET /` polled against the container URL returns HTTP 200 before `app_container.py` returns the live URL to the caller; if polling does not succeed within the timeout, a `ContainerStartError` is raised
+  4. The container is removed in a `finally` block: teardown runs on success, test failure, timeout, and unexpected exception — `docker ps` shows no orphaned app containers after a QA run
+
+**Plans**: 1/1 plans complete
+
+- [x] 27-01-PLAN.md — Create `app_container.py` (detect serve command, start ephemeral container on compose network, health-check, guaranteed teardown) + tests
+
+### Phase 28: QA Pipeline Integration
+
+**Goal**: The QA pipeline uses the live app URL as the authoritative `BASE_URL` for Playwright test generation and execution, skips E2E gracefully when the app cannot be served, and surfaces E2E results in both the Confluence report and the Jira comment
+**Depends on**: Phase 27
+**Milestone**: v1.9 — playwright-e2e-live-testing
+**Requirements**: PWGEN-01, PWGEN-02, PWGEN-03, EXEC-01, EXEC-02
+**Success Criteria** (what must be TRUE):
+
+  1. The Playwright generator receives the live container URL (e.g. `http://localhost:49173`) as `BASE_URL` — no hardcoded `http://frontend:3000` appears anywhere in the generated test files
+  2. Playwright test generation is only invoked after `app_container.py` returns a confirmed HTTP 200 URL; a container that starts but never responds does not trigger test generation
+  3. When the target app cannot be served (unsupported framework, build error, health-check timeout), the QA pipeline posts a skip note to the Jira comment, unit tests and static analysis results are still reported, and the pipeline exits without an unhandled exception
+  4. Playwright tests execute against the live container URL and produce a structured result (pass count, fail count, error details) visible in both the Confluence QA report page and the Jira comment
+
+**Plans**: TBD
+**UI hint**: no
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -674,3 +719,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 24. Test Generation | 1/1 | Complete    | 2026-06-24 |
 | 25. Bounded Auto-Fix Loop | 0/? | Not started | - |
 | 26. E2E + Trigger Wiring | 0/? | Not started | - |
+| 27. App Container Service | 1/1 | Complete   | 2026-06-26 |
+| 28. QA Pipeline Integration | 0/? | Not started | - |
