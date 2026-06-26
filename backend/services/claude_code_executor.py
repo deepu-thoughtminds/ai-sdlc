@@ -120,35 +120,49 @@ async def run_claude_playwright_generator(
         f"### {path}\n{content}" for path, content in relevant_file_contents.items()
     ) if relevant_file_contents else ""
 
+    issue_slug = issue_key.lower().replace("-", "_")
+    target_file = f"tests/playwright/test_{issue_slug}.py"
+    frontend_url = os.environ.get("PLAYWRIGHT_BASE_URL", "http://frontend:3000")
+
     prompt = (
-        "You are a QA engineer writing Python Playwright evaluation tests for "
-        f"Jira story {issue_key}: {issue_summary}\n\n"
+        f"YOUR ONLY JOB: Create the file `{target_file}` containing Python Playwright "
+        f"tests for Jira story {issue_key}: {issue_summary}\n\n"
         f"Description:\n{issue_description}\n\n"
-        + (f"Codebase context:\n{codebase_context[:6000]}\n\n" if codebase_context else "")
-        + (f"Relevant source files:\n{file_blocks[:8000]}\n\n" if file_blocks else "")
-        + "Write Python Playwright tests (pytest-playwright) that evaluate whether the "
-        "story's changes work correctly from a user perspective.\n\n"
-        "RULES:\n"
-        "- Use Python + pytest-playwright: `from playwright.sync_api import Page, expect`\n"
-        "- Tests run with: pytest tests/playwright/ --browser chromium\n"
-        "- Use os.environ.get('BASE_URL', 'http://localhost:3000') for the app URL\n"
-        "- Each test function must start with test_\n"
-        "- Write test files to tests/playwright/test_<slug>.py using the Write tool\n"
-        "- Do NOT modify any source files — only write files under tests/playwright/\n"
-        "- Write at least one test that exercises the main acceptance criterion\n"
+        + (f"Codebase context:\n{codebase_context[:4000]}\n\n" if codebase_context else "")
+        + (f"Relevant source files:\n{file_blocks[:6000]}\n\n" if file_blocks else "")
+        + "MANDATORY STEPS — do these in order, nothing else:\n"
+        f"1. Run: mkdir -p tests/playwright\n"
+        f"2. Write the file `{target_file}` using the Write tool.\n"
+        "   The file must contain at least one pytest function (name starts with test_).\n\n"
+        "FILE TEMPLATE to use as a starting point:\n"
+        "```python\n"
+        "import os\n"
+        "import pytest\n"
+        "from playwright.sync_api import Page, expect\n\n"
+        f"BASE_URL = os.environ.get('BASE_URL', '{frontend_url}')\n\n"
+        f"def test_{issue_slug}_acceptance(page: Page):\n"
+        "    page.goto(BASE_URL)\n"
+        "    # TODO: add assertions based on the story acceptance criteria\n"
+        "    expect(page).to_have_url(BASE_URL + '/')\n"
+        "```\n\n"
+        "HARD CONSTRAINTS:\n"
+        f"- Write ONLY to `{target_file}`. Do NOT touch any other file.\n"
+        "- Use Python + pytest-playwright ONLY (not TypeScript, not Jest).\n"
+        "- Do NOT modify any existing files in the repo.\n"
+        f"- Do NOT skip step 1 (mkdir) or step 2 (Write `{target_file}`).\n"
     )
 
     options = ClaudeAgentOptions(
         cwd=workspace_path,
         permission_mode="acceptEdits",
-        max_turns=15,
+        max_turns=10,
         model="sonnet",
         env={
             "ANTHROPIC_BASE_URL": "http://litellm:4000",
             "ANTHROPIC_AUTH_TOKEN": os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local"),
             "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
         },
-        allowed_tools=["Read", "Write", "Glob", "Grep"],
+        allowed_tools=["Bash", "Write"],
     )
 
     logger.info("Running Claude Playwright generator for ticket %s via LiteLLM proxy", issue_key)
@@ -156,9 +170,14 @@ async def run_claude_playwright_generator(
     async for _message in query(prompt=prompt, options=options):
         pass
 
-    # Collect only files written under tests/playwright/
+    # Collect only the specific target file the agent was instructed to write.
+    # Using git ls-files --others to find new untracked files (agent writes new files,
+    # not modifying existing ones).
     all_changes = _collect_file_changes(workspace_path)
-    pw_changes = [c for c in all_changes if c.path.startswith("tests/playwright/") and c.path.endswith(".py")]
+    pw_changes = [c for c in all_changes if c.path == target_file]
+    if not pw_changes:
+        # Fallback: accept any .py file under tests/playwright/ in case agent used a different name
+        pw_changes = [c for c in all_changes if c.path.startswith("tests/playwright/") and c.path.endswith(".py")]
     if not pw_changes:
         logger.warning("Playwright generator produced no test files for ticket %s", issue_key)
     return pw_changes
