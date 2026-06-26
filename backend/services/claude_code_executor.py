@@ -155,7 +155,7 @@ async def run_claude_playwright_generator(
     options = ClaudeAgentOptions(
         cwd=workspace_path,
         permission_mode="acceptEdits",
-        max_turns=10,
+        max_turns=30,
         model="sonnet",
         env={
             "ANTHROPIC_BASE_URL": "http://litellm:4000",

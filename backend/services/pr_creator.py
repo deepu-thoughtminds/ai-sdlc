@@ -280,6 +280,30 @@ def apply_commit_push_and_open_pr(
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        # 422 = PR already exists for this branch — fetch and return it gracefully.
+        if exc.response.status_code == 422:
+            logger.info(
+                "PR already exists for %s in %s/%s — fetching existing PR",
+                branch_name, owner, repo,
+            )
+            try:
+                list_resp = httpx.get(
+                    f"{api_base}/repos/{owner}/{repo}/pulls",
+                    headers=headers,
+                    params={"head": f"{owner}:{branch_name}", "state": "open"},
+                    timeout=30.0,
+                )
+                list_resp.raise_for_status()
+                pulls = list_resp.json()
+                if pulls:
+                    existing = pulls[0]
+                    return PullRequest(
+                        html_url=existing["html_url"],
+                        number=existing["number"],
+                        branch=branch_name,
+                    )
+            except Exception as list_exc:
+                logger.warning("Could not fetch existing PR for %s: %s", branch_name, list_exc)
         # Log response body without leaking the token (it's in headers, not body)
         logger.warning(
             "GitHub create PR failed for %s/%s: HTTP %s — %s",
