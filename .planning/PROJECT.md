@@ -63,7 +63,10 @@ Team members trigger AI-powered SDLC automation directly from Jira comment histo
 
 ### Validated
 
-(None yet — ship to validate)
+- ✓ QA pipeline runs E2E tests against live ephemeral Docker container URL — Phase 28
+- ✓ Container torn down after test run; ephemeral per QA ticket — Phase 27
+- ✓ E2E header in Jira comment shows live URL when available — Phase 28
+- ✓ Container failure gracefully skips E2E, pipeline continues — Phase 28
 
 ### Active
 
@@ -134,4 +137,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-23 — milestone v1.8 (Autonomous QA Stage) started; v1.7 (Agentic Codegen) recorded as shipped*
+*Last updated: 2026-06-26 — milestone v1.9 (Playwright E2E Live Testing) complete; Phase 28 wired managed_app_container into QA pipeline*
