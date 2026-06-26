@@ -65,7 +65,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Milestone v1.9: Playwright E2E Live Testing
 
 - [x] **Phase 27: App Container Service** - app_container.py: detect serve command from package.json, spin up ephemeral Node.js Docker container on compose network, health-check polling until HTTP 200, guaranteed teardown in finally block (completed 2026-06-26)
-- [ ] **Phase 28: QA Pipeline Integration** - Wire live container URL as BASE_URL into qa_pipeline.py, gate playwright generator on health-check, graceful skip on serve failure, thread live URL through test execution and Confluence/Jira QA report
+- [x] **Phase 28: QA Pipeline Integration** - Wire live container URL as BASE_URL into qa_pipeline.py, gate playwright generator on health-check, graceful skip on serve failure, thread live URL through test execution and Confluence/Jira QA report (completed 2026-06-26)
 
 ## Phase Details
 
@@ -683,7 +683,10 @@ Plans:
   3. When the target app cannot be served (unsupported framework, build error, health-check timeout), the QA pipeline posts a skip note to the Jira comment, unit tests and static analysis results are still reported, and the pipeline exits without an unhandled exception
   4. Playwright tests execute against the live container URL and produce a structured result (pass count, fail count, error details) visible in both the Confluence QA report page and the Jira comment
 
-**Plans**: TBD
+**Plans**: 1/1 plans complete
+
+- [x] 28-01-PLAN.md
+
 **UI hint**: no
 
 ## Progress
@@ -720,4 +723,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 25. Bounded Auto-Fix Loop | 0/? | Not started | - |
 | 26. E2E + Trigger Wiring | 0/? | Not started | - |
 | 27. App Container Service | 1/1 | Complete    | 2026-06-26 |
-| 28. QA Pipeline Integration | 0/? | Not started | - |
+| 28. QA Pipeline Integration | 1/1 | Complete   | 2026-06-26 |
