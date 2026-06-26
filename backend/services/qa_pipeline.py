@@ -385,49 +385,43 @@ async def run(
 
         # Step 4e — Python Playwright evaluation via Claude Code CLI.
         playwright_py_results: list[TestResult] = []
-        pw_py_file_changes = run_claude_playwright_generator(
+        pw_py_file_changes = await run_claude_playwright_generator(
             workspace_path=cloned.workspace_path,
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
-            architecture_content="",
             codebase_context=codebase_context,
             relevant_file_contents=relevant_file_contents,
         )
+        # Agent wrote files directly; validate path then execute each.
         for change in pw_py_file_changes:
             try:
                 resolved = (workspace_root / change.path).resolve()
                 if not str(resolved).startswith(str(workspace_root) + "/"):
                     raise ValueError(
-                        f"Playwright FileChange path escapes workspace: '{change.path}' "
-                        f"resolves to '{resolved}'"
+                        f"Playwright path escapes workspace: '{change.path}' → '{resolved}'"
                     )
-                resolved.parent.mkdir(parents=True, exist_ok=True)
-                resolved.write_text(change.content, encoding="utf-8")
-                logger.info("Wrote Python Playwright test file: %s", change.path)
-
-                image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
-                cmd = ToolchainCommand(
-                    name=f"playwright-py:{change.path}",
-                    command=[
-                        "docker", "run", "--rm",
-                        "-v", f"{cloned.workspace_path}:/workspace",
-                        image,
-                        "python", "-m", "pytest", f"/workspace/{change.path}",
-                        "--browser", "chromium", "--tb=short", "-q",
-                    ],
-                )
-                result = run_command(cmd)
-                playwright_py_results.append(result)
-                logger.info(
-                    "Python Playwright test %s exit=%d timed_out=%s",
-                    change.path,
-                    result.returncode,
-                    result.timed_out,
-                )
             except ValueError as ve:
-                logger.warning("Skipping Playwright file due to path-traversal violation: %s", ve)
+                logger.warning("Skipping Playwright file (path-traversal): %s", ve)
                 continue
+
+            image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+            cmd = ToolchainCommand(
+                name=f"playwright-py:{change.path}",
+                command=[
+                    "docker", "run", "--rm",
+                    "-v", f"{cloned.workspace_path}:/workspace",
+                    image,
+                    "python", "-m", "pytest", f"/workspace/{change.path}",
+                    "--browser", "chromium", "--tb=short", "-q",
+                ],
+            )
+            result = run_command(cmd)
+            playwright_py_results.append(result)
+            logger.info(
+                "Python Playwright test %s exit=%d timed_out=%s",
+                change.path, result.returncode, result.timed_out,
+            )
 
         # Step 5 — Run static analysis tools via Docker subprocess.
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
