@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.9
 milestone_name: Playwright E2E Live Testing
-current_phase: 27
-status: executing
+current_phase: 28
+current_phase_name: qa-pipeline-integration
+status: verifying
 stopped_at: context exhaustion at 94% (2026-06-24)
-last_updated: "2026-06-26T09:33:43.565Z"
+last_updated: "2026-06-26T10:15:35.952Z"
 last_activity: 2026-06-26
-last_activity_desc: Phase 27 complete
+last_activity_desc: Phase 28 execution started
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
-current_phase_name: app-container-service
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: app-container-service
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 27 — app-container-service
+**Current focus:** Phase 28 — qa-pipeline-integration
 
 ## Current Position
 
-Phase: 27
-Plan: Not started
-Status: Executing Phase 27
-Last activity: 2026-06-26 — Phase 27 complete
+Phase: 28 (qa-pipeline-integration) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-06-26 — Phase 28 execution started
 
 ## Milestone History
 
@@ -99,6 +99,7 @@ Last activity: 2026-06-26 — Phase 27 complete
 | Phase 22 P01 | 25m | 3 tasks | 6 files |
 | Phase 23 P23-01 | 2min | 3 tasks | 4 files |
 | Phase 23 P23-02 | 15 | 2 tasks | 4 files |
+| Phase 28 P01 | 12min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,8 @@ Recent decisions affecting current work:
 - [v1.8 roadmap]: Playwright E2E generation gated on detecting playwright.config.* in cloned repo; skip note posted to Jira when absent — no scaffolding new E2E infra in v1.8 (TESTGEN-03, Phase 26)
 - [v1.8 roadmap]: Both trigger paths (auto-chain from merge_pipeline.py + @jarvis run qa comment) share a single scheduling helper with one idempotency check — mirrors existing architecture/merge_pr pattern (QATRIG-01, QATRIG-02, QATRIG-03, Phase 26)
 - [Phase ?]: qa_pipeline.run() pre-binds jira_token/jira_email before try block to avoid NameError in failure-comment path if decrypt_credential raises early
+- [Phase ?]: [Phase 28-01]: managed_app_container replaces PLAYWRIGHT_BASE_URL env-var in qa_pipeline Step 4d — health-check gated URL
+- [Phase ?]: [Phase 28-01]: compose_network factored to single call before outer try block in qa_pipeline.run()
 
 ### Pending Todos
 
@@ -224,7 +227,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-24T02:53:47.261Z
+Last session: 2026-06-26T10:15:31.306Z
 Stopped at: context exhaustion at 94% (2026-06-24)
 Resume file: None
 Next action: Run `/gsd-plan-phase 27` to plan Phase 27.
