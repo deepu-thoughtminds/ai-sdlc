@@ -31,7 +31,11 @@ RUN pip install --no-cache-dir \
     "ruff==0.4.7" \
     "mypy==1.10.0" \
     "bandit==1.7.9" \
-    "pytest==8.2.2"
+    "pytest==8.2.2" \
+    "pytest-playwright==0.5.1"
+
+# Install Playwright browsers (chromium only — sufficient for evaluation tests)
+RUN playwright install --with-deps chromium
 
 # Install JS/TS QA tools globally; yarn ships with node:20, add pnpm for pnpm repos
 RUN npm install -g \
