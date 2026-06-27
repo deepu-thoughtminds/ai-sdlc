@@ -27,7 +27,7 @@ class SonarQubeNotReadyError(RuntimeError):
     """SonarQube did not reach status=UP within the allowed timeout."""
 
 
-def wait_until_ready(base_url: str, timeout_secs: int = 120) -> None:
+def wait_until_ready(base_url: str, timeout_secs: int | None = None) -> None:
     """Poll /api/system/status until status=UP or deadline.
 
     Mirrors _wait_until_healthy() in app_container.py: compute a deadline,
@@ -35,13 +35,15 @@ def wait_until_ready(base_url: str, timeout_secs: int = 120) -> None:
 
     Args:
         base_url:     SonarQube base URL, e.g. "http://sonarqube:9000".
-        timeout_secs: Default overridden by SONAR_READY_TIMEOUT env var.
+        timeout_secs: Seconds to wait. When None (default), SONAR_READY_TIMEOUT
+                      env var is used, falling back to 120s. An explicitly
+                      supplied value is never overridden by the env var.
 
     Raises:
         SonarQubeNotReadyError: If UP is not reached within the timeout.
     """
-    # Allow operators and tests to shorten the deadline via env var.
-    timeout_secs = int(os.environ.get("SONAR_READY_TIMEOUT", str(timeout_secs)))
+    if timeout_secs is None:
+        timeout_secs = int(os.environ.get("SONAR_READY_TIMEOUT", "120"))
     deadline = time.monotonic() + timeout_secs
 
     while time.monotonic() < deadline:
