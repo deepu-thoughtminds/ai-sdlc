@@ -122,7 +122,12 @@ def bootstrap_token(base_url: str, admin_password: str | None = None) -> str:
         timeout=10.0,
     )
     gen.raise_for_status()
-    token = gen.json()["token"]
+    payload = gen.json()
+    token = payload.get("token")
+    if not token:
+        raise RuntimeError(
+            f"SonarQube token generate API returned unexpected payload: {payload}"
+        )
 
     os.environ["SONAR_TOKEN"] = token
     logger.info("SONAR_TOKEN bootstrapped and stored in env")
