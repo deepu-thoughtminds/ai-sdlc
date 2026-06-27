@@ -146,3 +146,36 @@ class TestCETaskPolling:
                 # timeout_secs=0 → deadline already past, loop exits immediately
                 status = _poll_ce_task("http://sonar:9000", "tid", "tok", 0)
         assert status == "TIMEOUT"
+
+
+# ---------------------------------------------------------------------------
+# _run_sonar_step — SonarQube not ready produces non-None TestResult (SCAN-04)
+# ---------------------------------------------------------------------------
+
+
+def test_run_sonar_step_not_ready(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock as _MagicMock
+
+    # claude_agent_sdk is only present inside the Docker container; stub it so
+    # qa_pipeline can be imported in a plain dev environment.
+    if "claude_agent_sdk" not in sys.modules:
+        _stub = _MagicMock()
+        sys.modules["claude_agent_sdk"] = _stub
+
+    from services.sonar_client import SonarQubeNotReadyError
+    from services.qa_pipeline import _run_sonar_step
+
+    monkeypatch.setenv("SONAR_URL", "http://sonar:9000")
+
+    cloned = MagicMock()
+    cloned.workspace_path = "/tmp/ws"
+    cloned.owner = "acme"
+    cloned.repo = "app"
+
+    with patch("services.qa_pipeline.ensure_sonarqube_ready", side_effect=SonarQubeNotReadyError("not ready")):
+        result = _run_sonar_step(cloned, "net", "PROJ-1")
+
+    assert result is not None
+    assert result.returncode != 0
+    assert "not ready" in result.stderr

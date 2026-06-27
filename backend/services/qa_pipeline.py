@@ -200,16 +200,25 @@ def _collect_relevant_files(workspace_path: str) -> dict[str, str]:
 def _run_sonar_step(cloned, compose_network: str, issue_key: str) -> "TestResult | None":
     """Execute sonar-scanner + CE task poll. SCAN-01..04.
 
-    Returns None if SONAR_URL/SONAR_TOKEN not set. Never raises.
+    Returns None if SONAR_URL not set. Never raises.
     """
     sonar_url = os.environ.get("SONAR_URL")
-    sonar_token = os.environ.get("SONAR_TOKEN")
-    if not sonar_url or not sonar_token:
-        logger.info("SONAR_URL or SONAR_TOKEN not set — skipping sonar scan for %s", issue_key)
+    if not sonar_url:
+        logger.info("SONAR_URL not set — skipping sonar scan for %s", issue_key)
         return None
     project_key = f"{cloned.owner}__{cloned.repo}"
     timeout_secs = int(os.environ.get("SONAR_TIMEOUT_SECONDS", "300"))
     try:
+        ensure_sonarqube_ready()  # bootstraps SONAR_TOKEN; raises SonarQubeNotReadyError if down
+        sonar_token = os.environ.get("SONAR_TOKEN")
+        if not sonar_token:
+            return TestResult(
+                tool="sonar-scanner",
+                returncode=1,
+                stdout="",
+                stderr="SONAR_TOKEN not available after SonarQube bootstrap",
+                timed_out=False,
+            )
         return run_sonar_scan(
             workspace_path=cloned.workspace_path,
             project_key=project_key,
@@ -330,10 +339,6 @@ async def run(
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
         jira_token = decrypt_credential(project.jira_token)
-
-        # SONAR-02 + SONAR-03: ensure SonarQube is up and token bootstrapped.
-        # No-op when SONAR_URL env var is not set (SonarQube not in stack).
-        ensure_sonarqube_ready()
 
         # Step 4 — Clone a fresh workspace (TESTEXEC-02: never reuse dev workspace).
         cloned = clone_repository(github_repo, github_token)
