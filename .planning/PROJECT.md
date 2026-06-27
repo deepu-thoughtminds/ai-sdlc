@@ -124,6 +124,8 @@ Team members trigger AI-powered SDLC automation directly from Jira comment histo
 | Next.js + FastAPI stack | Next.js for rich dashboard UI; FastAPI for async webhook handling and agent orchestration | ✓ Good — stable through v1.9 |
 | app_container uses network-internal URL as BASE_URL | Playwright containers run as siblings on ai-sdlc-net; internal URL reachable by docker DNS | ✓ Good — host port used only for debug |
 | E2E generation gated on SERVE-03 health-check (not URL presence) | Prevents test generation against an unresponsive server; avoids flaky tests | ✓ Good — validated in UAT 4/4 |
+| TYPE_CHECKING guard for SonarMetrics import in confluence_client.py | Avoids circular import (sonar_scanner → test_executor, confluence_client → hermes_client) with zero runtime cost | ✓ Good — confirmed in Phase 31 |
+| dashboard_url constructed from env var SONAR_URL + project_key (not API response) | Prevents external data injection into rendered HTML URLs (T-31-02) | ✓ Good — Phase 31 |
 
 ## Evolution
 
@@ -143,4 +145,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-26 after v1.9 milestone — Playwright E2E Live Testing shipped*
+*Last updated: 2026-06-27 after Phase 31 — v2.0 SonarQube QA Integration complete*
