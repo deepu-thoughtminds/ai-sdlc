@@ -667,7 +667,7 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
 
 - [x] **Phase 29: SonarQube Service Setup** - SonarQube Community Edition on ai-sdlc-net: Docker Compose service, UP health-check readiness poll, bootstrapped admin token on first start (completed 2026-06-27)
 - [x] **Phase 30: Scanner Integration** - sonar-scanner QA pipeline step with per-repo project key, CE task API polling, and graceful pipeline continuation on scan failure or timeout (completed 2026-06-27)
-- [ ] **Phase 31: Confluence Report Section** - SonarQube section appended to existing Confluence QA page: quality gate, metrics table, deep link, and graceful unavailability note
+- [x] **Phase 31: Confluence Report Section** - SonarQube section appended to existing Confluence QA page: quality gate, metrics table, deep link, and graceful unavailability note (completed 2026-06-27)
 
 ## Milestone v2.0: SonarQube QA Integration — Phase Details
 
@@ -721,10 +721,11 @@ Plans:
   2. The SonarQube section displays: quality gate status (PASSED/FAILED), bug count, vulnerability count, code smell count, coverage percentage, duplications percentage, and a hyperlink that opens the SonarQube project dashboard directly
   3. When the scan was skipped or failed, the Confluence page shows "SonarQube scan unavailable" in the SonarQube section rather than an empty block or a rendering error
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans complete
 
 Plans:
-- [ ] 31-01-PLAN.md — SonarMetrics fetch, Confluence section rendering, pipeline wiring
+
+- [x] 31-01-PLAN.md — SonarMetrics fetch, Confluence section rendering, pipeline wiring
 
 ## Progress
 
@@ -763,4 +764,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 28. QA Pipeline Integration | 1/1 | ✅ Complete (v1.9) | 2026-06-26 |
 | 29. SonarQube Service Setup | 2/2 | Complete    | 2026-06-27 |
 | 30. Scanner Integration | 2/2 | Complete   | 2026-06-27 |
-| 31. Confluence Report Section | 0/? | Not started | - |
+| 31. Confluence Report Section | 1/1 | Complete    | 2026-06-27 |
