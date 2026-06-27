@@ -65,6 +65,7 @@ from services.code_generator import FileChange
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
 from services.app_container import ContainerStartError, managed_app_container
+from services.sonar_client import ensure_sonarqube_ready
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
@@ -295,6 +296,10 @@ async def run(
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
         jira_token = decrypt_credential(project.jira_token)
+
+        # SONAR-02 + SONAR-03: ensure SonarQube is up and token bootstrapped.
+        # No-op when SONAR_URL env var is not set (SonarQube not in stack).
+        ensure_sonarqube_ready()
 
         # Step 4 — Clone a fresh workspace (TESTEXEC-02: never reuse dev workspace).
         cloned = clone_repository(github_repo, github_token)
