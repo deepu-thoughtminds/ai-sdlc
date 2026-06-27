@@ -65,12 +65,14 @@ class TestWaitUntilReady:
 
     def test_wait_raises_on_timeout(self, monkeypatch):
         """Raises SonarQubeNotReadyError when status never reaches UP."""
-        # Short timeout so test finishes fast; also override env var
-        monkeypatch.setenv("SONAR_READY_TIMEOUT", "1")
-        with patch("httpx.get", return_value=_mock_response(json_data={"status": "STARTING"})), \
+        monkeypatch.delenv("SONAR_READY_TIMEOUT", raising=False)
+        # Patch monotonic: 0.0 (deadline set), 0.0 (first loop check), 200.0 (past deadline)
+        _times = iter([0.0, 0.0, 200.0])
+        with patch("services.sonar_client.time.monotonic", side_effect=_times), \
+             patch("httpx.get", return_value=_mock_response(json_data={"status": "STARTING"})), \
              patch("time.sleep"):
             with pytest.raises(SonarQubeNotReadyError, match="did not reach UP"):
-                wait_until_ready("http://localhost:9000", timeout_secs=1)
+                wait_until_ready("http://localhost:9000", timeout_secs=10)
 
     def test_wait_swallows_request_error(self, monkeypatch):
         """Swallows httpx.RequestError on first call, returns on next UP response."""
