@@ -91,7 +91,11 @@ def bootstrap_token(base_url: str, admin_password: str | None = None) -> str:
         logger.info("SONAR_TOKEN already set in env — reusing")
         return existing
 
-    password = admin_password or os.environ.get("SONAR_ADMIN_PASSWORD", "admin")
+    password = admin_password or os.environ.get("SONAR_ADMIN_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "SONAR_ADMIN_PASSWORD env var must be set to bootstrap the SonarQube scanner token"
+        )
     auth = ("admin", password)
 
     # Search for an existing token by name.
