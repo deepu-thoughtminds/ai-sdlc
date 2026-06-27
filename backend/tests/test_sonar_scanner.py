@@ -1,4 +1,4 @@
-"""Unit tests for services.sonar_scanner — SCAN-01..04."""
+"""Unit tests for services.sonar_scanner — SCAN-01..04, REPORT-01..03."""
 
 import pathlib
 from unittest.mock import MagicMock, patch
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from services.sonar_scanner import _poll_ce_task, _read_ce_task_id, run_sonar_scan
+from services.sonar_scanner import _poll_ce_task, _read_ce_task_id, fetch_sonar_metrics, run_sonar_scan, SonarMetrics
 from services.test_executor import TestResult
 
 
@@ -179,3 +179,105 @@ def test_run_sonar_step_not_ready(monkeypatch):
     assert result is not None
     assert result.returncode != 0
     assert "not ready" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# fetch_sonar_metrics — REPORT-01..03
+# ---------------------------------------------------------------------------
+
+_HAPPY_MEASURES = [
+    {"metric": "alert_status", "value": "OK"},
+    {"metric": "bugs", "value": "3"},
+    {"metric": "vulnerabilities", "value": "1"},
+    {"metric": "code_smells", "value": "10"},
+    {"metric": "coverage", "value": "82.5"},
+    {"metric": "duplicated_lines_density", "value": "4.2"},
+]
+
+
+def _mock_sonar_response(measures=None, status_code=200, raise_on_status=False):
+    """Build a MagicMock mimicking an httpx.Response for SonarQube measures API."""
+    if measures is None:
+        measures = _HAPPY_MEASURES
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = {"component": {"measures": measures}}
+    if raise_on_status:
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=MagicMock()
+        )
+    else:
+        mock_resp.raise_for_status = MagicMock()
+    return mock_resp
+
+
+class TestFetchSonarMetrics:
+    def test_happy_path_returns_sonar_metrics(self):
+        """Valid measures JSON → SonarMetrics with correct field values."""
+        mock_resp = _mock_sonar_response()
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("myorg__myapp", "http://sonar:9000", "tok")
+
+        assert isinstance(result, SonarMetrics)
+        assert result.gate_status == "PASSED"
+        assert result.bugs == 3
+        assert result.vulnerabilities == 1
+        assert result.code_smells == 10
+        assert result.coverage == pytest.approx(82.5)
+        assert result.duplications == pytest.approx(4.2)
+        assert result.dashboard_url == "http://sonar:9000/dashboard?id=myorg__myapp"
+
+    def test_alert_status_error_maps_to_failed(self):
+        """alert_status ERROR in response → gate_status FAILED."""
+        measures = list(_HAPPY_MEASURES)
+        measures[0] = {"metric": "alert_status", "value": "ERROR"}
+        mock_resp = _mock_sonar_response(measures=measures)
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("org__repo", "http://sonar:9000", "tok")
+
+        assert result is not None
+        assert result.gate_status == "FAILED"
+
+    def test_coverage_absent_returns_none(self):
+        """Measures list missing 'coverage' metric → SonarMetrics.coverage is None."""
+        measures = [m for m in _HAPPY_MEASURES if m["metric"] != "coverage"]
+        mock_resp = _mock_sonar_response(measures=measures)
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("org__repo", "http://sonar:9000", "tok")
+
+        assert result is not None
+        assert result.coverage is None
+
+    def test_request_error_returns_none(self):
+        """httpx.RequestError raised → returns None, never raises."""
+        with patch("httpx.get", side_effect=httpx.RequestError("network down")):
+            result = fetch_sonar_metrics("org__repo", "http://sonar:9000", "tok")
+
+        assert result is None
+
+    def test_http_500_returns_none(self):
+        """HTTP 500 (raise_for_status raises) → returns None, never raises."""
+        mock_resp = _mock_sonar_response(raise_on_status=True)
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("org__repo", "http://sonar:9000", "tok")
+
+        assert result is None
+
+    def test_missing_component_key_returns_none(self):
+        """Response JSON without 'component' key → returns None, never raises."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"error": "not found"}
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("org__repo", "http://sonar:9000", "tok")
+
+        assert result is None
+
+    def test_dashboard_url_format(self):
+        """Dashboard URL uses {sonar_url}/dashboard?id={project_key} format."""
+        mock_resp = _mock_sonar_response()
+        with patch("httpx.get", return_value=mock_resp):
+            result = fetch_sonar_metrics("acme__myapp", "http://sonar:9000", "tok")
+
+        assert result is not None
+        assert result.dashboard_url == "http://sonar:9000/dashboard?id=acme__myapp"
