@@ -669,6 +669,13 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
 - [x] **Phase 30: Scanner Integration** - sonar-scanner QA pipeline step with per-repo project key, CE task API polling, and graceful pipeline continuation on scan failure or timeout (completed 2026-06-27)
 - [x] **Phase 31: Confluence Report Section** - SonarQube section appended to existing Confluence QA page: quality gate, metrics table, deep link, and graceful unavailability note (completed 2026-06-27)
 
+<details>
+<summary>✅ v2.0 SonarQube QA Integration (Phases 29–31) — SHIPPED 2026-06-27</summary>
+
+See full archive: .planning/milestones/v2.0-ROADMAP.md
+
+</details>
+
 ## Milestone v2.0: SonarQube QA Integration — Phase Details
 
 ### Phase 29: SonarQube Service Setup

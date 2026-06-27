@@ -1,6 +1,13 @@
 # AI-SDLC Jira
 
-## Current Milestone: v2.0 SonarQube QA Integration
+## Current State: v2.0 Shipped — Planning Next Milestone
+
+**Shipped:** v2.0 SonarQube QA Integration (2026-06-27)
+Every Jira-triggered QA run now produces a Confluence QA page with SonarQube quality metrics (gate status, bugs, vulns, smells, coverage, duplications, dashboard link). Pipeline degrades gracefully when SonarQube is unavailable.
+
+**Codebase state:** Python (FastAPI) backend + Next.js frontend + Docker Compose. Phases 1–31 complete. QA pipeline fully wired: unit tests → static analysis → sonar-scanner → Playwright E2E → Confluence report.
+
+## Previous Milestone: v2.0 SonarQube QA Integration
 
 **Goal:** Embed SonarQube static analysis into the QA pipeline so every Jira-triggered QA run produces a code quality report published to the Confluence QA page.
 
@@ -66,6 +73,10 @@ Team members trigger AI-powered SDLC automation directly from Jira comment histo
 
 ### Validated
 
+- ✓ Confluence QA page includes SonarQube section: gate status, bugs, vulns, smells, coverage, duplications, dashboard link — v2.0 Phase 31
+- ✓ sonar-scanner runs in QA pipeline after static analysis; CE task API polled until complete — v2.0 Phase 30
+- ✓ SonarQube CE runs persistently in Docker Compose with readiness polling and idempotent token bootstrap — v2.0 Phase 29
+- ✓ QA pipeline continues gracefully when SonarQube unavailable; Confluence shows fallback note — v2.0 Phase 30–31
 - ✓ QA pipeline runs E2E tests against live ephemeral Docker container URL — v1.9 Phase 28
 - ✓ Container torn down after test run; ephemeral per QA ticket — v1.9 Phase 27
 - ✓ E2E header in Jira comment shows live URL when available — v1.9 Phase 28
@@ -145,4 +156,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-27 after Phase 31 — v2.0 SonarQube QA Integration complete*
+*Last updated: 2026-06-27 after v2.0 milestone — SonarQube QA Integration shipped*

@@ -1,5 +1,21 @@
 # Milestones
 
+## v2.0 SonarQube QA Integration (Shipped: 2026-06-27)
+
+**Phases completed:** 3 phases (29–31), 5 plans, 9 tasks
+**Files changed:** ~8 | **Commits:** 9 | **Timeline:** 2026-06-27 (single day)
+**Known gaps at close:** SONAR-01..03 checkboxes stale in REQUIREMENTS.md (satisfied; Phases 29 and 31 used UAT.md instead of VERIFICATION.md)
+
+**Key accomplishments:**
+
+- Built `sonar_client.py` — `wait_until_ready()` polls SonarQube `/api/system/status`; `bootstrap_token()` idempotently provisions `jarvis-scanner` API token; `ensure_sonarqube_ready()` wired into QA pipeline (SONAR-01..03)
+- Added sonarqube:lts-community Docker Compose service on host port 9001 with 3 named volumes and 90s start_period healthcheck (SONAR-01)
+- Built `sonar_scanner.py` with `run_sonar_scan()` + `_poll_ce_task()` CE task polling; all failure paths return non-None `TestResult`; `_run_sonar_step` runs after static analysis, before Playwright E2E (SCAN-01..04)
+- `SonarMetrics` dataclass + `fetch_sonar_metrics()` retrieve quality gate/bugs/vulns/smells/coverage/duplications from SonarQube API; `_render_sonar_section()` renders HTML table in Confluence QA page with dashboard deep link (REPORT-01..03)
+- Graceful degradation: SonarQube down → scan skipped → Confluence shows "SonarQube scan unavailable" note; QA pipeline never aborted (SCAN-04, REPORT-03)
+
+---
+
 ## v1.9 Playwright E2E Live Testing (Shipped: 2026-06-26)
 
 **Phases completed:** 2 phases (27–28), 2 plans, 3 tasks
@@ -29,6 +45,7 @@
 | v1.7 | agentic-codegen | 22 | ✅ Shipped | 2026-06-23 |
 | v1.8 | autonomous-qa-stage | 23–26 | ✅ Shipped | 2026-06-24 |
 | v1.9 | playwright-e2e-live-testing | 27–28 | ✅ Shipped | 2026-06-26 |
+| v2.0 | sonarqube-qa-integration | 29–31 | ✅ Shipped | 2026-06-27 |
 
 ## v1.7 Summary — Agentic Codegen via LiteLLM + Claude Agent SDK
 
