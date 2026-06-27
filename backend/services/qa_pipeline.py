@@ -66,7 +66,7 @@ from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
 from services.app_container import ContainerStartError, managed_app_container
 from services.sonar_client import ensure_sonarqube_ready
-from services.sonar_scanner import run_sonar_scan
+from services.sonar_scanner import fetch_sonar_metrics, run_sonar_scan
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
@@ -326,6 +326,7 @@ async def run(
     static_results: list[TestResult] = []
     playwright_py_results: list[TestResult] = []
     sonar_result: TestResult | None = None
+    sonar_metrics = None
     autofix_pr_url: str | None = None
     npm_audit_fix_pr_url: str | None = None
     e2e_live_url: str | None = None
@@ -540,6 +541,15 @@ async def run(
         # Step 5.2 — SonarQube scan (SCAN-01..04).
         sonar_result = _run_sonar_step(cloned, compose_network, issue_key)
 
+        # Step 5.3 — Fetch SonarQube quality metrics if scan succeeded (REPORT-02).
+        # Read env vars again — cheap, avoids refactoring _run_sonar_step return type.
+        if sonar_result is not None and sonar_result.returncode == 0:
+            _sonar_url = os.environ.get("SONAR_URL", "")
+            _sonar_token = os.environ.get("SONAR_TOKEN", "")
+            if _sonar_url and _sonar_token:
+                _project_key = f"{cloned.owner}__{cloned.repo}"
+                sonar_metrics = fetch_sonar_metrics(_project_key, _sonar_url, _sonar_token)
+
         # Step 5.1 — npm audit auto-fix: if npm_audit failed, run `npm audit fix`
         # in Docker and open a PR with the updated lockfile.
         npm_audit_failed = any(
@@ -644,7 +654,9 @@ async def run(
             npm_audit_fix_pr_url=npm_audit_fix_pr_url,
             playwright_py_results=playwright_py_results,
         )
-        qa_page_url = await publish_qa_report(project, issue_key, comment_text, remediation_html)
+        qa_page_url = await publish_qa_report(
+            project, issue_key, comment_text, remediation_html, sonar_metrics=sonar_metrics
+        )
     except Exception as conf_exc:
         logger.warning(
             "QA pipeline: Confluence publish failed for %s: %s", issue_key, conf_exc
