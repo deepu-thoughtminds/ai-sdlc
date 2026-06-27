@@ -1,8 +1,16 @@
 # AI-SDLC Jira
 
-## Current State: v1.9 Shipped — Planning Next Milestone
+## Current Milestone: v2.0 SonarQube QA Integration
 
-**v1.9 Playwright E2E Live Testing — shipped 2026-06-26**
+**Goal:** Embed SonarQube static analysis into the QA pipeline so every Jira-triggered QA run produces a code quality report published to the Confluence QA page.
+
+**Target features:**
+- SonarQube Community Edition as a Docker Compose service (self-hosted)
+- QA pipeline step: run sonar-scanner against the cloned repo, wait for analysis to complete
+- Extract key metrics: bugs, vulnerabilities, code smells, coverage, quality gate pass/fail
+- SonarQube report section included in the Confluence QA page alongside existing test results
+
+## Previous Milestone: v1.9 Playwright E2E Live Testing (shipped 2026-06-26)
 
 The QA pipeline now spins up the target app in an ephemeral Docker container on the compose network, gates Playwright generation on a confirmed HTTP 200 health-check, and tears down the container on every exit path. E2E pass/fail results surface in the Confluence QA report and Jira comment.
 
