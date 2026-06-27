@@ -134,6 +134,26 @@ services:
     networks:
       - ai-sdlc-net
 
+  sonarqube:
+    image: sonarqube:community
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    ports:
+      - "9001:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    networks:
+      - ai-sdlc-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+
 networks:
   ai-sdlc-net:
     driver: bridge
@@ -141,3 +161,6 @@ networks:
 volumes:
   app_data:
   freellmapi_data:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:
