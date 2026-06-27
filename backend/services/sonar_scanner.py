@@ -4,12 +4,68 @@ import logging
 import os
 import pathlib
 import time
+from dataclasses import dataclass
 
 import httpx
 
 from services.test_executor import TestResult, ToolchainCommand, run_command
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SonarMetrics:
+    gate_status: str        # "PASSED" or "FAILED"
+    bugs: int
+    vulnerabilities: int
+    code_smells: int
+    coverage: float | None  # None when not measured (no tests)
+    duplications: float
+    dashboard_url: str
+
+
+def fetch_sonar_metrics(
+    project_key: str, sonar_url: str, token: str
+) -> "SonarMetrics | None":
+    """Fetch quality metrics from SonarQube measures API. Returns None on any failure.
+
+    Single GET to /api/measures/component with all required metricKeys.
+    Never raises — all exceptions are caught and logged as warnings.
+    Dashboard URL: {sonar_url}/dashboard?id={project_key}
+    """
+    metric_keys = "alert_status,bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density"
+    try:
+        r = httpx.get(
+            f"{sonar_url}/api/measures/component",
+            params={"component": project_key, "metricKeys": metric_keys},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        measures_list = r.json()["component"]["measures"]
+        # Build a lookup dict: metric name → value string
+        by_metric = {m["metric"]: m.get("value", "") for m in measures_list}
+
+        raw_status = by_metric.get("alert_status", "ERROR")
+        gate_status = "PASSED" if raw_status == "OK" else "FAILED"
+
+        coverage_raw = by_metric.get("coverage")
+        coverage = float(coverage_raw) if coverage_raw not in (None, "") else None
+
+        return SonarMetrics(
+            gate_status=gate_status,
+            bugs=int(by_metric.get("bugs", "0")),
+            vulnerabilities=int(by_metric.get("vulnerabilities", "0")),
+            code_smells=int(by_metric.get("code_smells", "0")),
+            coverage=coverage,
+            duplications=float(by_metric.get("duplicated_lines_density", "0")),
+            dashboard_url=f"{sonar_url}/dashboard?id={project_key}",
+        )
+    except Exception:
+        logger.warning(
+            "fetch_sonar_metrics failed for project_key=%s — returning None", project_key
+        )
+        return None
 
 _CE_POLL_INTERVAL = 5  # seconds between CE task polls
 
