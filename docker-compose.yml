@@ -137,7 +137,7 @@ services:
       - ai-sdlc-net
 
   sonarqube:
-    image: sonarqube:10.6-community
+    image: sonarqube:lts-community
     environment:
       - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
     ports:
