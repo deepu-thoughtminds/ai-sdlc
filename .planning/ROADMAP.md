@@ -701,7 +701,10 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
   3. The pipeline waits up to 300 seconds for SonarQube to mark the analysis task SUCCESS before proceeding; the timeout is configurable via environment variable
   4. When SonarQube is down, the scanner exits non-zero, or the CE task times out, the QA pipeline logs the failure, records a scan-unavailable result, and continues to the next step — the overall QA run is not aborted
 
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 30-01-PLAN.md — sonar-scanner module + CE task polling wired into QA pipeline (SCAN-01..04)
 
 ### Phase 31: Confluence Report Section
 
