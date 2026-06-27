@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SonarQube QA Integration
-current_phase: 29
-status: executing
-stopped_at: Phase 28 complete — milestone v1.9 (Playwright E2E Live Testing) 100% done, all 4 UAT tests passed.
-last_updated: "2026-06-27T03:38:58.388Z"
+current_phase: 30
+current_phase_name: scanner-integration
+status: verifying
+stopped_at: Phase 30 Plan 01 complete — sonar-scanner step integrated in QA pipeline
+last_updated: "2026-06-27T07:58:53.460Z"
 last_activity: 2026-06-27
-last_activity_desc: Phase 29 complete
+last_activity_desc: Phase 30 execution started
 progress:
-  total_phases: 6
-  completed_phases: 3
-  total_plans: 8
-  completed_plans: 4
-  percent: 50
-current_phase_name: sonarqube-service-setup
+  total_phases: 7
+  completed_phases: 4
+  total_plans: 9
+  completed_plans: 5
+  percent: 56
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: sonarqube-service-setup
 See: .planning/PROJECT.md (updated 2026-06-23)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Phase 29 — sonarqube-service-setup
+**Current focus:** Phase 30 — scanner-integration
 
 ## Current Position
 
-Phase: 29
-Plan: Not started
-Status: Executing Phase 29
-Last activity: 2026-06-27 — Phase 29 complete
+Phase: 30 (scanner-integration) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-06-27 — Phase 30 execution started
 
 ## Milestone History
 
@@ -52,7 +52,7 @@ Last activity: 2026-06-27 — Phase 29 complete
 
 **Velocity:**
 
-- Total plans completed: 30
+- Total plans completed: 32
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -102,6 +102,7 @@ Last activity: 2026-06-27 — Phase 29 complete
 | Phase 23 P23-01 | 2min | 3 tasks | 4 files |
 | Phase 23 P23-02 | 15 | 2 tasks | 4 files |
 | Phase 28 P01 | 12min | 3 tasks | 2 files |
+| Phase 30 P01 | 2 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -180,6 +181,7 @@ Recent decisions affecting current work:
 - [Phase ?]: qa_pipeline.run() pre-binds jira_token/jira_email before try block to avoid NameError in failure-comment path if decrypt_credential raises early
 - [Phase ?]: [Phase 28-01]: managed_app_container replaces PLAYWRIGHT_BASE_URL env-var in qa_pipeline Step 4d — health-check gated URL
 - [Phase ?]: [Phase 28-01]: compose_network factored to single call before outer try block in qa_pipeline.run()
+- [Phase ?]: [Phase 30-01]: sonar-scanner step at Step 5.2 in qa_pipeline.run() after run_static_analysis; isolated sonar_scanner.py module, all failure paths return TestResult, never raises
 
 ### Pending Todos
 
@@ -229,8 +231,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-26
-Stopped at: Phase 28 complete — milestone v1.9 (Playwright E2E Live Testing) 100% done, all 4 UAT tests passed.
+Last session: 2026-06-27T07:58:53.453Z
+Stopped at: Phase 30 Plan 01 complete — sonar-scanner step integrated in QA pipeline
 Resume file: None
 
 ## Operator Next Steps

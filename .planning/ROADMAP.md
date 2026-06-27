@@ -666,7 +666,7 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
 ## Milestone v2.0: SonarQube QA Integration
 
 - [x] **Phase 29: SonarQube Service Setup** - SonarQube Community Edition on ai-sdlc-net: Docker Compose service, UP health-check readiness poll, bootstrapped admin token on first start (completed 2026-06-27)
-- [ ] **Phase 30: Scanner Integration** - sonar-scanner QA pipeline step with per-repo project key, CE task API polling, and graceful pipeline continuation on scan failure or timeout
+- [x] **Phase 30: Scanner Integration** - sonar-scanner QA pipeline step with per-repo project key, CE task API polling, and graceful pipeline continuation on scan failure or timeout (completed 2026-06-27)
 - [ ] **Phase 31: Confluence Report Section** - SonarQube section appended to existing Confluence QA page: quality gate, metrics table, deep link, and graceful unavailability note
 
 ## Milestone v2.0: SonarQube QA Integration — Phase Details
@@ -701,10 +701,11 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
   3. The pipeline waits up to 300 seconds for SonarQube to mark the analysis task SUCCESS before proceeding; the timeout is configurable via environment variable
   4. When SonarQube is down, the scanner exits non-zero, or the CE task times out, the QA pipeline logs the failure, records a scan-unavailable result, and continues to the next step — the overall QA run is not aborted
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans complete
 
 Plans:
-- [ ] 30-01-PLAN.md — sonar-scanner module + CE task polling wired into QA pipeline (SCAN-01..04)
+
+- [x] 30-01-PLAN.md — sonar-scanner module + CE task polling wired into QA pipeline (SCAN-01..04)
 
 ### Phase 31: Confluence Report Section
 
@@ -756,5 +757,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 27. App Container Service | 1/1 | ✅ Complete (v1.9) | 2026-06-26 |
 | 28. QA Pipeline Integration | 1/1 | ✅ Complete (v1.9) | 2026-06-26 |
 | 29. SonarQube Service Setup | 2/2 | Complete    | 2026-06-27 |
-| 30. Scanner Integration | 0/? | Not started | - |
+| 30. Scanner Integration | 1/1 | Complete   | 2026-06-27 |
 | 31. Confluence Report Section | 0/? | Not started | - |
