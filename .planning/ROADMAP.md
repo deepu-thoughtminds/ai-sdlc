@@ -721,7 +721,10 @@ Plans:
   2. The SonarQube section displays: quality gate status (PASSED/FAILED), bug count, vulnerability count, code smell count, coverage percentage, duplications percentage, and a hyperlink that opens the SonarQube project dashboard directly
   3. When the scan was skipped or failed, the Confluence page shows "SonarQube scan unavailable" in the SonarQube section rather than an empty block or a rendering error
 
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 31-01-PLAN.md — SonarMetrics fetch, Confluence section rendering, pipeline wiring
 
 ## Progress
 
