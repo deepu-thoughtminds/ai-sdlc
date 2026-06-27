@@ -21,51 +21,18 @@ Threat mitigations:
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
 
-from database import Base
+from database import Doc
 
-
-class PipelineState(Base):
-    """ORM model for pipeline stage execution state.
-
-    Multiple rows per (project_id, ticket_key, stage) are permitted to track
-    separate pipeline runs. No unique constraint is imposed.
-    """
-
-    __tablename__ = "pipeline_states"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
-    )
-    ticket_key: Mapped[str] = mapped_column(String(100), nullable=False)
-    stage: Mapped[str] = mapped_column(String(50), nullable=False)
-    # status values: pending | processing | awaiting_approval | approved | failed
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
-    draft_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Added Phase 10 — requires DB recreation (docker compose down -v) upgrading prior schema
-    complexity: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    complexity_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Added Phase 23 — tracks QA fix-loop iteration count.
-    # None = ticket not yet in QA; 0 = first attempt started (set before execution).
-    # Incremented before each subsequent fix attempt. Requires DB recreation.
-    qa_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    __table_args__ = (
-        CheckConstraint(
-            "complexity IN ('small', 'complex') OR complexity IS NULL",
-            name="ck_pipeline_state_complexity",
-        ),
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+# Documents in the `pipeline_states` collection — machine state per pipeline run.
+# Multiple documents per (project_id, ticket_key, stage) are permitted (one per
+# run). CRUD/idempotency queries live in repositories/pipeline_state_repo.py.
+# `PipelineState` is a Doc alias kept for type-hint compatibility.
+# Fields: id, project_id, ticket_key, stage, status, draft_content, complexity,
+# complexity_rationale, qa_attempt, created_at, updated_at.
+# (complexity is one of 'small'|'complex'|None — formerly a CHECK constraint;
+# now enforced by complexity_classifier returning only those values.)
+PipelineState = Doc
 
 
 # ---------------------------------------------------------------------------

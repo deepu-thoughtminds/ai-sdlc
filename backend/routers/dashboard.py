@@ -12,15 +12,14 @@ Threat mitigations applied:
 """
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from pymongo.database import Database
 
-from database import get_db
+from database import Doc, get_db
 from models.project import Project
 from models.ticket_status import ProjectWithTickets, TicketStatus, TicketStatusCreate, TicketStatusPublic
+from repositories import projects_repo, ticket_status_repo
 from services.auth import get_current_user
 from services.crypto import decrypt_credential
 
@@ -30,24 +29,26 @@ logger = logging.getLogger("backend.dashboard")
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
-def _project_to_with_tickets(project: Project) -> ProjectWithTickets:
+def _project_to_with_tickets(
+    project: Project, ticket_statuses: list[Doc]
+) -> ProjectWithTickets:
     """Build a ProjectWithTickets response, decrypting github_repo from ciphertext.
 
     Constructs the response manually to ensure github_repo is decrypted.
     Token fields (jira_token, github_token, confluence_token) are excluded per T-02-08.
     T-15-02: github_repo decrypted only here — never logged, never returned as ciphertext.
     """
-    ticket_statuses = [
+    statuses = [
         TicketStatusPublic(
             id=ts.id,
             ticket_key=ts.ticket_key,
             pipeline_stage=ts.pipeline_stage,
-            summary=ts.summary,
-            issue_type=ts.issue_type,
-            current_status=ts.current_status,
+            summary=ts.get("summary"),
+            issue_type=ts.get("issue_type"),
+            current_status=ts.get("current_status"),
             updated_at=ts.updated_at,
         )
-        for ts in project.ticket_statuses
+        for ts in ticket_statuses
     ]
     return ProjectWithTickets(
         id=project.id,
@@ -57,23 +58,26 @@ def _project_to_with_tickets(project: Project) -> ProjectWithTickets:
         confluence_url=project.confluence_url,
         github_repo=decrypt_credential(project.github_repo),
         created_at=project.created_at,
-        ticket_statuses=ticket_statuses,
+        ticket_statuses=statuses,
     )
 
 
 @router.get("/dashboard/projects", response_model=list[ProjectWithTickets])
-def list_projects_with_tickets(db: Session = Depends(get_db)) -> list[ProjectWithTickets]:
+def list_projects_with_tickets(db: Database = Depends(get_db)) -> list[ProjectWithTickets]:
     """Return all projects with their nested ticket statuses.
 
-    Uses selectinload to eagerly load ticket_statuses in a single extra query,
-    avoiding N+1 queries when there are many projects.
+    Fetches each project's ticket_statuses from its collection (one query per
+    project). For the dev-scale dashboard this is fine; if project counts grow,
+    a single grouped aggregation can replace the per-project lookup.
 
     Threat T-02-08: Response schema ProjectWithTickets excludes all token fields.
     T-15-02: github_repo decrypted via _project_to_with_tickets before returning.
     """
-    stmt = select(Project).options(selectinload(Project.ticket_statuses))
-    projects = db.execute(stmt).scalars().all()
-    return [_project_to_with_tickets(p) for p in projects]
+    projects = projects_repo.list_all(db)
+    return [
+        _project_to_with_tickets(p, ticket_status_repo.list_for_project(db, p.id))
+        for p in projects
+    ]
 
 
 @router.post(
@@ -84,46 +88,24 @@ def list_projects_with_tickets(db: Session = Depends(get_db)) -> list[ProjectWit
 def upsert_ticket_status(
     project_id: int,
     body: TicketStatusCreate,
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> TicketStatus:
     """Create or update the pipeline stage for a ticket.
 
-    Upsert logic:
-      - If a TicketStatus row exists for (project_id, ticket_key): update pipeline_stage + updated_at
-      - If no row exists: create a new TicketStatus row
+    Upsert logic (repositories.ticket_status_repo.upsert):
+      - If a row exists for (project_id, ticket_key): update pipeline_stage + updated_at
+      - If no row exists: create a new row
 
     Threat T-02-09: TicketStatusCreate.@field_validator rejects invalid stages (FastAPI returns 422).
-    Threat T-02-10: 404 if project_id does not exist in the projects table.
+    Threat T-02-10: 404 if project_id does not exist in the projects collection.
     """
     # Verify project exists (T-02-10)
-    project = db.get(Project, project_id)
-    if project is None:
+    if projects_repo.get(db, project_id) is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
-    # Upsert: check for existing row
-    existing = db.execute(
-        select(TicketStatus).where(
-            TicketStatus.project_id == project_id,
-            TicketStatus.ticket_key == body.ticket_key,
-        )
-    ).scalars().first()
-
-    if existing is not None:
-        # Update existing row
-        existing.pipeline_stage = body.pipeline_stage
-        existing.updated_at = datetime.now(tz=timezone.utc)
-        ts = existing
-    else:
-        # Create new row
-        ts = TicketStatus(
-            project_id=project_id,
-            ticket_key=body.ticket_key,
-            pipeline_stage=body.pipeline_stage,
-        )
-        db.add(ts)
-
-    db.commit()
-    db.refresh(ts)
+    ts = ticket_status_repo.upsert(
+        db, project_id, body.ticket_key, pipeline_stage=body.pipeline_stage
+    )
     logger.info(
         "upserted ticket status project_id=%d ticket_key=%s stage=%s",
         project_id,

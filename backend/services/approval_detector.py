@@ -21,13 +21,12 @@ Threat mitigations:
 
 import logging
 import os
-from datetime import datetime, timezone
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from models.pipeline_state import PipelineState
 from models.project import Project
 from models.webhook import JiraCommentEvent
+from repositories import pipeline_state_repo
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment, put_description as hermes_put_description
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
@@ -43,7 +42,7 @@ AGENT_BODY_MARKER = "[jarvis-bot]"
 
 async def detect_and_apply_approval(
     event: JiraCommentEvent,
-    db: Session,
+    db: Database,
     project: Project,
     approve_subcmd: str,
 ) -> bool:
@@ -76,15 +75,8 @@ async def detect_and_apply_approval(
         return False
 
     try:
-        row = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == event.issue.key,
-                PipelineState.stage == stage,
-                PipelineState.status == "awaiting_approval",
-            )
-            .order_by(PipelineState.created_at.desc())
-            .first()
+        row = pipeline_state_repo.find_latest(
+            db, ticket_key=event.issue.key, stage=stage, statuses=["awaiting_approval"]
         )
 
         if row is None:
@@ -109,9 +101,7 @@ async def detect_and_apply_approval(
             + "✅ Description updated and applied to the Jira ticket description.",
         )
 
-        row.status = "approved"
-        row.updated_at = datetime.now(tz=timezone.utc)
-        db.commit()
+        pipeline_state_repo.update(db, row.id, status="approved")
 
         # Ticket-tracking bookkeeping (best-effort).
         txn_stage = "description" if stage == "describe" else "architecture"

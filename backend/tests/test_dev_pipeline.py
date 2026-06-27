@@ -34,40 +34,16 @@ import os
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-_TEST_KEY = Fernet.generate_key().decode()
-os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+from database import get_database
+from repositories import pipeline_state_repo
 
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
 
-from database import Base  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.pipeline_state import PipelineState  # noqa: E402
-from models.project import Project  # noqa: E402
+
 from services.crypto import encrypt_credential  # noqa: E402
 
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
 
 
-@pytest.fixture(autouse=True)
-def reset_tables():
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
 
 
 @pytest.fixture(autouse=True)
@@ -114,13 +90,9 @@ def _make_pull_request():
 async def test_run_no_confluence_url():
     """No Confluence URL in comments → informative comment posted; state complete; no clone."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     with (
         patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=[]) as mock_get_comments,
@@ -139,9 +111,9 @@ async def test_run_no_confluence_url():
     assert "No Confluence architecture page" in result
     assert "PROJ-1" in result
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -150,13 +122,9 @@ async def test_run_success():
     from services.dev_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     comments = [{"body": "Here is the arch: https://conf.example.com/wiki/spaces/PROJ/pages/12345"}]
     cloned = _make_cloned_repo()
@@ -173,7 +141,7 @@ async def test_run_success():
         patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
         patch("services.dev_pipeline.clone_repository", return_value=cloned),
         patch("services.dev_pipeline.read_relevant_files", return_value={"src/foo.py": "x"}) as mock_relfiles,
-        patch("services.dev_pipeline.generate_code_changes", return_value=file_changes) as mock_codegen,
+        patch("services.dev_pipeline.run_agentic_codegen", new_callable=AsyncMock, return_value=file_changes) as mock_codegen,
         patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr) as mock_pr,
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.dev_pipeline.shutil.rmtree") as mock_rmtree,
@@ -190,14 +158,13 @@ async def test_run_success():
     for arg in codegen_args:
         assert "secret" not in str(arg).lower(), f"Token leaked into codegen args: {arg}"
 
-    # relevant_file_contents from read_relevant_files is threaded into codegen
+    # read_relevant_files is still invoked to gather context
     mock_relfiles.assert_called_once()
-    assert mock_codegen.call_args.kwargs.get("relevant_file_contents") == {"src/foo.py": "x"}
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
     assert "PR ready" in state_row.draft_content
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -206,13 +173,9 @@ async def test_run_no_code_changes():
     from services.dev_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     cloned = _make_cloned_repo()
     codebase_summary = MagicMock(directory_tree="src/")
@@ -227,7 +190,7 @@ async def test_run_no_code_changes():
               new_callable=AsyncMock, return_value="minimal content"),
         patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
         patch("services.dev_pipeline.clone_repository", return_value=cloned),
-        patch("services.dev_pipeline.generate_code_changes", return_value=[]),
+        patch("services.dev_pipeline.run_agentic_codegen", new_callable=AsyncMock, return_value=[]),
         patch("services.dev_pipeline.apply_commit_push_and_open_pr") as mock_pr,
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.dev_pipeline.shutil.rmtree"),
@@ -238,9 +201,9 @@ async def test_run_no_code_changes():
     mock_post.assert_called_once()
     assert "no file changes" in result.lower() or "no code changes" in result.lower() or "produced no" in result
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -249,13 +212,9 @@ async def test_run_cleanup_on_pr_failure():
     from services.dev_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     cloned = _make_cloned_repo("/tmp/test-workspace-cleanup")
     codebase_summary = MagicMock(directory_tree="")
@@ -270,7 +229,7 @@ async def test_run_cleanup_on_pr_failure():
               new_callable=AsyncMock, return_value="arch content"),
         patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
         patch("services.dev_pipeline.clone_repository", return_value=cloned),
-        patch("services.dev_pipeline.generate_code_changes", return_value=[_make_file_change()]),
+        patch("services.dev_pipeline.run_agentic_codegen", new_callable=AsyncMock, return_value=[_make_file_change()]),
         patch("services.dev_pipeline.apply_commit_push_and_open_pr",
               side_effect=RuntimeError("push failed")),
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
@@ -280,9 +239,9 @@ async def test_run_cleanup_on_pr_failure():
 
     mock_rmtree.assert_called_once_with("/tmp/test-workspace-cleanup", ignore_errors=True)
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "failed"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -291,13 +250,9 @@ async def test_run_exception_sets_failed_status():
     from services.dev_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     with (
         patch("services.dev_pipeline.get_comments",
@@ -310,9 +265,9 @@ async def test_run_exception_sets_failed_status():
     call_body = mock_post.call_args[0][4]
     assert "failed" in call_body.lower() or "Dev pipeline failed" in call_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "failed"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -321,13 +276,9 @@ async def test_run_draft_content_contains_pr_url():
     from services.dev_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     pr = _make_pull_request()
     codebase_summary = MagicMock(directory_tree="")
@@ -342,19 +293,19 @@ async def test_run_draft_content_contains_pr_url():
               new_callable=AsyncMock, return_value="content"),
         patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
         patch("services.dev_pipeline.clone_repository", return_value=_make_cloned_repo()),
-        patch("services.dev_pipeline.generate_code_changes", return_value=[_make_file_change()]),
+        patch("services.dev_pipeline.run_agentic_codegen", new_callable=AsyncMock, return_value=[_make_file_change()]),
         patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.dev_pipeline.shutil.rmtree"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert isinstance(state_row.draft_content, str)
     assert not state_row.draft_content.startswith("{")
     assert "PR ready" in state_row.draft_content
     assert pr.html_url in state_row.draft_content
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -374,12 +325,8 @@ async def test_run_derives_github_url_from_repo_when_missing():
     project = _make_mock_project()
     project.github_url = None  # Simulate the real-world case: never set on project
 
-    db = TestingSession()
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    db = get_database()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "dev_pipeline", status="running")
 
     pr = _make_pull_request()
     codebase_summary = MagicMock(directory_tree="src/pages/LoginPage.tsx\nsrc/App.tsx")
@@ -395,7 +342,7 @@ async def test_run_derives_github_url_from_repo_when_missing():
         patch("services.dev_pipeline.get_codebase_summary",
               return_value=codebase_summary) as mock_get_summary,
         patch("services.dev_pipeline.clone_repository", return_value=_make_cloned_repo()),
-        patch("services.dev_pipeline.generate_code_changes",
+        patch("services.dev_pipeline.run_agentic_codegen", new_callable=AsyncMock,
               return_value=[_make_file_change()]) as mock_codegen,
         patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
         patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
@@ -417,14 +364,14 @@ async def test_run_derives_github_url_from_repo_when_missing():
     # The directory_tree from the summary must reach generate_code_changes
     # (codebase_context arg, position 4, index 3 zero-based after issue_key/summary/description/arch)
     mock_codegen.assert_called_once()
-    codegen_codebase_arg = mock_codegen.call_args[0][4]
+    codegen_codebase_arg = mock_codegen.call_args[0][5]
     assert "LoginPage.tsx" in codegen_codebase_arg, (
         "directory_tree containing LoginPage.tsx must be passed to generate_code_changes "
         f"as codebase_context, got: {codegen_codebase_arg!r}"
     )
 
     assert "PR ready" in result
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
 
 
@@ -452,84 +399,3 @@ def test_read_relevant_files_cap(tmp_path):
 
     total_chars = sum(len(v) for v in result.values())
     assert total_chars <= 8000
-
-
-@pytest.mark.asyncio
-async def test_run_uses_claude_executor_when_key_set():
-    """CLAUDE_API_KEY set → run_claude_code_executor called, generate_code_changes not."""
-    from services.dev_pipeline import run
-
-    os.environ["CLAUDE_API_KEY"] = "test-key"
-    try:
-        project = _make_mock_project()
-        db = TestingSession()
-        state_row = PipelineState(
-            project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-        )
-        db.add(state_row)
-        db.commit()
-
-        comments = [{"body": "https://conf.example.com/wiki/spaces/PROJ/pages/12345"}]
-        cloned = _make_cloned_repo()
-        pr = _make_pull_request()
-        codebase_summary = MagicMock(directory_tree="src/\nsrc/foo.py")
-
-        with (
-            patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=comments),
-            patch("services.dev_pipeline.find_latest_architecture_url", return_value="https://conf.example.com/wiki/spaces/PROJ/pages/12345"),
-            patch("services.dev_pipeline.get_confluence_page_content", new_callable=AsyncMock, return_value="content"),
-            patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
-            patch("services.dev_pipeline.clone_repository", return_value=cloned),
-            patch("services.dev_pipeline.read_relevant_files", return_value={}),
-            patch("services.dev_pipeline.run_claude_code_executor", return_value=[_make_file_change()]) as mock_executor,
-            patch("services.dev_pipeline.generate_code_changes") as mock_codegen,
-            patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
-            patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
-            patch("services.dev_pipeline.shutil.rmtree"),
-        ):
-            await run(project, "PROJ-1", "Feature X", "desc", db)
-
-        mock_executor.assert_called_once()
-        mock_codegen.assert_not_called()
-        db.close()
-    finally:
-        os.environ.pop("CLAUDE_API_KEY", None)
-
-
-@pytest.mark.asyncio
-async def test_run_uses_freellmapi_when_no_key():
-    """CLAUDE_API_KEY unset → generate_code_changes called, run_claude_code_executor not."""
-    from services.dev_pipeline import run
-
-    project = _make_mock_project()
-    db = TestingSession()
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="dev_pipeline", status="running"
-    )
-    db.add(state_row)
-    db.commit()
-
-    comments = [{"body": "https://conf.example.com/wiki/spaces/PROJ/pages/12345"}]
-    cloned = _make_cloned_repo()
-    pr = _make_pull_request()
-    codebase_summary = MagicMock(directory_tree="src/\nsrc/foo.py")
-
-    with (
-        patch("services.dev_pipeline.get_comments", new_callable=AsyncMock, return_value=comments),
-        patch("services.dev_pipeline.find_latest_architecture_url", return_value="https://conf.example.com/wiki/spaces/PROJ/pages/12345"),
-        patch("services.dev_pipeline.get_confluence_page_content", new_callable=AsyncMock, return_value="content"),
-        patch("services.dev_pipeline.get_codebase_summary", return_value=codebase_summary),
-        patch("services.dev_pipeline.clone_repository", return_value=cloned),
-        patch("services.dev_pipeline.read_relevant_files", return_value={}),
-        patch("services.dev_pipeline.run_claude_code_executor") as mock_executor,
-        patch("services.dev_pipeline.generate_code_changes", return_value=[_make_file_change()]) as mock_codegen,
-        patch("services.dev_pipeline.apply_commit_push_and_open_pr", return_value=pr),
-        patch("services.dev_pipeline.hermes_post_comment", new_callable=AsyncMock),
-        patch("services.dev_pipeline.shutil.rmtree"),
-    ):
-        await run(project, "PROJ-1", "Feature X", "desc", db)
-
-    mock_codegen.assert_called_once()
-    mock_executor.assert_not_called()
-    db.close()
-    db.close()

@@ -20,56 +20,17 @@ Confluence, and hermes_post_comment dependencies.
 Threat T-04-01: prompt must not contain token values — verified by checking args to route_request.
 """
 
-import asyncio
 import json
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-# Set env vars BEFORE any app module imports.
-_TEST_KEY = Fernet.generate_key().decode()
-os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+from database import get_database
+from repositories import pipeline_state_repo
+from services.crypto import encrypt_credential
 
 # ---------------------------------------------------------------------------
-# In-memory SQLite DB with StaticPool (all connections share same DB).
-# ---------------------------------------------------------------------------
-
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-from database import Base  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.project import Project  # noqa: E402
-from models.pipeline_state import PipelineState  # noqa: E402
-from services.crypto import encrypt_credential  # noqa: E402
-
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
-
-
-@pytest.fixture(autouse=True)
-def reset_tables():
-    """Drop and recreate all tables before each test for full isolation."""
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
+# Helpers (DB is the shared mongomock handle; see conftest.py)
 # ---------------------------------------------------------------------------
 
 
@@ -124,8 +85,8 @@ def _make_stub_llm_response_simple():
 
 
 def _make_db():
-    """Return an in-memory SQLite DB session."""
-    return TestingSession()
+    """Return the shared mongomock Database handle."""
+    return get_database()
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +151,7 @@ async def test_run_complex_path():
             len(call_args) > 6 and call_args[6] is True
         )
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -250,7 +211,7 @@ async def test_run_simple_path():
             len(call_args) > 6 and call_args[6] is False
         )
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -260,23 +221,7 @@ async def test_run_draft_content_is_human_readable():
     """
     db = _make_db()
     try:
-        # Insert a real Project row for FK integrity.
-        project_row = Project(
-            name="Test Project",
-            project_key="PROJ",
-            jira_url="https://jira.example.com",
-            confluence_url="https://confluence.example.com",
-            jira_token=encrypt_credential("jira-token"),
-            github_token=encrypt_credential("github-token"),
-            confluence_token=encrypt_credential("conf-token"),
-            github_repo=encrypt_credential("acme/my-app"),
-        )
-        db.add(project_row)
-        db.commit()
-        db.refresh(project_row)
-
         mock_project = _make_mock_project()
-        mock_project.id = project_row.id
 
         with (
             patch(
@@ -315,13 +260,8 @@ async def test_run_draft_content_is_human_readable():
 
             await run(mock_project, "PROJ-1", "Simple fix", "Fix null pointer", db)
 
-        row = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "architecture",
-            )
-            .first()
+        row = pipeline_state_repo.find_latest(
+            db, ticket_key="PROJ-1", stage="architecture"
         )
         assert row is not None
         assert row.draft_content is not None
@@ -333,7 +273,7 @@ async def test_run_draft_content_is_human_readable():
         except (json.JSONDecodeError, ValueError):
             pass  # expected — content is plain text
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -343,22 +283,7 @@ async def test_run_creates_pipeline_state_complete():
     """
     db = _make_db()
     try:
-        project_row = Project(
-            name="Test Project",
-            project_key="PROJ",
-            jira_url="https://jira.example.com",
-            confluence_url="https://confluence.example.com",
-            jira_token=encrypt_credential("jira-token"),
-            github_token=encrypt_credential("github-token"),
-            confluence_token=encrypt_credential("conf-token"),
-            github_repo=encrypt_credential("acme/my-app"),
-        )
-        db.add(project_row)
-        db.commit()
-        db.refresh(project_row)
-
         mock_project = _make_mock_project()
-        mock_project.id = project_row.id
 
         with (
             patch(
@@ -397,18 +322,13 @@ async def test_run_creates_pipeline_state_complete():
 
             await run(mock_project, "PROJ-1", "Big feature", "Needs many services", db)
 
-        rows = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "architecture",
-            )
-            .all()
+        row = pipeline_state_repo.find_latest(
+            db, ticket_key="PROJ-1", stage="architecture"
         )
-        assert len(rows) >= 1
-        assert rows[0].status == "complete", f"Expected 'complete', got '{rows[0].status}'"
+        assert row is not None
+        assert row.status == "complete", f"Expected 'complete', got '{row.status}'"
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -461,7 +381,7 @@ async def test_run_graceful_on_confluence_failure():
         assert len(result) > 0, "run() must return non-empty string even on Confluence failure"
         assert "https://conf" not in result, "Confluence URL must not appear when publishing failed"
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -526,7 +446,7 @@ async def test_run_calls_llm_with_architecture_stage():
         assert "jira-secret-token" not in prompt
         assert "conf-secret-token" not in prompt
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -578,7 +498,7 @@ async def test_run_posts_jira_comment():
         call_body = mock_post.call_args[0][4]  # 5th positional arg is the comment body
         assert "PROJ-1" in call_body, "comment body must reference the issue key"
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -628,7 +548,7 @@ async def test_run_includes_snapshot_in_architecture_prompt():
         prompt = mock_rr.call_args[0][1]
         assert "my_unique_module.py" in prompt
     finally:
-        db.close()
+        pass
 
 
 @pytest.mark.asyncio
@@ -679,4 +599,4 @@ async def test_run_passes_snapshot_to_complexity_classifier():
             mock_classify.call_args[0][-1] == "snapshot-content-xyz"
         )
     finally:
-        db.close()
+        pass

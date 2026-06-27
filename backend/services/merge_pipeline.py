@@ -20,20 +20,20 @@ Threat mitigations:
            found). The pipeline posts an informative Jira comment and sets
            PipelineState.status="complete" — not "failed". An informative no-op is not
            a pipeline failure.
-  T-17-08: This module receives a fresh SessionLocal() session opened by the background
-           closure _run_merge_background() in webhook.py — never the request-scoped db
-           (CR-02 session-boundary safety).
+  T-17-08: This module receives the shared Mongo Database handle (get_database())
+           — PyMongo's client is thread/async-safe and connection-pooled, so there
+           is no per-task session boundary to manage as there was with SQLAlchemy.
 """
 
 import asyncio
 import logging
 import os
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from database import SessionLocal
-from models.pipeline_state import PipelineState
+from database import get_database
 from models.project import Project
+from repositories import pipeline_state_repo, projects_repo
 from services import codebase_scan_service
 from services.crypto import decrypt_credential
 from services.hermes_client import (
@@ -59,7 +59,7 @@ async def run(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    db: Session,
+    db: Database,
 ) -> str:
     """Run the merge pipeline end-to-end for a @jarvis merge pr trigger.
 
@@ -81,8 +81,7 @@ async def run(
         issue_summary:    Issue summary field (unused by merge path, kept for
                           consistent signature across pipelines).
         issue_description: Issue description field (unused, kept for symmetry).
-        db:               SQLAlchemy session (fresh SessionLocal() from background
-                          closure — never the request-scoped session).
+        db:               Mongo Database handle (get_database()).
 
     Returns:
         Final comment text posted to Jira (or "" if exception path was taken).
@@ -92,25 +91,13 @@ async def run(
     # Step 1: Re-use the PipelineState row created by the webhook idempotency
     # guard (webhook.py creates it with status="running" BEFORE scheduling this
     # task). If no row is found (e.g. direct call in tests), create one.
-    state_row = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == issue_key,
-            PipelineState.stage == "merge_pr",
-            PipelineState.status == "running",
-        )
-        .order_by(PipelineState.id.desc())
-        .first()
+    state_row = pipeline_state_repo.find_latest(
+        db, ticket_key=issue_key, stage="merge_pr", statuses=["running"], order_field="_id"
     )
     if state_row is None:
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=issue_key,
-            stage="merge_pr",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, issue_key, "merge_pr", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
     comment_text = ""
     try:
@@ -141,9 +128,9 @@ async def run(
                 issue_key,
                 AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
             )
-            state_row.status = "complete"
-            state_row.draft_content = comment_text
-            db.commit()
+            pipeline_state_repo.update(
+                db, state_row.id, status="complete", draft_content=comment_text
+            )
             logger.info(
                 "Merge pipeline complete for ticket %s (no open PR found)", issue_key
             )
@@ -218,9 +205,9 @@ async def run(
             )
 
         # Step 7: Finalise state row.
-        state_row.status = "complete"
-        state_row.draft_content = comment_text
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, status="complete", draft_content=comment_text
+        )
 
         # Ticket-tracking bookkeeping (best-effort).
         safe_upsert_ticket_status(
@@ -241,18 +228,15 @@ async def run(
                 qa_project_id = project.id
 
                 async def _run_qa_background() -> None:
-                    bg_db = SessionLocal()
-                    try:
-                        bg_project = bg_db.query(Project).filter(Project.id == qa_project_id).first()
-                        if bg_project is None:
-                            logger.error(
-                                "Project id=%s not found in background task for issue %s — aborting QA auto-chain",
-                                qa_project_id, issue_key,
-                            )
-                            return
-                        await run_qa_pipeline(bg_project, issue_key, issue_summary, issue_description, bg_db)
-                    finally:
-                        bg_db.close()
+                    bg_db = get_database()
+                    bg_project = projects_repo.get(bg_db, qa_project_id)
+                    if bg_project is None:
+                        logger.error(
+                            "Project id=%s not found in background task for issue %s — aborting QA auto-chain",
+                            qa_project_id, issue_key,
+                        )
+                        return
+                    await run_qa_pipeline(bg_project, issue_key, issue_summary, issue_description, bg_db)
 
                 asyncio.create_task(_run_qa_background())
                 logger.info("QA pipeline auto-chained for ticket %s after successful merge", issue_key)
@@ -260,11 +244,7 @@ async def run(
             logger.warning("Failed to schedule QA auto-chain for %s: %s", issue_key, qa_exc)
 
     except Exception as exc:
-        state_row.status = "failed"
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
+        pipeline_state_repo.update(db, state_row.id, status="failed")
 
         safe_upsert_ticket_status(
             db, project.id, issue_key, pipeline_stage="merge",

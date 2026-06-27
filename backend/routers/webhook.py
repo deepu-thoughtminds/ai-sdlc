@@ -38,18 +38,16 @@ Threat mitigations applied:
 
 import asyncio
 import dataclasses
-import datetime
 import hmac
 import logging
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from database import get_db, SessionLocal
-from models.pipeline_state import PipelineState
-from models.project import Project
+from database import get_db, get_database
 from models.webhook import JiraCommentEvent, JiraIssueCreatedEvent
+from repositories import pipeline_state_repo, projects_repo
 from services import approval_detector, architecture_pipeline, assign_pipeline, describe_pipeline, dev_pipeline, merge_pipeline, qa_pipeline
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
@@ -101,7 +99,7 @@ def verify_webhook_secret(
 async def handle_jira_comment(
     event: JiraCommentEvent,
     _secret: None = Depends(verify_webhook_secret),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> dict:
     """Receive a Jira comment webhook event and orchestrate the pipeline.
 
@@ -123,7 +121,7 @@ async def handle_jira_comment(
     # Step 1+2: Identify the project from the issue key
     # T-03-13: rsplit("-", 1)[0] is a bounded string operation; no injection surface
     project_key = event.issue.key.rsplit("-", 1)[0]
-    project = db.query(Project).filter(Project.project_key == project_key).first()
+    project = projects_repo.get_by_key(db, project_key)
 
     if project is None:
         logger.warning(
@@ -147,23 +145,20 @@ async def handle_jira_comment(
     if mention_result is not None and mention_result.action == "describe":
         # Expire any previous awaiting_approval describe states for this ticket
         # so stale states from earlier failed runs don't get processed later.
-        db.query(PipelineState).filter(
-            PipelineState.ticket_key == event.issue.key,
-            PipelineState.stage == "describe",
-            PipelineState.status == "awaiting_approval",
-        ).update({"status": "superseded"})
-        db.flush()
+        pipeline_state_repo.update_status_many(
+            db,
+            {
+                "ticket_key": event.issue.key,
+                "stage": "describe",
+                "status": "awaiting_approval",
+            },
+            "superseded",
+        )
 
         # Create initial PipelineState row with status="processing"
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=event.issue.key,
-            stage="describe",
-            status="processing",
+        state_row = pipeline_state_repo.create(
+            db, project.id, event.issue.key, "describe", status="processing"
         )
-        db.add(state_row)
-        db.commit()
-        db.refresh(state_row)
 
         # Run the describe pipeline (async — awaited directly)
         description = await describe_pipeline.run(event, project)
@@ -188,10 +183,9 @@ async def handle_jira_comment(
             )
 
         # Update PipelineState to awaiting_approval with the draft content
-        state_row.status = "awaiting_approval"
-        state_row.draft_content = description
-        state_row.updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, status="awaiting_approval", draft_content=description
+        )
 
         # Ticket-tracking bookkeeping (best-effort).
         safe_upsert_ticket_status(
@@ -225,14 +219,8 @@ async def handle_jira_comment(
         # immediately without scheduling a second heavy LLM task.
         # "complete" and "failed" states allow re-triggering so users can rerun
         # after a ticket changes substantially or a previous run failed.
-        existing = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == event.issue.key,
-                PipelineState.stage == "architecture",
-                PipelineState.status.in_(["running"]),
-            )
-            .first()
+        existing = pipeline_state_repo.find_latest(
+            db, ticket_key=event.issue.key, stage="architecture", statuses=["running"]
         )
         if existing is not None:
             logger.info(
@@ -246,41 +234,30 @@ async def handle_jira_comment(
         # background task so the idempotency guard above can detect a near-
         # simultaneous second webhook. The architecture_pipeline.run() will
         # re-use this row instead of creating a second one.
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=event.issue.key,
-            stage="architecture",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, event.issue.key, "architecture", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
-        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
-        # FastAPI closes the session when the handler returns (via get_db's finally block),
-        # so the background task would receive an already-closed session. Instead, capture
-        # only primitive values (project_id, strings) and open a fresh SessionLocal()
-        # inside the background coroutine.
+        # Capture only primitive values (project_id, strings); the background
+        # coroutine grabs its own Database handle via get_database().
         project_id = project.id
 
         async def _run_architecture_background() -> None:
-            bg_db = SessionLocal()
-            try:
-                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
-                # CR-03 fix: guard against project being deleted between webhook
-                # receipt and background task execution.
-                if bg_project is None:
-                    logger.error(
-                        "Project id=%s not found in background task for issue %s — aborting architecture",
-                        project_id, event.issue.key,
-                    )
-                    return
-                await architecture_pipeline.run(
-                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            # CR-03 fix: guard against project being deleted between webhook
+            # receipt and background task execution.
+            if bg_project is None:
+                logger.error(
+                    "Project id=%s not found in background task for issue %s — aborting architecture",
+                    project_id, event.issue.key,
                 )
-            finally:
-                bg_db.close()
+                return
+            await architecture_pipeline.run(
+                bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            )
 
         asyncio.create_task(_run_architecture_background())
         logger.info(
@@ -322,14 +299,8 @@ async def handle_jira_comment(
     elif mention_result is not None and mention_result.action == "start_coding":
         # T-16-09: Idempotency guard — same pattern as the architecture branch
         # above. "complete" and "failed" states allow re-triggering.
-        existing = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == event.issue.key,
-                PipelineState.stage == "dev_pipeline",
-                PipelineState.status.in_(["running"]),
-            )
-            .first()
+        existing = pipeline_state_repo.find_latest(
+            db, ticket_key=event.issue.key, stage="dev_pipeline", statuses=["running"]
         )
         if existing is not None:
             logger.info(
@@ -342,37 +313,28 @@ async def handle_jira_comment(
         # Create PipelineState row with status="running" BEFORE scheduling the
         # background task so the idempotency guard above can detect a near-
         # simultaneous second webhook. dev_pipeline.run() re-uses this row.
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=event.issue.key,
-            stage="dev_pipeline",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, event.issue.key, "dev_pipeline", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
-        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
         project_id = project.id
 
         async def _run_dev_pipeline_background() -> None:
-            bg_db = SessionLocal()
-            try:
-                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
-                # CR-03 fix: guard against project being deleted between webhook
-                # receipt and background task execution.
-                if bg_project is None:
-                    logger.error(
-                        "Project id=%s not found in background task for issue %s — aborting dev_pipeline",
-                        project_id, event.issue.key,
-                    )
-                    return
-                await dev_pipeline.run(
-                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            # CR-03 fix: guard against project being deleted between webhook
+            # receipt and background task execution.
+            if bg_project is None:
+                logger.error(
+                    "Project id=%s not found in background task for issue %s — aborting dev_pipeline",
+                    project_id, event.issue.key,
                 )
-            finally:
-                bg_db.close()
+                return
+            await dev_pipeline.run(
+                bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            )
 
         asyncio.create_task(_run_dev_pipeline_background())
         logger.info(
@@ -392,14 +354,8 @@ async def handle_jira_comment(
     # so that a near-simultaneous duplicate webhook is blocked before a second merge
     # attempt can be scheduled. "complete" and "failed" states allow re-triggering.
     elif mention_result is not None and mention_result.action == "merge_pr":
-        existing = (
-            db.query(PipelineState)
-            .filter(
-                PipelineState.ticket_key == event.issue.key,
-                PipelineState.stage == "merge_pr",
-                PipelineState.status.in_(["running"]),
-            )
-            .first()
+        existing = pipeline_state_repo.find_latest(
+            db, ticket_key=event.issue.key, stage="merge_pr", statuses=["running"]
         )
         if existing is not None:
             logger.info(
@@ -412,43 +368,30 @@ async def handle_jira_comment(
         # Create PipelineState row with status="running" BEFORE scheduling the
         # background task so the idempotency guard above can detect a near-
         # simultaneous second webhook. merge_pipeline.run() re-uses this row.
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=event.issue.key,
-            stage="merge_pr",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, event.issue.key, "merge_pr", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
-        # CR-02: Do NOT pass the request-scoped `db` session to the background task.
-        # FastAPI closes the session when the handler returns (via get_db's finally block),
-        # so the background task would receive an already-closed session. Instead, capture
-        # only primitive values (project_id, strings) and open a fresh SessionLocal()
-        # inside the background coroutine.
         project_id = project.id
 
         async def _run_merge_background() -> None:
-            bg_db = SessionLocal()
-            try:
-                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
-                # CR-03 fix: guard against project being deleted between webhook
-                # receipt and background task execution. Without this check,
-                # bg_project=None causes AttributeError in merge_pipeline.run()
-                # and leaves PipelineState stuck at status="running".
-                if bg_project is None:
-                    logger.error(
-                        "Project id=%s not found in background task for issue %s — aborting merge",
-                        project_id, event.issue.key,
-                    )
-                    return
-                await merge_pipeline.run(
-                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            # CR-03 fix: guard against project being deleted between webhook
+            # receipt and background task execution. Without this check,
+            # bg_project=None causes AttributeError in merge_pipeline.run()
+            # and leaves PipelineState stuck at status="running".
+            if bg_project is None:
+                logger.error(
+                    "Project id=%s not found in background task for issue %s — aborting merge",
+                    project_id, event.issue.key,
                 )
-            finally:
-                bg_db.close()
+                return
+            await merge_pipeline.run(
+                bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            )
 
         asyncio.create_task(_run_merge_background())
         logger.info(
@@ -473,34 +416,26 @@ async def handle_jira_comment(
             )
             return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
 
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=event.issue.key,
-            stage="qa",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, event.issue.key, "qa", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
         issue_summary = event.issue.summary
         issue_description = getattr(event.issue, "description", "") or ""
         project_id = project.id
 
         async def _run_qa_background() -> None:
-            bg_db = SessionLocal()
-            try:
-                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
-                if bg_project is None:
-                    logger.error(
-                        "Project id=%s not found in background task for issue %s — aborting run_qa",
-                        project_id, event.issue.key,
-                    )
-                    return
-                await qa_pipeline.run(
-                    bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            if bg_project is None:
+                logger.error(
+                    "Project id=%s not found in background task for issue %s — aborting run_qa",
+                    project_id, event.issue.key,
                 )
-            finally:
-                bg_db.close()
+                return
+            await qa_pipeline.run(
+                bg_project, event.issue.key, issue_summary, issue_description, bg_db
+            )
 
         asyncio.create_task(_run_qa_background())
         logger.info(
@@ -593,7 +528,7 @@ class _IssueCreatedAdapter:
 async def handle_jira_issue_created(
     event: JiraIssueCreatedEvent,
     _secret: None = Depends(verify_webhook_secret),
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> dict:
     """Receive a Jira issue_created webhook event and auto-trigger describe pipeline.
 
@@ -623,7 +558,7 @@ async def handle_jira_issue_created(
 
     # Step 1+2: Identify the project from the issue key
     project_key = event.issue.key.rsplit("-", 1)[0]
-    project = db.query(Project).filter(Project.project_key == project_key).first()
+    project = projects_repo.get_by_key(db, project_key)
 
     if project is None:
         logger.warning(
@@ -643,14 +578,11 @@ async def handle_jira_issue_created(
         return {"status": "received", "action": "ignored", "reason": "not_a_story"}
 
     # Step 4: Idempotency guard — T-o0v-04
-    existing = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == event.issue.key,
-            PipelineState.stage == "describe",
-            PipelineState.status.in_(["processing", "awaiting_approval", "approved"]),
-        )
-        .first()
+    existing = pipeline_state_repo.find_latest(
+        db,
+        ticket_key=event.issue.key,
+        stage="describe",
+        statuses=["processing", "awaiting_approval", "approved"],
     )
     if existing is not None:
         logger.info(
@@ -661,23 +593,20 @@ async def handle_jira_issue_created(
         return {"status": "received", "action": "ignored", "reason": "duplicate_pipeline"}
 
     # Step 5: Expire any previous superseded describe states
-    db.query(PipelineState).filter(
-        PipelineState.ticket_key == event.issue.key,
-        PipelineState.stage == "describe",
-        PipelineState.status == "awaiting_approval",
-    ).update({"status": "superseded"})
-    db.flush()
+    pipeline_state_repo.update_status_many(
+        db,
+        {
+            "ticket_key": event.issue.key,
+            "stage": "describe",
+            "status": "awaiting_approval",
+        },
+        "superseded",
+    )
 
     # Step 6: Create initial PipelineState row with status='processing'
-    state_row = PipelineState(
-        project_id=project.id,
-        ticket_key=event.issue.key,
-        stage="describe",
-        status="processing",
+    state_row = pipeline_state_repo.create(
+        db, project.id, event.issue.key, "describe", status="processing"
     )
-    db.add(state_row)
-    db.commit()
-    db.refresh(state_row)
 
     # Ticket-tracking bookkeeping: record the ticket's creation (best-effort).
     safe_upsert_ticket_status(
@@ -722,10 +651,9 @@ async def handle_jira_issue_created(
         )
 
     # Step 9: Update PipelineState to awaiting_approval with the draft content
-    state_row.status = "awaiting_approval"
-    state_row.draft_content = description
-    state_row.updated_at = datetime.datetime.now(tz=datetime.timezone.utc)
-    db.commit()
+    pipeline_state_repo.update(
+        db, state_row.id, status="awaiting_approval", draft_content=description
+    )
 
     safe_upsert_ticket_status(
         db,

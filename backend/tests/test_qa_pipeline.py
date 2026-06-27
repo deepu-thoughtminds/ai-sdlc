@@ -14,43 +14,28 @@ Coverage:
 """
 
 import os
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-_TEST_KEY = Fernet.generate_key().decode()
-os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+from database import get_database
+from repositories import pipeline_state_repo
 
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
 
-from database import Base  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.pipeline_state import PipelineState  # noqa: E402
+@contextmanager
+def _fake_managed_container(*args, **kwargs):
+    """Stand-in for the Phase-28 live-app container — yields a ready URL without
+    starting Docker (the real one detects the stack and runs a container)."""
+    yield "http://app:3000"
+
+
+
 from services.crypto import encrypt_credential  # noqa: E402
 from services.test_executor import TestResult  # noqa: E402
 
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
 
 
-@pytest.fixture(autouse=True)
-def reset_tables():
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
 
 
 def _make_mock_project():
@@ -71,12 +56,7 @@ def _make_cloned_repo(path="/tmp/fake-qa-workspace"):
 
 
 def _make_state_row(db, project_id=1, status="running"):
-    state_row = PipelineState(
-        project_id=project_id, ticket_key="PROJ-1", stage="qa", status=status
-    )
-    db.add(state_row)
-    db.commit()
-    return state_row
+    return pipeline_state_repo.create(db, project_id, "PROJ-1", "qa", status=status)
 
 
 @pytest.mark.asyncio
@@ -89,7 +69,7 @@ async def test_qa_attempt_set_to_zero_before_execution():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     state_row = _make_state_row(db)
 
     with (
@@ -103,9 +83,9 @@ async def test_qa_attempt_set_to_zero_before_execution():
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.qa_attempt == 0
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -114,7 +94,7 @@ async def test_workspace_cleaned_up_on_success():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo("/tmp/qa-success-workspace")
@@ -132,7 +112,7 @@ async def test_workspace_cleaned_up_on_success():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_rmtree.assert_called_once_with("/tmp/qa-success-workspace", ignore_errors=True)
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -141,7 +121,7 @@ async def test_workspace_cleaned_up_on_failure():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo("/tmp/qa-failure-workspace")
@@ -158,7 +138,7 @@ async def test_workspace_cleaned_up_on_failure():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_rmtree.assert_called_once_with("/tmp/qa-failure-workspace", ignore_errors=True)
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -167,7 +147,7 @@ async def test_workspace_cleaned_up_on_timeout():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo("/tmp/qa-timeout-workspace")
@@ -187,7 +167,7 @@ async def test_workspace_cleaned_up_on_timeout():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_rmtree.assert_called_once_with("/tmp/qa-timeout-workspace", ignore_errors=True)
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -196,7 +176,7 @@ async def test_jira_comment_posted_on_success():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -216,7 +196,7 @@ async def test_jira_comment_posted_on_success():
     mock_post.assert_called_once()
     comment_body = mock_post.call_args[0][4]
     assert "PASSED" in comment_body or "FAILED" in comment_body
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -229,7 +209,7 @@ async def test_jira_comment_posted_on_failure():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     with (
@@ -242,7 +222,7 @@ async def test_jira_comment_posted_on_failure():
     mock_post.assert_called_once()
     comment_body = mock_post.call_args[0][4]
     assert "failed" in comment_body.lower()
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -251,7 +231,7 @@ async def test_jira_comment_posted_on_failure_before_jira_token_assigned():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     with (
@@ -263,7 +243,7 @@ async def test_jira_comment_posted_on_failure_before_jira_token_assigned():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_post.assert_called_once()
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -272,7 +252,7 @@ async def test_pipeline_state_status_complete_on_success():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     state_row = _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -289,9 +269,9 @@ async def test_pipeline_state_status_complete_on_success():
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -300,7 +280,7 @@ async def test_pipeline_state_status_failed_on_exception():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     state_row = _make_state_row(db)
 
     with (
@@ -310,9 +290,9 @@ async def test_pipeline_state_status_failed_on_exception():
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "failed"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -321,7 +301,7 @@ async def test_fresh_clone_not_dev_workspace():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -339,7 +319,7 @@ async def test_fresh_clone_not_dev_workspace():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_clone.assert_called_once_with("owner/repo", "gh-secret")
-    db.close()
+    pass
 
 
 def test_no_shell_true_in_qa_pipeline():
@@ -385,7 +365,7 @@ async def test_run_calls_get_codebase_snapshot_after_clone():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -408,7 +388,7 @@ async def test_run_calls_get_codebase_snapshot_after_clone():
     assert gen_kwargs.get("codebase_context") == "snapshot text", (
         f"codebase_context not forwarded: {gen_kwargs!r}"
     )
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -417,7 +397,7 @@ async def test_run_calls_generate_unit_tests_with_issue_key():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -437,7 +417,7 @@ async def test_run_calls_generate_unit_tests_with_issue_key():
     mock_gen.assert_called_once()
     _, kwargs = mock_gen.call_args
     assert kwargs.get("issue_key") == "PROJ-1", f"Expected issue_key='PROJ-1', got: {kwargs!r}"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -452,7 +432,7 @@ async def test_generated_test_file_written_to_workspace(tmp_path):
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     workspace = tmp_path / "qa-workspace"
@@ -480,7 +460,7 @@ async def test_generated_test_file_written_to_workspace(tmp_path):
     written_file = workspace / "tests" / "test_generated.py"
     assert written_file.exists(), f"Expected {written_file} to exist after run()"
     assert "test_ok" in written_file.read_text()
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -494,7 +474,7 @@ async def test_path_traversal_rejected_without_raising():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo("/tmp/qa-traversal-workspace")
@@ -516,7 +496,7 @@ async def test_path_traversal_rejected_without_raising():
 
     # Pipeline must still complete (comment posted)
     mock_post.assert_called_once()
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -530,7 +510,7 @@ async def test_comment_contains_unit_test_and_static_analysis_sections(tmp_path)
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     workspace = tmp_path / "qa-workspace"
@@ -563,7 +543,7 @@ async def test_comment_contains_unit_test_and_static_analysis_sections(tmp_path)
     assert "Static Analysis" in comment_body or "static analysis" in comment_body.lower(), (
         f"'Static Analysis' section not found in comment: {comment_body!r}"
     )
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -577,7 +557,7 @@ async def test_empty_generate_unit_tests_skips_execution():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -607,7 +587,7 @@ async def test_empty_generate_unit_tests_skips_execution():
     assert "ruff" in comment_body.lower() or "Static Analysis" in comment_body or "static" in comment_body.lower(), (
         f"Static analysis section missing from comment: {comment_body!r}"
     )
-    db.close()
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +604,7 @@ async def test_e2e_generation_skipped_when_no_playwright_config():
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     cloned = _make_cloned_repo()
@@ -644,6 +624,8 @@ async def test_e2e_generation_skipped_when_no_playwright_config():
         patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
         patch("services.qa_pipeline.generate_e2e_tests", create=True, return_value=[]) as mock_e2e_gen,
         patch("services.qa_pipeline.glob", mock_glob_module),
+        patch("services.qa_pipeline.managed_app_container", _fake_managed_container),
+        patch("services.qa_pipeline.run_claude_playwright_generator", new_callable=AsyncMock, return_value=[]),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -653,7 +635,7 @@ async def test_e2e_generation_skipped_when_no_playwright_config():
     assert "playwright.config" in comment_body.lower(), (
         f"'playwright.config' not mentioned in skip note: {comment_body!r}"
     )
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -666,7 +648,7 @@ async def test_e2e_generation_runs_when_playwright_config_found():
     from services.code_generator import FileChange
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     import tempfile, os as _os
@@ -690,6 +672,8 @@ async def test_e2e_generation_runs_when_playwright_config_found():
             patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
             patch("services.qa_pipeline.generate_e2e_tests", create=True, return_value=[e2e_change]) as mock_e2e_gen,
             patch("services.qa_pipeline.glob", mock_glob_module),
+            patch("services.qa_pipeline.managed_app_container", _fake_managed_container),
+            patch("services.qa_pipeline.run_claude_playwright_generator", new_callable=AsyncMock, return_value=[]),
         ):
             await run(project, "PROJ-1", "Feature X", "desc", db)
 
@@ -697,7 +681,7 @@ async def test_e2e_generation_runs_when_playwright_config_found():
     comment_body = mock_post.call_args[0][4]
     assert "E2E Tests" in comment_body, f"'E2E Tests' section not in comment: {comment_body!r}"
     assert "PASSED" in comment_body, f"'PASSED' not in E2E comment: {comment_body!r}"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -710,7 +694,7 @@ async def test_e2e_path_traversal_rejected():
     from services.code_generator import FileChange
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     import tempfile, os as _os
@@ -736,8 +720,7 @@ async def test_e2e_path_traversal_rejected():
         ):
             await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    db.refresh(db.query(PipelineState).filter(PipelineState.ticket_key == "PROJ-1").first() or MagicMock())
-    db.close()
+    pass
     # If run() raised, we'd get an exception above. The fact it returned means the guard worked.
     # No assert needed beyond "no exception raised" — mirrors test_path_traversal_rejected_without_raising.
 
@@ -746,25 +729,23 @@ def test_has_active_qa_run_returns_true_when_running_row_exists():
     """has_active_qa_run returns True when a stage=qa/status=running row exists."""
     from services.qa_pipeline import has_active_qa_run
 
-    db = TestingSession()
-    db.add(PipelineState(project_id=1, ticket_key="PROJ-1", stage="qa", status="running"))
-    db.commit()
+    db = get_database()
+    pipeline_state_repo.create(db, 1, "PROJ-1", "qa", status="running")
 
     assert has_active_qa_run("PROJ-1", db) is True
-    db.close()
+    pass
 
 
 def test_has_active_qa_run_returns_false_when_no_running_row():
     """has_active_qa_run returns False when no running qa row exists."""
     from services.qa_pipeline import has_active_qa_run
 
-    db = TestingSession()
+    db = get_database()
     # Add a completed row — should NOT count
-    db.add(PipelineState(project_id=1, ticket_key="PROJ-1", stage="qa", status="complete"))
-    db.commit()
+    pipeline_state_repo.create(db, 1, "PROJ-1", "qa", status="complete")
 
     assert has_active_qa_run("PROJ-1", db) is False
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -779,7 +760,7 @@ async def test_js_test_file_dispatches_to_npm_not_pytest(tmp_path):
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     workspace = tmp_path / "qa-workspace"
@@ -807,7 +788,7 @@ async def test_js_test_file_dispatches_to_npm_not_pytest(tmp_path):
     assert "pytest" not in cmd_obj.command, f"pytest must not appear in command for a .tsx file: {cmd_obj.command!r}"
     joined = " ".join(cmd_obj.command)
     assert "npm" in joined, f"Expected npm in command for a .tsx test file: {cmd_obj.command!r}"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -817,7 +798,7 @@ async def test_py_test_file_still_dispatches_to_pytest(tmp_path):
     from services.qa_pipeline import run
 
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
     _make_state_row(db)
 
     workspace = tmp_path / "qa-workspace"
@@ -842,4 +823,4 @@ async def test_py_test_file_still_dispatches_to_pytest(tmp_path):
 
     cmd_obj = mock_run_command.call_args[0][0]
     assert "pytest" in cmd_obj.command, f"Expected pytest still used for a .py file: {cmd_obj.command!r}"
-    db.close()
+    pass

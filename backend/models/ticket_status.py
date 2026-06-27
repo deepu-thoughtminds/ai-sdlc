@@ -18,10 +18,8 @@ Threat mitigations:
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import Base
+from database import Doc
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -33,43 +31,16 @@ VALID_STAGES: frozenset = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# ORM Model
+# Document type
 # ---------------------------------------------------------------------------
 
-
-class TicketStatus(Base):
-    """ORM model for ticket pipeline status records.
-
-    One row per (project_id, ticket_key) pair — upsert logic in dashboard router.
-    """
-
-    __tablename__ = "ticket_statuses"
-
-    __table_args__ = (
-        UniqueConstraint("project_id", "ticket_key", name="uq_ticket_statuses_project_ticket"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
-    )
-    ticket_key: Mapped[str] = mapped_column(String(100), nullable=False)
-    pipeline_stage: Mapped[str] = mapped_column(String(50), nullable=False)
-    # Enriched ticket detail (nullable — populated by the issue-created webhook
-    # and pipeline wiring; legacy rows / dashboard upserts leave these null).
-    summary: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    issue_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    # Latest human-readable status, e.g. "PR merged".
-    current_status: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    # Relationship back to Project (must match Project.ticket_statuses)
-    project: Mapped["Project"] = relationship("Project", back_populates="ticket_statuses")  # type: ignore[name-defined]
+# One document per (project_id, ticket_key) in the `ticket_statuses` collection
+# (uniqueness enforced by a compound index — see database.init_indexes). Upsert
+# logic lives in repositories/ticket_status_repo.py. `TicketStatus` is a Doc
+# alias kept for type-hint compatibility.
+# Fields: id, project_id, ticket_key, pipeline_stage, summary, issue_type,
+# current_status, created_at, updated_at.
+TicketStatus = Doc
 
 
 # ---------------------------------------------------------------------------

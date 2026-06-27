@@ -24,43 +24,17 @@ Threat mitigations:
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
-from sqlalchemy import DateTime, String, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import Base
+from database import Doc
 
-
-class Project(Base):
-    """ORM model for project records.
-
-    Token columns store Fernet-encrypted base64 ciphertext, not plaintext.
-    github_repo also stored as Fernet ciphertext — see services/crypto.py.
-    """
-
-    __tablename__ = "projects"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    project_key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    jira_url: Mapped[str] = mapped_column(String(2000), nullable=False)
-    jira_email: Mapped[str] = mapped_column(String(500), nullable=False, server_default="")
-    confluence_url: Mapped[str] = mapped_column(String(2000), nullable=False)
-    # Optional GitHub repository URL for codebase context (graphify_service)
-    github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    # Encrypted credentials (Fernet ciphertext — see services/crypto.py)
-    jira_token: Mapped[str] = mapped_column(String(2000), nullable=False)
-    github_token: Mapped[str] = mapped_column(String(2000), nullable=False)
-    confluence_token: Mapped[str] = mapped_column(String(2000), nullable=False)
-    # Stored as Fernet ciphertext — see services/crypto.py. Owner/repo slug, e.g. "acme/my-app".
-    github_repo: Mapped[str] = mapped_column(String(2000), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-
-    # Relationships
-    ticket_statuses: Mapped[list["TicketStatus"]] = relationship(  # type: ignore[name-defined]
-        "TicketStatus", back_populates="project", cascade="all, delete-orphan"
-    )
+# Project documents are plain Mongo documents accessed via Doc (attribute-style
+# dict). `Project` remains importable as a type alias so service/pipeline
+# signatures (`project: Project`) read unchanged after the SQLite→Mongo move.
+# Fields: id, name, project_key, jira_url, jira_email, confluence_url,
+# github_url, jira_token, github_token, confluence_token, github_repo,
+# created_at. The four credential fields store Fernet ciphertext (services/
+# crypto.py) — never plaintext.
+Project = Doc
 
 
 class ProjectCreate(BaseModel):

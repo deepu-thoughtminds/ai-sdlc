@@ -29,10 +29,10 @@ classify_complexity() and _run_complex()/_run_simple() (ARCHCTX-02).
 import logging
 import os
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from models.pipeline_state import PipelineState
 from models.project import Project
+from repositories import pipeline_state_repo
 from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
@@ -111,7 +111,7 @@ async def run(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    db: Session,
+    db: Database,
 ) -> str:
     """Run the single-pass complexity-aware architecture pipeline for a ticket.
 
@@ -138,25 +138,13 @@ async def run(
     # Step 1: Re-use the PipelineState row created by the webhook idempotency
     # guard (webhook.py creates it with status="running" BEFORE scheduling this
     # task). If no row found (e.g. direct call in tests), create one.
-    state_row = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == issue_key,
-            PipelineState.stage == "architecture",
-            PipelineState.status == "running",
-        )
-        .order_by(PipelineState.created_at.desc())
-        .first()
+    state_row = pipeline_state_repo.find_latest(
+        db, ticket_key=issue_key, stage="architecture", statuses=["running"]
     )
     if state_row is None:
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=issue_key,
-            stage="architecture",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, issue_key, "architecture", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
     comment_text = ""
     try:
@@ -189,9 +177,9 @@ async def run(
             issue_key, issue_summary, issue_description, db, project.id,
             codebase_snapshot=snapshot,
         )
-        state_row.complexity = complexity
-        state_row.complexity_rationale = rationale
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, complexity=complexity, complexity_rationale=rationale
+        )
 
         logger.info(
             "Ticket %s classified as %r — %s", issue_key, complexity, rationale
@@ -224,9 +212,9 @@ async def run(
             logger.warning("Failed to post architecture comment for ticket %s: %s", issue_key, exc)
 
         # Step 4: Finalise the state row only after the Jira comment has been posted.
-        state_row.status = "complete"
-        state_row.draft_content = comment_text
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, status="complete", draft_content=comment_text
+        )
 
         # Ticket-tracking bookkeeping (best-effort). The Confluence page link is
         # embedded in comment_text, stored here as detail.
@@ -242,11 +230,7 @@ async def run(
         )
 
     except Exception as exc:
-        state_row.status = "failed"
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
+        pipeline_state_repo.update(db, state_row.id, status="failed")
         safe_upsert_ticket_status(
             db, project.id, issue_key,
             pipeline_stage="architecture", current_status="Architecture generation failed",

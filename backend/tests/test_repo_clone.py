@@ -97,8 +97,10 @@ def test_clone_repository_returns_cloned_repo():
     cmd = call_args[0][0]
     assert cmd[0] == "git"
     assert cmd[1] == "clone"
-    # Token-embedded URL should be in the args (not shell=True)
-    assert any("x-access-token:ghp_test_token" in arg for arg in cmd)
+    # Token-embedded URL should be in the args (not shell=True). The clone URL
+    # uses the oauth2: scheme (x-access-token triggers a write-access check that
+    # fails for read-only fine-grained PATs).
+    assert any("oauth2:ghp_test_token" in arg for arg in cmd)
 
 
 def test_clone_repository_nonzero_exit_raises():

@@ -7,9 +7,9 @@ keep the durable ticket history in sync:
   upsert_ticket_status()  — create/update the single TicketStatus row per ticket
                             (current coarse stage + human status + feature detail).
 
-Callers pass their own SQLAlchemy session: the request-scoped session for the
-inline describe flow, or the fresh SessionLocal() opened inside each background
-pipeline task. Both functions commit on success.
+Both delegate to the repository layer (repositories/*) and validate inputs
+defensively before writing. Callers pass the Mongo Database handle (the
+request-scoped handle from get_db, or get_database() inside a background task).
 
 Design note: these are best-effort bookkeeping. Pipeline call sites should wrap
 them in try/except so a logging failure never turns a successful SDLC stage into
@@ -18,17 +18,18 @@ a failed one (matching the existing post-merge scan / QA-autochain convention).
 
 import logging
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from models.stage_transaction import TRANSACTION_STATUSES, StageTransaction
-from models.ticket_status import VALID_STAGES, TicketStatus
+from database import Doc
+from models.stage_transaction import TRANSACTION_STATUSES
+from models.ticket_status import VALID_STAGES
+from repositories import stage_transaction_repo, ticket_status_repo
 
 logger = logging.getLogger("backend.ticket_tracking")
 
 
 def record_transaction(
-    db: Session,
+    db: Database,
     project_id: int,
     ticket_key: str,
     stage: str,
@@ -37,8 +38,8 @@ def record_transaction(
     status: str = "success",
     result_url: str | None = None,
     detail: str | None = None,
-) -> StageTransaction:
-    """Append a StageTransaction row and commit.
+) -> Doc:
+    """Append a StageTransaction row and return it.
 
     Validates stage/status defensively; unknown values raise ValueError so a
     miswired call site is caught in tests rather than silently storing garbage.
@@ -50,18 +51,16 @@ def record_transaction(
             f"status must be one of {sorted(TRANSACTION_STATUSES)}, got {status!r}"
         )
 
-    txn = StageTransaction(
-        project_id=project_id,
-        ticket_key=ticket_key,
-        stage=stage,
-        event=event,
+    txn = stage_transaction_repo.append(
+        db,
+        project_id,
+        ticket_key,
+        stage,
+        event,
         status=status,
         result_url=result_url,
         detail=detail,
     )
-    db.add(txn)
-    db.commit()
-    db.refresh(txn)
     logger.info(
         "stage transaction recorded ticket=%s stage=%s status=%s",
         ticket_key,
@@ -72,7 +71,7 @@ def record_transaction(
 
 
 def upsert_ticket_status(
-    db: Session,
+    db: Database,
     project_id: int,
     ticket_key: str,
     *,
@@ -80,80 +79,45 @@ def upsert_ticket_status(
     current_status: str | None = None,
     summary: str | None = None,
     issue_type: str | None = None,
-) -> TicketStatus:
+) -> Doc:
     """Create or update the single TicketStatus row for (project_id, ticket_key).
 
     Only fields passed (non-None) are written, so callers can update just the
     current_status without clobbering a previously stored summary. A new row
-    requires a pipeline_stage (the NOT NULL coarse stage); if none is supplied
-    for a brand-new ticket it defaults to "description".
+    requires a pipeline_stage; if none is supplied for a brand-new ticket it
+    defaults to "description" (handled by the repository).
     """
-    if pipeline_stage is not None and pipeline_stage not in VALID_STAGES:
-        raise ValueError(
-            f"pipeline_stage must be one of {sorted(VALID_STAGES)}, got {pipeline_stage!r}"
-        )
-
-    existing = db.execute(
-        select(TicketStatus).where(
-            TicketStatus.project_id == project_id,
-            TicketStatus.ticket_key == ticket_key,
-        )
-    ).scalars().first()
-
-    if existing is None:
-        ts = TicketStatus(
-            project_id=project_id,
-            ticket_key=ticket_key,
-            pipeline_stage=pipeline_stage or "description",
-            current_status=current_status,
-            summary=summary,
-            issue_type=issue_type,
-        )
-        db.add(ts)
-    else:
-        ts = existing
-        if pipeline_stage is not None:
-            ts.pipeline_stage = pipeline_stage
-        if current_status is not None:
-            ts.current_status = current_status
-        if summary is not None:
-            ts.summary = summary
-        if issue_type is not None:
-            ts.issue_type = issue_type
-
-    db.commit()
-    db.refresh(ts)
-    return ts
+    return ticket_status_repo.upsert(
+        db,
+        project_id,
+        ticket_key,
+        pipeline_stage=pipeline_stage,
+        current_status=current_status,
+        summary=summary,
+        issue_type=issue_type,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Best-effort wrappers for pipeline call sites
 # ---------------------------------------------------------------------------
 # Pipelines must never fail because bookkeeping failed. These swallow and log
-# any error (and roll back so the caller's session stays usable), returning None.
+# any error, returning None.
 
 
-def safe_record_transaction(db: Session, *args, **kwargs) -> StageTransaction | None:
+def safe_record_transaction(db: Database, *args, **kwargs) -> Doc | None:
     """record_transaction that never raises — for use inside pipelines."""
     try:
         return record_transaction(db, *args, **kwargs)
     except Exception as exc:  # noqa: BLE001 — bookkeeping must not break pipelines
         logger.warning("Failed to record stage transaction: %s", exc)
-        try:
-            db.rollback()
-        except Exception:
-            pass
         return None
 
 
-def safe_upsert_ticket_status(db: Session, *args, **kwargs) -> TicketStatus | None:
+def safe_upsert_ticket_status(db: Database, *args, **kwargs) -> Doc | None:
     """upsert_ticket_status that never raises — for use inside pipelines."""
     try:
         return upsert_ticket_status(db, *args, **kwargs)
     except Exception as exc:  # noqa: BLE001 — bookkeeping must not break pipelines
         logger.warning("Failed to upsert ticket status: %s", exc)
-        try:
-            db.rollback()
-        except Exception:
-            pass
         return None

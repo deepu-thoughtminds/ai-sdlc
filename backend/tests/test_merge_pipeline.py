@@ -30,32 +30,15 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-_TEST_KEY = Fernet.generate_key().decode()
-os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+from database import get_database
+from repositories import pipeline_state_repo
 
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
 
-from database import Base  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.pipeline_state import PipelineState  # noqa: E402
-from models.project import Project  # noqa: E402
+
 from services.crypto import encrypt_credential  # noqa: E402
 from services.pr_creator import MergeResult  # noqa: E402
 
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
 
 
 # ---------------------------------------------------------------------------
@@ -66,13 +49,6 @@ PLAINTEXT_GITHUB_TOKEN = "ghp_SUPER_SECRET_TOKEN"
 PLAINTEXT_JIRA_TOKEN = "jira_api_VERY_SECRET_KEY"
 
 
-@pytest.fixture(autouse=True)
-def reset_tables():
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
 
 
 def _make_mock_project():
@@ -105,13 +81,9 @@ def _make_merge_result(sha: str = "abc123", pr_number: int = 42) -> MergeResult:
 async def test_run_no_pr_found():
     """find_and_merge_pr returns None → informative comment posted; update_status NOT called; status=complete."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     with (
         patch("services.merge_pipeline.find_and_merge_pr", return_value=None),
@@ -132,25 +104,21 @@ async def test_run_no_pr_found():
     assert "PROJ-1" in posted_body
     assert "jarvis/issue-PROJ-1" in posted_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
     assert isinstance(result, str)
     assert result  # non-empty informative message
 
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_run_success():
     """find_and_merge_pr returns MergeResult → update_status("Done"), comment with SHA and PR URL, status=complete."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result(sha="abc123", pr_number=42)
 
@@ -182,25 +150,21 @@ async def test_run_success():
     assert "abc123" in posted_body
     assert "https://github.com/owner/repo/pull/42" in posted_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
     assert "abc123" in (state_row.draft_content or "")
 
     assert "abc123" in result
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_run_status_update_fails_gracefully():
     """update_status returns False → SHA comment still posted, status=complete (graceful degradation)."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result(sha="def456")
 
@@ -225,24 +189,20 @@ async def test_run_status_update_fails_gracefully():
     posted_body = mock_post.call_args[0][4]
     assert "def456" in posted_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
     assert "def456" in result
 
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_run_exception_sets_failed_status():
     """find_and_merge_pr raises RuntimeError → status=failed; failure notification posted."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     with (
         patch(
@@ -263,23 +223,19 @@ async def test_run_exception_sets_failed_status():
     assert "failed" in posted_body.lower()
     assert "PROJ-1" in posted_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "failed"
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_run_reuses_existing_pipeline_state_row():
     """Webhook pre-creates PipelineState(merge_pr, running) → run() reuses it; row count stays 1."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
     # Pre-create the row as the webhook idempotency guard does
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result()
 
@@ -296,30 +252,19 @@ async def test_run_reuses_existing_pipeline_state_row():
         await run(project, "PROJ-1", "Feature X", "Some description", db)
 
     # Only one row should exist (reused, not duplicated)
-    row_count = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == "PROJ-1",
-            PipelineState.stage == "merge_pr",
-        )
-        .count()
+    row_count = db["pipeline_states"].count_documents(
+        {"ticket_key": "PROJ-1", "stage": "merge_pr"}
     )
     assert row_count == 1
-
-    db.close()
 
 
 @pytest.mark.asyncio
 async def test_run_tokens_never_in_comment():
     """T-17-05: github_token and jira_token must never appear in the comment text posted to Jira."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result(sha="sha9999")
 
@@ -348,7 +293,7 @@ async def test_run_tokens_never_in_comment():
         f"jira_token literal leaked into Jira comment: {posted_body!r}"
     )
 
-    db.close()
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -361,13 +306,9 @@ async def test_run_triggers_codebase_rescan_on_success():
     """SNAPSHOT-01: successful merge triggers codebase re-scan with correct args;
     state_row.status stays "complete" and SHA confirmation comment still posted."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result(sha="abc123", pr_number=42)
 
@@ -400,10 +341,10 @@ async def test_run_triggers_codebase_rescan_on_success():
     posted_body = mock_post.call_args[0][4]
     assert "abc123" in posted_body
 
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete"
 
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
@@ -411,13 +352,9 @@ async def test_run_rescan_failure_does_not_fail_merge():
     """SNAPSHOT-01 isolation: re-scan raises RuntimeError → merge outcome unaffected.
     state_row.status="complete", SHA comment posted, exception not leaked to Jira."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     merge_result = _make_merge_result(sha="abc123", pr_number=42)
 
@@ -440,7 +377,7 @@ async def test_run_rescan_failure_does_not_fail_merge():
         result = await run(project, "PROJ-1", "Feature X", "Some description", db)
 
     # merge state must still be complete despite scan failure
-    db.refresh(state_row)
+    state_row = pipeline_state_repo.get(db, state_row.id)
     assert state_row.status == "complete", (
         f"Expected 'complete' but got '{state_row.status}' — scan failure leaked into merge state"
     )
@@ -454,20 +391,16 @@ async def test_run_rescan_failure_does_not_fail_merge():
     # return value must be the normal confirmation text
     assert "abc123" in result
 
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_run_no_pr_found_skips_rescan():
     """No-PR branch: find_and_merge_pr returns None → codebase_scan NOT called."""
     project = _make_mock_project()
-    db = TestingSession()
+    db = get_database()
 
-    state_row = PipelineState(
-        project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running"
-    )
-    db.add(state_row)
-    db.commit()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     with (
         patch("services.merge_pipeline.find_and_merge_pr", return_value=None),
@@ -488,7 +421,7 @@ async def test_run_no_pr_found_skips_rescan():
     # nothing was merged — re-scan must NOT be triggered
     mock_rescan.assert_not_called()
 
-    db.close()
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -500,10 +433,8 @@ async def test_run_no_pr_found_skips_rescan():
 async def test_successful_merge_schedules_qa_auto_chain():
     """After a successful merge, asyncio.create_task schedules QA pipeline (fire-and-forget)."""
     project = _make_mock_project()
-    db = TestingSession()
-    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
-    db.add(state_row)
-    db.commit()
+    db = get_database()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     captured = []
 
@@ -524,17 +455,15 @@ async def test_successful_merge_schedules_qa_auto_chain():
 
     assert len(captured) == 1, f"Expected 1 create_task call (QA auto-chain), got {len(captured)}"
     assert "abc123" in result  # merge comment still returned (not delayed)
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_successful_merge_skips_qa_when_already_active():
     """If QA already running for the ticket, auto-chain is skipped."""
     project = _make_mock_project()
-    db = TestingSession()
-    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
-    db.add(state_row)
-    db.commit()
+    db = get_database()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     mock_create_task = MagicMock()
 
@@ -550,17 +479,15 @@ async def test_successful_merge_skips_qa_when_already_active():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_create_task.assert_not_called()
-    db.close()
+    pass
 
 
 @pytest.mark.asyncio
 async def test_no_open_pr_path_does_not_schedule_qa():
     """No-PR path (merge_result=None) must never schedule QA auto-chain."""
     project = _make_mock_project()
-    db = TestingSession()
-    state_row = PipelineState(project_id=1, ticket_key="PROJ-1", stage="merge_pr", status="running")
-    db.add(state_row)
-    db.commit()
+    db = get_database()
+    state_row = pipeline_state_repo.create(db, 1, "PROJ-1", "merge_pr", status="running")
 
     mock_create_task = MagicMock()
 
@@ -574,4 +501,4 @@ async def test_no_open_pr_path_does_not_schedule_qa():
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
     mock_create_task.assert_not_called()
-    db.close()
+    pass

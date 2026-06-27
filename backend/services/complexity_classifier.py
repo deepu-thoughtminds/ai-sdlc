@@ -26,7 +26,7 @@ above is preserved.
 import json
 import logging
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 from services.llm_router import route_request
 
@@ -91,7 +91,7 @@ def classify_complexity(
     issue_key: str,
     summary: str,
     description: str,
-    db: Session,
+    db: Database,
     project_id: int,
     codebase_snapshot: str | None = None,
 ) -> tuple[str, str]:

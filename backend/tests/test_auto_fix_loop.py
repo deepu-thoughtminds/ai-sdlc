@@ -205,11 +205,14 @@ def test_run_auto_fix_loop_increments_qa_attempt():
         "services.auto_fix_loop.route_request", return_value=_make_llm_response("[stub]")
     ), patch("services.auto_fix_loop._parse_file_changes", return_value=[]), patch(
         "services.auto_fix_loop._rerun_failing_tests", side_effect=side_effects
-    ), patch("services.auto_fix_loop.apply_commit_push_and_open_pr"):
+    ), patch("services.auto_fix_loop.apply_commit_push_and_open_pr"), patch(
+        "services.auto_fix_loop.pipeline_state_repo.update"
+    ) as mock_update:
         run_auto_fix_loop(results, "/tmp/ws", "PROJ-1", "owner/repo", "tok", state_row, db)
 
     assert state_row.qa_attempt == 3
-    assert db.commit.call_count >= 3
+    # qa_attempt now persisted via the repository (Mongo) rather than db.commit()
+    assert mock_update.call_count >= 3
 
 
 def test_run_auto_fix_loop_max_attempts_constant():

@@ -49,8 +49,8 @@ def _make_event(issue_key: str = "PROJ-1", body: str = "@jarvis assign @john.doe
 
 
 def _make_mention(extra: str = "@john.doe") -> MentionResult:
-    """Build a MentionResult for the assign stage."""
-    return MentionResult(mention_target="hermes", stage="assign", extra=extra)
+    """Build a MentionResult for the assign action."""
+    return MentionResult(mention_target="hermes", action="assign", extra=extra)
 
 
 # ---------------------------------------------------------------------------

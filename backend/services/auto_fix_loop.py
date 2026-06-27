@@ -25,6 +25,7 @@ import logging
 import os
 import pathlib
 
+from repositories import pipeline_state_repo
 from services.code_generator import FileChange, _parse_file_changes
 from services.llm_router import route_request
 from services.pr_creator import apply_commit_push_and_open_pr
@@ -169,8 +170,8 @@ def run_auto_fix_loop(
 
         applied = [c for c in changes if _apply_fix(workspace_path, c)]
 
-        state_row.qa_attempt = attempt
-        db.commit()
+        pipeline_state_repo.update(db, state_row.id, qa_attempt=attempt)
+        state_row.qa_attempt = attempt  # keep local copy in sync
 
         if applied:
             any_fix_applied = True
