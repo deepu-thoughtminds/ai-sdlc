@@ -107,6 +107,7 @@ services:
       - DOCKER_SOCKET=/var/run/docker.sock
       - QA_SANDBOX_IMAGE=${QA_SANDBOX_IMAGE:-qa-sandbox}
       - SONAR_URL=${SONAR_URL:-http://sonarqube:9000}
+      - SONAR_TIMEOUT_SECONDS=${SONAR_TIMEOUT_SECONDS:-300}
     depends_on:
       - hermes
       - litellm

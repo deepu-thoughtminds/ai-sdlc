@@ -66,6 +66,7 @@ from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_executor import TestResult, ToolchainCommand, run_command, run_npm_audit_fix, run_static_analysis
 from services.app_container import ContainerStartError, managed_app_container
 from services.sonar_client import ensure_sonarqube_ready
+from services.sonar_scanner import run_sonar_scan
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
@@ -196,6 +197,38 @@ def _collect_relevant_files(workspace_path: str) -> dict[str, str]:
     return collected
 
 
+def _run_sonar_step(cloned, compose_network: str, issue_key: str) -> "TestResult | None":
+    """Execute sonar-scanner + CE task poll. SCAN-01..04.
+
+    Returns None if SONAR_URL/SONAR_TOKEN not set. Never raises.
+    """
+    sonar_url = os.environ.get("SONAR_URL")
+    sonar_token = os.environ.get("SONAR_TOKEN")
+    if not sonar_url or not sonar_token:
+        logger.info("SONAR_URL or SONAR_TOKEN not set — skipping sonar scan for %s", issue_key)
+        return None
+    project_key = f"{cloned.owner}__{cloned.repo}"
+    timeout_secs = int(os.environ.get("SONAR_TIMEOUT_SECONDS", "300"))
+    try:
+        return run_sonar_scan(
+            workspace_path=cloned.workspace_path,
+            project_key=project_key,
+            sonar_url=sonar_url,
+            token=sonar_token,
+            compose_network=compose_network,
+            timeout_secs=timeout_secs,
+        )
+    except Exception as exc:
+        logger.warning("Sonar scan error for %s: %s", issue_key, exc)
+        return TestResult(
+            tool="sonar-scanner",
+            returncode=2,
+            stdout="",
+            stderr=f"Sonar scan error: {exc}",
+            timed_out=False,
+        )
+
+
 async def run(
     project: Project,
     issue_key: str,
@@ -283,6 +316,7 @@ async def run(
     e2e_results: list[TestResult] = []
     static_results: list[TestResult] = []
     playwright_py_results: list[TestResult] = []
+    sonar_result: TestResult | None = None
     autofix_pr_url: str | None = None
     npm_audit_fix_pr_url: str | None = None
     e2e_live_url: str | None = None
@@ -498,6 +532,9 @@ async def run(
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
         static_results = run_static_analysis(cloned.workspace_path, timeout=300)
 
+        # Step 5.2 — SonarQube scan (SCAN-01..04).
+        sonar_result = _run_sonar_step(cloned, compose_network, issue_key)
+
         # Step 5.1 — npm audit auto-fix: if npm_audit failed, run `npm audit fix`
         # in Docker and open a PR with the updated lockfile.
         npm_audit_failed = any(
@@ -536,6 +573,7 @@ async def run(
         comment_text = _format_qa_comment(
             unit_test_results, e2e_results, static_results, issue_key,
             e2e_skip_note, playwright_py_results, e2e_live_url=e2e_live_url,
+            sonar_result=sonar_result,
         )
         still_failing = any(r.returncode != 0 and not r.timed_out for r in unit_test_results)
         if autofix_pr_url and still_failing:
@@ -639,6 +677,7 @@ def _format_qa_comment(
     e2e_skip_note: str | None = None,
     playwright_py_results: list[TestResult] | None = None,
     e2e_live_url: str | None = None,
+    sonar_result: "TestResult | None" = None,
 ) -> str:
     """Format QA results into a human-readable Jira comment with per-category sections.
 
@@ -735,6 +774,18 @@ def _format_qa_comment(
             else:
                 stderr_snippet = r.stderr[:500] if r.stderr else ""
                 lines.append(f"- {r.tool}: FAILED (exit {r.returncode})\n{stderr_snippet}")
+
+    # --- SonarQube Scan section ---
+    lines.append("")
+    lines.append("**SonarQube Scan:**")
+    if sonar_result is None:
+        lines.append("- Skipped (SONAR_URL or SONAR_TOKEN not configured).")
+    elif sonar_result.returncode == 0:
+        lines.append(f"- sonar-scanner: SUCCESS — {sonar_result.stderr}")
+    elif sonar_result.timed_out:
+        lines.append(f"- sonar-scanner: TIMED OUT — {sonar_result.stderr}")
+    else:
+        lines.append(f"- sonar-scanner: FAILED (exit {sonar_result.returncode}) — {sonar_result.stderr[:200]}")
 
     return "\n".join(lines)
 
