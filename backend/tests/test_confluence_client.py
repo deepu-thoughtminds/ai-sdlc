@@ -122,6 +122,16 @@ def test_get_page_url_constructs_correctly():
     assert url == f"{CONFLUENCE_BASE}/wiki/spaces/PROJ/pages/12345"
 
 
+def test_get_page_url_does_not_double_wiki_for_cloud_base():
+    """A base_url already ending in /wiki (Atlassian Cloud) must not yield /wiki/wiki."""
+    client = ConfluenceClient(
+        base_url=f"{CONFLUENCE_BASE}/wiki", token=CONF_TOKEN, email=CONF_EMAIL
+    )
+    url = client.get_page_url("SCRUM", "7667750")
+    assert url == f"{CONFLUENCE_BASE}/wiki/spaces/SCRUM/pages/7667750"
+    assert "/wiki/wiki/" not in url
+
+
 # ---------------------------------------------------------------------------
 # find_page tests
 # ---------------------------------------------------------------------------
