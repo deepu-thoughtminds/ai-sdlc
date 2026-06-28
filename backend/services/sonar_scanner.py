@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class SonarIssue:
+    file: str       # component path after the project key prefix
+    line: int | None
+    message: str
+    severity: str   # BLOCKER, CRITICAL, MAJOR, MINOR, INFO
+    type: str       # BUG, VULNERABILITY, CODE_SMELL, SECURITY_HOTSPOT
+
+
+@dataclass
 class SonarMetrics:
     gate_status: str        # "PASSED" or "FAILED"
     bugs: int
@@ -22,6 +31,13 @@ class SonarMetrics:
     coverage: float | None  # None when not measured (no tests)
     duplications: float
     dashboard_url: str
+    security_hotspots: int = 0
+    ncloc: int = 0          # lines of code (excluding blanks/comments)
+    issues: list[SonarIssue] = None  # top issues fetched when gate FAILED
+
+    def __post_init__(self):
+        if self.issues is None:
+            self.issues = []
 
 
 def fetch_sonar_metrics(
@@ -33,12 +49,12 @@ def fetch_sonar_metrics(
     Never raises — all exceptions are caught and logged as warnings.
     Dashboard URL: {sonar_url}/dashboard?id={project_key}
     """
-    metric_keys = "alert_status,bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density"
+    metric_keys = "alert_status,bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_hotspots,ncloc"
     try:
         r = httpx.get(
             f"{sonar_url}/api/measures/component",
             params={"component": project_key, "metricKeys": metric_keys},
-            headers={"Authorization": f"Bearer {token}"},
+            auth=(token, ""),  # SonarQube <10: token as basic-auth username
             timeout=10.0,
         )
         r.raise_for_status()
@@ -52,7 +68,7 @@ def fetch_sonar_metrics(
         coverage_raw = by_metric.get("coverage")
         coverage = float(coverage_raw) if coverage_raw not in (None, "") else None
 
-        return SonarMetrics(
+        metrics = SonarMetrics(
             gate_status=gate_status,
             bugs=int(by_metric.get("bugs", "0")),
             vulnerabilities=int(by_metric.get("vulnerabilities", "0")),
@@ -60,12 +76,52 @@ def fetch_sonar_metrics(
             coverage=coverage,
             duplications=float(by_metric.get("duplicated_lines_density", "0")),
             dashboard_url=f"{sonar_url}/dashboard?id={project_key}",
+            security_hotspots=int(by_metric.get("security_hotspots", "0")),
+            ncloc=int(by_metric.get("ncloc", "0")),
         )
+        if metrics.gate_status == "FAILED":
+            metrics.issues = _fetch_sonar_issues(project_key, sonar_url, token)
+        return metrics
     except Exception:
         logger.warning(
             "fetch_sonar_metrics failed for project_key=%s — returning None", project_key
         )
         return None
+
+
+def _fetch_sonar_issues(project_key: str, sonar_url: str, token: str) -> list[SonarIssue]:
+    """Fetch top BLOCKER/CRITICAL/MAJOR issues when quality gate fails. Never raises."""
+    try:
+        r = httpx.get(
+            f"{sonar_url}/api/issues/search",
+            params={
+                "componentKeys": project_key,
+                "resolved": "false",
+                "severities": "BLOCKER,CRITICAL,MAJOR",
+                "ps": 30,
+                "s": "SEVERITY",
+                "asc": "false",
+            },
+            auth=(token, ""),
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        issues = []
+        prefix = project_key + ":"
+        for item in r.json().get("issues", []):
+            component = item.get("component", "")
+            file_path = component[len(prefix):] if component.startswith(prefix) else component
+            issues.append(SonarIssue(
+                file=file_path,
+                line=item.get("line"),
+                message=item.get("message", ""),
+                severity=item.get("severity", ""),
+                type=item.get("type", ""),
+            ))
+        return issues
+    except Exception:
+        logger.warning("_fetch_sonar_issues failed for project_key=%s", project_key)
+        return []
 
 _CE_POLL_INTERVAL = 5  # seconds between CE task polls
 
@@ -89,7 +145,7 @@ def _poll_ce_task(sonar_url: str, task_id: str, token: str, timeout_secs: int) -
             r = httpx.get(
                 f"{sonar_url}/api/ce/task",
                 params={"id": task_id},
-                headers={"Authorization": f"Bearer {token}"},
+                auth=(token, ""),  # SonarQube <10: token as basic-auth username
                 timeout=10.0,
             )
             if r.status_code == 200:

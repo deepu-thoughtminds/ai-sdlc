@@ -897,25 +897,28 @@ def _build_remediation_html(
         )
 
     if sonar_failed and sonar_metrics:
-        dashboard_link = f'<a href="{sonar_metrics.dashboard_url}">SonarQube dashboard</a>'
-        problems = []
-        if sonar_metrics.bugs > 0:
-            problems.append(f"{sonar_metrics.bugs} bug(s)")
-        if sonar_metrics.vulnerabilities > 0:
-            problems.append(f"{sonar_metrics.vulnerabilities} vulnerability/vulnerabilities")
-        if sonar_metrics.security_hotspots > 0:
-            problems.append(f"{sonar_metrics.security_hotspots} security hotspot(s)")
-        if sonar_metrics.code_smells > 0:
-            problems.append(f"{sonar_metrics.code_smells} code smell(s)")
-        if sonar_metrics.duplications > 3.0:
-            problems.append(f"{sonar_metrics.duplications:.1f}% duplication")
-        if sonar_metrics.coverage is not None and sonar_metrics.coverage < 80.0:
-            problems.append(f"{sonar_metrics.coverage:.1f}% coverage (threshold 80%)")
-        problem_str = ", ".join(problems) if problems else "see dashboard for details"
+        issue_rows = ""
+        if sonar_metrics.issues:
+            rows = []
+            for iss in sonar_metrics.issues:
+                loc = f"{iss.file}:{iss.line}" if iss.line else iss.file
+                rows.append(
+                    f"<tr><td><code>{loc}</code></td>"
+                    f"<td>{iss.severity}</td>"
+                    f"<td>{iss.type.replace('_', ' ')}</td>"
+                    f"<td>{iss.message}</td></tr>"
+                )
+            issue_rows = (
+                "<table><tr><th>Location</th><th>Severity</th>"
+                "<th>Type</th><th>Issue</th></tr>"
+                + "".join(rows)
+                + "</table>"
+            )
+        else:
+            issue_rows = "<p>No specific issues retrieved — re-scan to get details.</p>"
         items.append(
-            f"<li><strong>SonarQube Quality Gate FAILED</strong> ({problem_str}): "
-            f"Review findings on the {dashboard_link}, fix the flagged issues, and "
-            f"re-trigger QA.</li>"
+            f"<li><strong>SonarQube Quality Gate FAILED</strong> — fix the following "
+            f"before re-triggering QA:{issue_rows}</li>"
         )
 
     return "<ul>" + "".join(items) + "</ul>"
