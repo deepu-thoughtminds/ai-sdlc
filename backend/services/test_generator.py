@@ -236,7 +236,11 @@ def generate_e2e_tests(
         "- Write tests ONLY for behaviour visible in the supplied file contents\n"
         "- Include complete file content for each test file\n"
         "- Use the exact ### FILE: format for each test file\n"
-        "- Do not include explanations outside of the file blocks"
+        "- Do not include explanations outside of the file blocks\n"
+        "- ALWAYS set viewport at the start of each test: await page.setViewportSize({ width: 1280, height: 720 })\n"
+        "- NEVER use page.locator('text=...'). Use page.getByRole() or page.getByText() instead.\n"
+        "  Example: await expect(page.getByRole('heading', { name: 'Welcome to Pivot' })).toBeVisible()\n"
+        "  Example: await expect(page.getByText('Welcome to Pivot', { exact: false })).toBeVisible()"
     )
 
     route_result = route_request("testgen", prompt)

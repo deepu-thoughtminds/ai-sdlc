@@ -513,6 +513,10 @@ async def run(
                             result.returncode,
                             result.timed_out,
                         )
+                        if result.stdout:
+                            logger.info("E2E stdout:\n%s", result.stdout[:3000])
+                        if result.stderr:
+                            logger.info("E2E stderr:\n%s", result.stderr[:2000])
 
                 # Execute pre-generated Python Playwright tests against the live app.
                 image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")

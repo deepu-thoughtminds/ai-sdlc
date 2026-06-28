@@ -141,8 +141,10 @@ async def run_claude_playwright_generator(
         "from playwright.sync_api import Page, expect\n\n"
         f"BASE_URL = os.environ.get('BASE_URL', '{frontend_url}')\n\n"
         f"def test_{issue_slug}_acceptance(page: Page):\n"
+        "    page.set_viewport_size({'width': 1280, 'height': 720})\n"
         "    page.goto(BASE_URL)\n"
         "    # TODO: add assertions based on the story acceptance criteria\n"
+        "    # Use get_by_role / get_by_text — NEVER page.locator('text=...')\n"
         "    expect(page).to_have_url(BASE_URL + '/')\n"
         "```\n\n"
         "HARD CONSTRAINTS:\n"
@@ -150,6 +152,10 @@ async def run_claude_playwright_generator(
         "- Use Python + pytest-playwright ONLY (not TypeScript, not Jest).\n"
         "- Do NOT modify any existing files in the repo.\n"
         f"- Do NOT skip step 1 (mkdir) or step 2 (Write `{target_file}`).\n"
+        "- ALWAYS call page.set_viewport_size({'width': 1280, 'height': 720}) before page.goto().\n"
+        "- NEVER use page.locator('text=...'). Use page.get_by_role() or page.get_by_text() instead.\n"
+        "  Example: expect(page.get_by_role('heading', name='Welcome to Pivot')).to_be_visible()\n"
+        "  Example: expect(page.get_by_text('Welcome to Pivot', exact=False)).to_be_visible()\n"
     )
 
     options = ClaudeAgentOptions(
