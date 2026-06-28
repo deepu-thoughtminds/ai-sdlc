@@ -16,7 +16,7 @@ Database path:
 import os
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", "sqlite:////app/data/app.db")
@@ -64,6 +64,28 @@ def init_db() -> None:
     volume.
     """
     Base.metadata.create_all(engine)
+    _migrate_ticket_statuses()
+
+
+def _migrate_ticket_statuses() -> None:
+    """Idempotent column additions for ticket_statuses.
+
+    summary, issue_type, and current_status were added after the initial table
+    creation. Existing Docker volumes have the old schema; create_all() won't
+    touch them. This runs PRAGMA to check and ALTER only what's missing.
+    ponytail: no Alembic, just PRAGMA guard — upgrade to Alembic if more tables need this
+    """
+    _NEW_COLS = {
+        "summary": "VARCHAR(2000)",
+        "issue_type": "VARCHAR(50)",
+        "current_status": "VARCHAR(500)",
+    }
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(ticket_statuses)"))}
+        for col, col_type in _NEW_COLS.items():
+            if col not in existing:
+                conn.execute(text(f"ALTER TABLE ticket_statuses ADD COLUMN {col} {col_type}"))
+        conn.commit()
 
 
 def get_db() -> Generator[Session, None, None]:
