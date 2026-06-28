@@ -79,6 +79,8 @@ def _migrate_ticket_statuses() -> None:
         "summary": "VARCHAR(2000)",
         "issue_type": "VARCHAR(50)",
         "current_status": "VARCHAR(500)",
+        "created_at": "DATETIME",
+        "updated_at": "DATETIME",
     }
     with engine.connect() as conn:
         existing = {row[1] for row in conn.execute(text("PRAGMA table_info(ticket_statuses)"))}

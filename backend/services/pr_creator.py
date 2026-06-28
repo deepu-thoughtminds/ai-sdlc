@@ -228,8 +228,9 @@ def apply_commit_push_and_open_pr(
         resolved.write_text(change.content, encoding="utf-8")
         logger.info("Applied change to: %s", change.path)
 
-    # Step 4: Stage all changes
-    _run_git(["add", "-A"], cwd=workspace_path, github_token=github_token)
+    # Step 4: Stage only the files we wrote — never node_modules or build artefacts
+    for change in file_changes:
+        _run_git(["add", change.path], cwd=workspace_path, github_token=github_token)
 
     # Step 5: Commit
     commit_message = f"feat: jarvis autonomous changes for {issue_key}"

@@ -502,7 +502,14 @@ async def run(
                                 "-w", "/workspace",
                                 "-e", f"BASE_URL={playwright_deployment_url}",
                                 image,
-                                "npx", "--yes", "@playwright/test", "test", f"/workspace/{change.path}",
+                                "sh", "-c",
+                                # ESM ignores NODE_PATH; symlink global @playwright/test
+                                # into workspace node_modules so ESM finds it by path walk.
+                                # @playwright is a scoped dir — mkdir the scope first.
+                                "mkdir -p /workspace/node_modules/@playwright && "
+                                "ln -sf /usr/local/lib/node_modules/@playwright/test "
+                                "/workspace/node_modules/@playwright/test && "
+                                f"npx --yes @playwright/test test /workspace/{change.path}",
                             ],
                         )
                         result = run_command(cmd)
@@ -798,7 +805,7 @@ def _format_qa_comment(
     lines.append("")
     lines.append("**Python Playwright Evaluation:**")
     if not playwright_py_results:
-        lines.append("- Skipped (CLAUDE_API_KEY not set or no tests generated).")
+        lines.append("- Skipped (no tests generated).")
     else:
         for r in playwright_py_results:
             if r.returncode == 0:

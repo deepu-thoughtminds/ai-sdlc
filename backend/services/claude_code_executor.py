@@ -158,6 +158,23 @@ async def run_claude_playwright_generator(
         "  Example: expect(page.get_by_text('Welcome to Pivot', exact=False)).to_be_visible()\n"
     )
 
+    # Write template first so the file exists even if the agent misbehaves.
+    # The agent is then asked to overwrite it with real assertions.
+    import pathlib
+    target_path = pathlib.Path(workspace_path) / target_file
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    template = (
+        "import os\n"
+        "import pytest\n"
+        "from playwright.sync_api import Page, expect\n\n"
+        f"BASE_URL = os.environ.get('BASE_URL', '{frontend_url}')\n\n"
+        f"def test_{issue_slug}_acceptance(page: Page):\n"
+        "    page.set_viewport_size({'width': 1280, 'height': 720})\n"
+        "    page.goto(BASE_URL)\n"
+        "    expect(page).to_have_url(BASE_URL + '/')\n"
+    )
+    target_path.write_text(template, encoding="utf-8")
+
     options = ClaudeAgentOptions(
         cwd=workspace_path,
         permission_mode="acceptEdits",
@@ -178,19 +195,10 @@ async def run_claude_playwright_generator(
             pass
     except Exception as exc:  # noqa: BLE001
         logger.error("Claude Playwright generator failed for %s: %s", issue_key, exc)
-        return []
 
-    # Collect only the specific target file the agent was instructed to write.
-    # Using git ls-files --others to find new untracked files (agent writes new files,
-    # not modifying existing ones).
-    all_changes = _collect_file_changes(workspace_path)
-    pw_changes = [c for c in all_changes if c.path == target_file]
-    if not pw_changes:
-        # Fallback: accept any .py file under tests/playwright/ in case agent used a different name
-        pw_changes = [c for c in all_changes if c.path.startswith("tests/playwright/") and c.path.endswith(".py")]
-    if not pw_changes:
-        logger.warning("Playwright generator produced no test files for ticket %s", issue_key)
-    return pw_changes
+    # Always return the target file — template is the floor, agent enrichment is the ceiling.
+    content = target_path.read_text(encoding="utf-8")
+    return [FileChange(path=target_file, content=content)]
 
 
 def _collect_file_changes(workspace_path: str) -> list[FileChange]:

@@ -7,6 +7,12 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
+// ponytail: reads from NEXT_PUBLIC_API_TOKEN (set in .env, inlined at build time by Next.js)
+function authHeaders(): Record<string, string> {
+  const token = process.env.NEXT_PUBLIC_API_TOKEN
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -46,7 +52,7 @@ export async function createProject(
 ): Promise<ProjectPublic> {
   const res = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -62,7 +68,7 @@ export async function createProject(
  * List all projects. Returns compact project items without token fields.
  */
 export async function listProjects(): Promise<ProjectPublic[]> {
-  const res = await fetch(`${API_BASE}/api/projects`)
+  const res = await fetch(`${API_BASE}/api/projects`, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<ProjectPublic[]>
 }
@@ -102,7 +108,7 @@ export interface ProjectWithTickets {
  * Fetch all projects with their nested ticket pipeline statuses.
  */
 export async function getDashboard(): Promise<ProjectWithTickets[]> {
-  const res = await fetch(`${API_BASE}/api/dashboard/projects`)
+  const res = await fetch(`${API_BASE}/api/dashboard/projects`, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<ProjectWithTickets[]>
 }
@@ -117,7 +123,7 @@ export async function upsertTicketStatus(
 ): Promise<TicketStatusPublic> {
   const res = await fetch(`${API_BASE}/api/dashboard/projects/${projectId}/tickets`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {

@@ -349,20 +349,32 @@ def _render_sonar_section(sonar_metrics: "SonarMetrics | None") -> str:
         return "<h2>SonarQube</h2><p>SonarQube scan unavailable.</p>"
 
     coverage_display = (
-        f"{sonar_metrics.coverage:.1f}%" if sonar_metrics.coverage is not None else "N/A"
+        f"{sonar_metrics.coverage:.1f}%" if sonar_metrics.coverage is not None else "N/A (no test coverage data)"
     )
+    gate_colour = "green" if sonar_metrics.gate_status == "PASSED" else "red"
+    gate_label = "✅ PASSED" if sonar_metrics.gate_status == "PASSED" else "❌ FAILED"
+    bugs_flag = " ⚠️" if sonar_metrics.bugs > 0 else ""
+    vuln_flag = " ⚠️" if sonar_metrics.vulnerabilities > 0 else ""
+    hotspot_flag = " ⚠️" if sonar_metrics.security_hotspots > 0 else ""
+    smells_flag = " ℹ️" if sonar_metrics.code_smells > 5 else ""
+    dup_flag = " ℹ️" if sonar_metrics.duplications > 3.0 else ""
+    ncloc_display = f"{sonar_metrics.ncloc:,}" if sonar_metrics.ncloc else "N/A"
+    project_key = sonar_metrics.dashboard_url.split("id=")[-1] if "id=" in sonar_metrics.dashboard_url else "N/A"
     return (
-        "<h2>SonarQube</h2>"
+        "<h2>SonarQube Static Analysis</h2>"
+        f"<p><strong>Project:</strong> {_escape(project_key)}</p>"
         "<table>"
-        "<tr><th>Metric</th><th>Value</th></tr>"
-        f"<tr><td>Quality Gate</td><td>{_escape(sonar_metrics.gate_status)}</td></tr>"
-        f"<tr><td>Bugs</td><td>{sonar_metrics.bugs}</td></tr>"
-        f"<tr><td>Vulnerabilities</td><td>{sonar_metrics.vulnerabilities}</td></tr>"
-        f"<tr><td>Code Smells</td><td>{sonar_metrics.code_smells}</td></tr>"
-        f"<tr><td>Coverage</td><td>{coverage_display}</td></tr>"
-        f"<tr><td>Duplications</td><td>{sonar_metrics.duplications:.1f}%</td></tr>"
+        "<tr><th>Metric</th><th>Value</th><th>Description</th></tr>"
+        f'<tr><td><strong>Quality Gate</strong></td><td><span style="color:{gate_colour}"><strong>{gate_label}</strong></span></td><td>Overall pass/fail against configured thresholds</td></tr>'
+        f"<tr><td>Bugs</td><td>{sonar_metrics.bugs}{bugs_flag}</td><td>Reliability issues that will cause incorrect behaviour at runtime</td></tr>"
+        f"<tr><td>Vulnerabilities</td><td>{sonar_metrics.vulnerabilities}{vuln_flag}</td><td>Security weaknesses exploitable by an attacker</td></tr>"
+        f"<tr><td>Security Hotspots</td><td>{sonar_metrics.security_hotspots}{hotspot_flag}</td><td>Security-sensitive code requiring manual review</td></tr>"
+        f"<tr><td>Code Smells</td><td>{sonar_metrics.code_smells}{smells_flag}</td><td>Maintainability issues that increase technical debt</td></tr>"
+        f"<tr><td>Test Coverage</td><td>{coverage_display}</td><td>% of lines exercised by automated tests</td></tr>"
+        f"<tr><td>Duplications</td><td>{sonar_metrics.duplications:.1f}%{dup_flag}</td><td>Duplicate code blocks detected across the project</td></tr>"
+        f"<tr><td>Lines of Code</td><td>{ncloc_display}</td><td>Non-comment, non-blank lines analysed</td></tr>"
         "</table>"
-        f'<p><a href="{sonar_metrics.dashboard_url}">View SonarQube Dashboard</a></p>'
+        "<p><em>⚠️ = needs attention &nbsp;|&nbsp; ℹ️ = worth reviewing &nbsp;|&nbsp; SonarQube dashboard accessible only within the internal Docker network.</em></p>"
     )
 
 

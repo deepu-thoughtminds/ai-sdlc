@@ -38,10 +38,16 @@ RUN pip install --no-cache-dir \
 RUN playwright install --with-deps chromium
 
 # Install JS/TS QA tools globally; yarn ships with node:20, add pnpm for pnpm repos
-RUN npm install -g \
+RUN npm install -g --force \
     "eslint@8.57.0" \
     "typescript@5.4.5" \
-    "pnpm"
+    "pnpm" \
+    "@playwright/test"
+
+# Install Chromium for Node.js @playwright/test (may reuse the binary above if versions match;
+# downloads its own versioned copy to ~/.cache/ms-playwright/ otherwise).
+# ponytail: system deps (libglib etc.) already present from the Python playwright install above.
+RUN playwright install chromium
 
 # Set working directory (backend mounts workspace here)
 WORKDIR /workspace
