@@ -23,16 +23,20 @@ Threat mitigations:
 import logging
 import os
 
+from pymongo.database import Database
+
 from models.project import Project
 from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.crypto import decrypt_credential
 from services.hermes_client import post_sprint_backlog
 from services.llm_router import route_request
+from services.reasoning import REASONING_INSTRUCTION, split_reasoning
+from services.ticket_tracking import safe_record_agent_event, safe_record_reasoning
 
 logger = logging.getLogger(__name__)
 
 
-async def run(event: object, project: Project) -> str:
+async def run(event: object, project: Project, db: Database) -> str:
     """Run the description elaboration pipeline for a Jira ticket.
 
     Steps:
@@ -119,10 +123,30 @@ async def run(event: object, project: Project) -> str:
         f"acceptance criteria, technical scope, and any integration points visible in the "
         f"codebase. Reference specific module names and file paths from the codebase context "
         f"where relevant. Output only the description text."
+        + REASONING_INSTRUCTION
+    )
+
+    # Record the context-gathering steps as agent actions (best-effort).
+    safe_record_agent_event(
+        db, project.id, issue_key, "description", "action", "Read codebase snapshot",
+        detail=f"{len(snapshot)} chars" if snapshot else "no snapshot available",
+    )
+    safe_record_agent_event(
+        db, project.id, issue_key, "description", "action", "Fetched sprint backlog",
+        detail=f"{len(backlog)} ticket(s)",
     )
 
     # --- Step 4: Route to LLM (HEAVY_STAGES includes "describe") ---
     logger.info("Running describe pipeline for issue %s", issue_key)
     response = route_request("describe", prompt)
 
-    return response.content
+    # Split the model's <thinking> reasoning from the description it should post.
+    reasoning, answer = split_reasoning(response.content)
+    if response.reasoning:  # native reasoning tokens take precedence when present
+        reasoning = response.reasoning
+    safe_record_reasoning(db, project.id, issue_key, "description", reasoning)
+    safe_record_agent_event(
+        db, project.id, issue_key, "description", "goal", "Description drafted",
+    )
+
+    return answer

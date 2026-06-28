@@ -8,6 +8,9 @@ Read-only views over the data populated by the SDLC pipelines:
   GET /api/projects/{project_id}/tickets/{ticket_key}
       — feature request details + the full chronological stage-transaction
         timeline for one ticket (task 4).
+  GET /api/projects/{project_id}/tickets/{ticket_key}/agent-events
+      — the captured agent activity log (thinking / action / decision / goal)
+        for one ticket, oldest-first.
 
 All routes require a valid JWT (same get_current_user dependency as the rest of
 /api). The Jira webhook keeps its own HMAC secret and is unaffected.
@@ -21,9 +24,15 @@ from pymongo.database import Database
 
 from database import get_db
 from datetime import datetime
+from models.agent_event import AgentEventPublic
 from models.stage_transaction import StageTransactionPublic
 from models.ticket_status import TicketStatus, TicketStatusPublic
-from repositories import projects_repo, stage_transaction_repo, ticket_status_repo
+from repositories import (
+    agent_event_repo,
+    projects_repo,
+    stage_transaction_repo,
+    ticket_status_repo,
+)
 from services.auth import get_current_user
 
 logger = logging.getLogger("backend.tickets")
@@ -116,3 +125,23 @@ def get_ticket_detail(
         updated_at=ticket.updated_at,
         transactions=[StageTransactionPublic.model_validate(t) for t in transactions],
     )
+
+
+@router.get(
+    "/projects/{project_id}/tickets/{ticket_key}/agent-events",
+    response_model=list[AgentEventPublic],
+)
+def get_ticket_agent_events(
+    project_id: int, ticket_key: str, db: Database = Depends(get_db)
+) -> list[AgentEventPublic]:
+    """Return the captured agent activity log for one ticket, oldest-first.
+
+    Each event is one of thinking / action / decision / goal — the fine-grained
+    record of what the agent thought, did, decided and achieved. 404 if the
+    project or ticket is unknown.
+    """
+    _get_project_or_404(db, project_id)
+    _get_ticket_or_404(db, project_id, ticket_key)
+
+    events = agent_event_repo.list_for_ticket(db, project_id, ticket_key)
+    return [AgentEventPublic.model_validate(e) for e in events]

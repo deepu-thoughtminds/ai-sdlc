@@ -43,7 +43,11 @@ from services.hermes_client import (
 from services.pr_creator import find_and_merge_pr
 from services.qa_pipeline import has_active_qa_run
 from services.qa_pipeline import run as run_qa_pipeline
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,9 @@ async def run(
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
 
+        safe_record_agent_event(
+            db, project.id, issue_key, "merge", "action", "Searching for open PR",
+        )
         # find_and_merge_pr is a synchronous httpx function (matching
         # apply_commit_push_and_open_pr's sync convention in pr_creator.py).
         merge_result = find_and_merge_pr(github_repo, github_token, issue_key)
@@ -147,6 +154,10 @@ async def run(
             )
 
         # Step 4: PR found and merged — decrypt Jira credentials for status update.
+        safe_record_agent_event(
+            db, project.id, issue_key, "merge", "action",
+            f"Merged PR #{merge_result.pr_number}", detail=merge_result.sha,
+        )
         jira_token = decrypt_credential(project.jira_token)
         jira_email = (
             getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
@@ -158,7 +169,11 @@ async def run(
         status_updated = await update_status(
             project.jira_url, jira_email, jira_token, issue_key, "Done"
         )
-        if not status_updated:
+        if status_updated:
+            safe_record_agent_event(
+                db, project.id, issue_key, "merge", "action", "Set Jira status to Done",
+            )
+        else:
             logger.warning(
                 "Merge pipeline: Jira status update to 'Done' failed for %s — "
                 "continuing with SHA confirmation comment",
@@ -218,6 +233,10 @@ async def run(
             db, project.id, issue_key, "merge", "PR merged", status="success",
             result_url=merge_result.pr_url,
             detail=f"Merge commit SHA: {merge_result.sha}",
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "merge", "goal", "PR merged",
+            detail=merge_result.pr_url,
         )
 
         # Step 8: QA auto-chain (QATRIG-01). Fire-and-forget — never delays the

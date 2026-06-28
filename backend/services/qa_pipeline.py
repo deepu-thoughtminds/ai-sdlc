@@ -67,7 +67,11 @@ from services.test_executor import TestResult, ToolchainCommand, run_command, ru
 from services.app_container import ContainerStartError, managed_app_container
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +301,13 @@ async def run(
             issue_description=issue_description,
             codebase_context=codebase_context,
             relevant_file_contents=relevant_file_contents,
+            db=db,
+            project_id=project.id,
+            ticket_key=issue_key,
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "action", "Generated unit tests",
+            detail=f"{len(file_changes)} file(s)",
         )
 
         # (d) Write each generated file with path-traversal guard (T-24-01)
@@ -391,6 +402,9 @@ async def run(
                         issue_description=issue_description,
                         codebase_context=codebase_context,
                         relevant_file_contents=relevant_file_contents,
+                        db=db,
+                        project_id=project.id,
+                        ticket_key=issue_key,
                     )
                     for change in e2e_file_changes:
                         # T-24-01: traversal guard only
@@ -474,6 +488,11 @@ async def run(
         # Step 5 — Run static analysis tools via Docker subprocess.
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
         static_results = run_static_analysis(cloned.workspace_path, timeout=300)
+        _static_failed = sum(1 for r in static_results if r.returncode != 0 and not r.timed_out)
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "action", "Ran static analysis",
+            detail=f"{len(static_results)} tool(s), {_static_failed} failing",
+        )
 
         # Step 5.1 — npm audit auto-fix: if npm_audit failed, run `npm audit fix`
         # in Docker and open a PR with the updated lockfile.
@@ -542,6 +561,10 @@ async def run(
         safe_record_transaction(
             db, project.id, issue_key, "qa", "QA pipeline completed",
             status="success", result_url=autofix_pr_url or None,
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "goal", "QA pipeline completed",
+            detail=autofix_pr_url or None,
         )
 
     except Exception as exc:

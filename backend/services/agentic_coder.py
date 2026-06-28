@@ -22,14 +22,30 @@ pointed at the local `litellm` service.
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolUseBlock,
+    query,
+)
 
 logger = logging.getLogger(__name__)
 
 _MAX_ARCHITECTURE_CHARS = 8000
 _MAX_DIRECTORY_TREE_CHARS = 4000
+
+# Cap captured reasoning/action text so a single agent_events document stays small.
+_MAX_EVENT_CHARS = 2000
+
+# Callback invoked for each captured agent event: (event_type, content, tool_name, detail).
+# event_type is one of "thinking" | "action" | "goal".
+OnEvent = Callable[[str, str, str | None, str | None], None]
 
 
 @dataclass
@@ -91,6 +107,50 @@ def _build_task_prompt(
     )
 
 
+def _summarize_tool_input(tool_input: object) -> str | None:
+    """Build a short, non-sensitive summary of a tool-use input for an action event.
+
+    Surfaces the most useful identifier per tool (file path, command, pattern)
+    without dumping full file contents. Returns None when nothing useful is found.
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("file_path", "path", "command", "pattern", "query", "url"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return value[:_MAX_EVENT_CHARS]
+    return None
+
+
+def _emit_message_events(message: object, on_event: OnEvent) -> None:
+    """Translate one Claude Agent SDK message into agent events via on_event.
+
+    Defensive by design — any unexpected message/block shape is ignored rather
+    than raised, so capturing reasoning can never break the codegen run.
+    """
+    try:
+        if isinstance(message, AssistantMessage):
+            for block in getattr(message, "content", []) or []:
+                if isinstance(block, ThinkingBlock):
+                    text = (getattr(block, "thinking", "") or "").strip()
+                    if text:
+                        on_event("thinking", text[:_MAX_EVENT_CHARS], None, None)
+                elif isinstance(block, TextBlock):
+                    text = (getattr(block, "text", "") or "").strip()
+                    if text:
+                        on_event("thinking", text[:_MAX_EVENT_CHARS], None, None)
+                elif isinstance(block, ToolUseBlock):
+                    tool_name = getattr(block, "name", None) or "tool"
+                    detail = _summarize_tool_input(getattr(block, "input", None))
+                    on_event("action", tool_name, tool_name, detail)
+        elif isinstance(message, ResultMessage):
+            num_turns = getattr(message, "num_turns", None)
+            detail = f"{num_turns} turns" if num_turns is not None else None
+            on_event("goal", "Code generation finished", None, detail)
+    except Exception as exc:  # noqa: BLE001 — capturing reasoning must not break codegen
+        logger.warning("Failed to capture agent event from message: %s", exc)
+
+
 async def run_agentic_codegen(
     workspace_path: str,
     issue_key: str,
@@ -98,6 +158,7 @@ async def run_agentic_codegen(
     issue_description: str,
     architecture_content: str,
     directory_tree: str,
+    on_event: OnEvent | None = None,
 ) -> list[FileChange]:
     """Run the Claude Agent SDK against workspace_path and return FileChange list.
 
@@ -110,6 +171,11 @@ async def run_agentic_codegen(
                                   (truncated to _MAX_ARCHITECTURE_CHARS).
         directory_tree:          Codebase directory tree summary (truncated to
                                   _MAX_DIRECTORY_TREE_CHARS).
+        on_event:                Optional callback invoked for each captured agent
+                                  event (thinking/action/goal) as the SDK streams
+                                  messages, signature (event_type, content,
+                                  tool_name, detail). Kept DB-free here: the caller
+                                  supplies a closure that persists the event.
 
     Returns:
         List of FileChange instances derived from git diff/ls-files after the
@@ -138,8 +204,9 @@ async def run_agentic_codegen(
 
     logger.info("Running agentic codegen for ticket %s in %s", issue_key, workspace_path)
 
-    async for _message in query(prompt=task_prompt, options=options):
-        pass
+    async for message in query(prompt=task_prompt, options=options):
+        if on_event is not None:
+            _emit_message_events(message, on_event)
 
     file_changes = _collect_file_changes(workspace_path)
     if not file_changes:

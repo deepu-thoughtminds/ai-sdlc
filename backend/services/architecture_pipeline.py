@@ -37,7 +37,13 @@ from services.codebase_snapshot_reader import get_codebase_snapshot
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
 from services.crypto import decrypt_credential
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.reasoning import REASONING_INSTRUCTION, split_reasoning
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_reasoning,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 from services.drawio_service import generate_diagram, generate_viewer_url
 from services.hermes_client import post_comment as hermes_post_comment
 from services.llm_router import route_request
@@ -171,6 +177,10 @@ async def run(
             github_repo = ""
 
         snapshot = await get_codebase_snapshot(github_repo, github_token)
+        safe_record_agent_event(
+            db, project.id, issue_key, "architecture", "action", "Read codebase snapshot",
+            detail=f"{len(snapshot)} chars" if snapshot else "no snapshot available",
+        )
 
         # Step 2: Classify the ticket complexity.
         complexity, rationale = classify_complexity(
@@ -180,6 +190,10 @@ async def run(
         pipeline_state_repo.update(
             db, state_row.id, complexity=complexity, complexity_rationale=rationale
         )
+        safe_record_agent_event(
+            db, project.id, issue_key, "architecture", "decision",
+            f"Classified as {complexity}", detail=rationale,
+        )
 
         logger.info(
             "Ticket %s classified as %r — %s", issue_key, complexity, rationale
@@ -187,11 +201,11 @@ async def run(
 
         if complexity == "complex":
             comment_text = await _run_complex(
-                project, issue_key, issue_summary, issue_description, snapshot
+                project, issue_key, issue_summary, issue_description, snapshot, db
             )
         else:
             comment_text = await _run_simple(
-                project, issue_key, issue_summary, issue_description, snapshot
+                project, issue_key, issue_summary, issue_description, snapshot, db
             )
 
         # Step 3: Post the architecture comment to Jira BEFORE finalising state.
@@ -227,6 +241,9 @@ async def run(
             db, project.id, issue_key, "architecture",
             "Design/Architecture published to Confluence page",
             status="success", detail=comment_text,
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "architecture", "goal", "Architecture published",
         )
 
     except Exception as exc:
@@ -271,6 +288,7 @@ async def _run_complex(
     issue_summary: str,
     issue_description: str,
     snapshot: str | None,
+    db: Database,
 ) -> str:
     """Execute the complex-ticket branch of the architecture pipeline.
 
@@ -313,6 +331,7 @@ async def _run_complex(
         "[Important architectural decisions and their rationale]\n\n"
         "## Risks\n"
         "[Key risks and mitigation strategies]"
+        + REASONING_INSTRUCTION
     )
 
     section_names = [
@@ -325,7 +344,11 @@ async def _run_complex(
     ]
 
     route_result = route_request("architecture", prompt)
-    sections = _parse_sections(route_result.content, section_names)
+    reasoning, answer = split_reasoning(route_result.content)
+    if route_result.reasoning:
+        reasoning = route_result.reasoning
+    safe_record_reasoning(db, project.id, issue_key, "architecture", reasoning)
+    sections = _parse_sections(answer, section_names)
 
     # If the LLM skipped the ## headings the parser returns all-empty sections.
     # Fall back to raw output so the page is never blank.
@@ -334,7 +357,7 @@ async def _run_complex(
             "Architecture LLM output for %s contained no ## sections — using raw output as summary",
             issue_key,
         )
-        sections["Summary"] = route_result.content or "(no architecture generated)"
+        sections["Summary"] = answer or "(no architecture generated)"
 
     summary = sections["Summary"]
     approach = sections["Approach"]
@@ -360,6 +383,10 @@ async def _run_complex(
         connections=[],
     )
     viewer_url = generate_viewer_url(diagram_xml)
+    safe_record_agent_event(
+        db, project.id, issue_key, "architecture", "action", "Generated architecture diagram",
+        detail=f"{len(component_list)} component(s)",
+    )
 
     # Publish to Confluence (graceful degradation on failure — T-04-03).
     page_url = ""
@@ -380,6 +407,11 @@ async def _run_complex(
     except Exception as exc:
         logger.warning(
             "Confluence publishing failed for ticket %s: %s", issue_key, exc
+        )
+    if page_url:
+        safe_record_agent_event(
+            db, project.id, issue_key, "architecture", "action",
+            "Published architecture to Confluence", detail=page_url,
         )
 
     if page_url:
@@ -406,6 +438,7 @@ async def _run_simple(
     issue_summary: str,
     issue_description: str,
     snapshot: str | None,
+    db: Database,
 ) -> str:
     """Execute the simple-ticket branch of the architecture pipeline.
 
@@ -444,19 +477,24 @@ async def _run_simple(
         "[Important architectural decisions and their rationale]\n\n"
         "## Risks\n"
         "[Key risks and mitigation strategies]"
+        + REASONING_INSTRUCTION
     )
 
     section_names = ["Summary", "Approach", "Key Decisions", "Risks"]
 
     route_result = route_request("architecture", prompt)
-    sections = _parse_sections(route_result.content, section_names)
+    reasoning, answer = split_reasoning(route_result.content)
+    if route_result.reasoning:
+        reasoning = route_result.reasoning
+    safe_record_reasoning(db, project.id, issue_key, "architecture", reasoning)
+    sections = _parse_sections(answer, section_names)
 
     if not any(sections.values()):
         logger.warning(
             "Architecture LLM output for %s contained no ## sections — using raw output as summary",
             issue_key,
         )
-        sections["Summary"] = route_result.content or "(no architecture generated)"
+        sections["Summary"] = answer or "(no architecture generated)"
 
     summary = sections["Summary"]
     approach = sections["Approach"]
@@ -478,6 +516,11 @@ async def _run_simple(
     except Exception as exc:
         logger.warning(
             "Confluence publishing failed for ticket %s: %s", issue_key, exc
+        )
+    if page_url:
+        safe_record_agent_event(
+            db, project.id, issue_key, "architecture", "action",
+            "Published architecture to Confluence", detail=page_url,
         )
 
     if page_url:

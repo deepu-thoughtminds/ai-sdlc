@@ -37,7 +37,11 @@ from services.hermes_client import (
 )
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.repo_clone import clone_repository
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +225,20 @@ async def run(
         # workspace is always cleaned up (T-16-07 / repo_clone.py contract).
         try:
             # Step 7: Generate code changes via the agentic coder (Claude Agent
-            # SDK routed through the local LiteLLM proxy to freellmapi).
+            # SDK routed through the local LiteLLM proxy to freellmapi). The
+            # on_event closure persists the agent's thinking/actions as they
+            # stream (best-effort; failures never break codegen).
+            def _on_agent_event(
+                event_type: str,
+                content: str,
+                tool_name: str | None,
+                detail: str | None,
+            ) -> None:
+                safe_record_agent_event(
+                    db, project.id, issue_key, "dev", event_type, content,
+                    tool_name=tool_name, detail=detail,
+                )
+
             file_changes = await run_agentic_codegen(
                 cloned.workspace_path,
                 issue_key,
@@ -229,6 +246,7 @@ async def run(
                 issue_description,
                 architecture_content,
                 directory_tree,
+                on_event=_on_agent_event,
             )
             if not file_changes:
                 comment_text = (
@@ -285,6 +303,9 @@ async def run(
         safe_record_transaction(
             db, project.id, issue_key, "dev", "Coding finished and PR sent",
             status="success", result_url=pr.html_url,
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "dev", "goal", "PR ready", detail=pr.html_url,
         )
 
     except Exception as exc:

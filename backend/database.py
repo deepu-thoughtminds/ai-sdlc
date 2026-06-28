@@ -130,6 +130,7 @@ def init_indexes(db: Database) -> None:
       ticket_statuses(project_id, ticket_key)    UNIQUE  (was uq_ticket_statuses_*)
       stage_transactions(project_id, ticket_key)         (was ix_stage_transactions_*)
       pipeline_states(project_id, ticket_key, stage)     (lookup index for guards)
+      agent_events(project_id, ticket_key)               (per-ticket agent activity log)
     """
     db["projects"].create_index("project_key", unique=True, name="uq_projects_project_key")
     db["ticket_statuses"].create_index(
@@ -144,4 +145,8 @@ def init_indexes(db: Database) -> None:
     db["pipeline_states"].create_index(
         [("project_id", 1), ("ticket_key", 1), ("stage", 1)],
         name="ix_pipeline_states_project_ticket_stage",
+    )
+    db["agent_events"].create_index(
+        [("project_id", 1), ("ticket_key", 1)],
+        name="ix_agent_events_project_ticket",
     )

@@ -161,7 +161,7 @@ async def handle_jira_comment(
         )
 
         # Run the describe pipeline (async — awaited directly)
-        description = await describe_pipeline.run(event, project)
+        description = await describe_pipeline.run(event, project, db)
 
         # Post the draft as a Jira comment
         try:
@@ -629,7 +629,7 @@ async def handle_jira_issue_created(
 
     # Step 7: Run describe pipeline via adapter (no comment body on issue_created)
     adapter = _IssueCreatedAdapter(issue=event.issue, comment=_NullComment())
-    description = await describe_pipeline.run(adapter, project)
+    description = await describe_pipeline.run(adapter, project, db)
 
     # Step 8: Post draft comment with @jarvis approve story description instruction
     try:

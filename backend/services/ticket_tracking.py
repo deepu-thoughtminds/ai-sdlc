@@ -21,9 +21,11 @@ import logging
 from pymongo.database import Database
 
 from database import Doc
+from models.agent_event import AGENT_EVENT_TYPES
 from models.stage_transaction import TRANSACTION_STATUSES
 from models.ticket_status import VALID_STAGES
-from repositories import stage_transaction_repo, ticket_status_repo
+from repositories import agent_event_repo, stage_transaction_repo, ticket_status_repo
+from services.reasoning import MAX_THINKING_CHARS, chunk_text
 
 logger = logging.getLogger("backend.ticket_tracking")
 
@@ -68,6 +70,49 @@ def record_transaction(
         status,
     )
     return txn
+
+
+def record_agent_event(
+    db: Database,
+    project_id: int,
+    ticket_key: str,
+    stage: str,
+    event_type: str,
+    content: str,
+    *,
+    tool_name: str | None = None,
+    detail: str | None = None,
+) -> Doc:
+    """Append an AgentEvent row (thinking/action/decision/goal) and return it.
+
+    Validates stage/event_type defensively; unknown values raise ValueError so a
+    miswired call site is caught in tests rather than silently storing garbage.
+    """
+    if stage not in VALID_STAGES:
+        raise ValueError(f"stage must be one of {sorted(VALID_STAGES)}, got {stage!r}")
+    if event_type not in AGENT_EVENT_TYPES:
+        raise ValueError(
+            f"event_type must be one of {sorted(AGENT_EVENT_TYPES)}, got {event_type!r}"
+        )
+
+    event = agent_event_repo.append(
+        db,
+        project_id,
+        ticket_key,
+        stage,
+        event_type,
+        content,
+        tool_name=tool_name,
+        detail=detail,
+    )
+    logger.info(
+        "agent event recorded ticket=%s stage=%s type=%s tool=%s",
+        ticket_key,
+        stage,
+        event_type,
+        tool_name,
+    )
+    return event
 
 
 def upsert_ticket_status(
@@ -121,3 +166,38 @@ def safe_upsert_ticket_status(db: Database, *args, **kwargs) -> Doc | None:
     except Exception as exc:  # noqa: BLE001 — bookkeeping must not break pipelines
         logger.warning("Failed to upsert ticket status: %s", exc)
         return None
+
+
+def safe_record_agent_event(db: Database, *args, **kwargs) -> Doc | None:
+    """record_agent_event that never raises — for use inside pipelines."""
+    try:
+        return record_agent_event(db, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — bookkeeping must not break pipelines
+        logger.warning("Failed to record agent event: %s", exc)
+        return None
+
+
+def safe_record_reasoning(
+    db: Database,
+    project_id: int,
+    ticket_key: str,
+    stage: str,
+    reasoning: str,
+    *,
+    detail: str | None = None,
+) -> None:
+    """Persist a model's reasoning as one or more 'thinking' agent events.
+
+    Long reasoning is chunked to MAX_THINKING_CHARS so each event stays small and
+    human-readable (mirrors the agentic_coder streaming cap). Best-effort and
+    no-op when reasoning is empty; never raises.
+    """
+    try:
+        chunks = chunk_text(reasoning, MAX_THINKING_CHARS)
+    except Exception as exc:  # noqa: BLE001 — bookkeeping must not break pipelines
+        logger.warning("Failed to chunk reasoning: %s", exc)
+        return
+    for chunk in chunks:
+        safe_record_agent_event(
+            db, project_id, ticket_key, stage, "thinking", chunk, detail=detail
+        )
