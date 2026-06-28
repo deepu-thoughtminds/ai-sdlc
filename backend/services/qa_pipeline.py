@@ -416,6 +416,9 @@ async def run(
                 result.returncode,
                 result.timed_out,
             )
+            if result.returncode != 0:
+                logger.info("Test stdout:\n%s", result.stdout[:3000] if result.stdout else "(empty)")
+                logger.info("Test stderr:\n%s", result.stderr[:3000] if result.stderr else "(empty)")
 
         # (f) empty file_changes: unit_test_results stays [] — no execution
 
@@ -432,11 +435,31 @@ async def run(
                 db,
             )
 
-        # Step 4d/4e — Playwright E2E tests (PWGEN-01..03, EXEC-01).
+        # Step 4e — Generate Python Playwright tests now (no live app needed for generation).
+        # Execution is deferred into the managed_app_container block below.
+        pw_py_file_changes = await run_claude_playwright_generator(
+            workspace_path=cloned.workspace_path,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            codebase_context=codebase_context,
+            relevant_file_contents=relevant_file_contents,
+        )
+        # Write generated test files to workspace so they are available for execution.
+        pw_py_paths: list[str] = []
+        for change in pw_py_file_changes:
+            resolved = (workspace_root / change.path).resolve()
+            if not str(resolved).startswith(str(workspace_root) + "/"):
+                logger.warning("Skipping Playwright file (path-traversal): %s", change.path)
+                continue
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(change.content, encoding="utf-8")
+            logger.info("Wrote Python Playwright test file: %s", change.path)
+            pw_py_paths.append(change.path)
+
+        # Step 4d/4e — Spin up live app, run E2E and Python Playwright tests against it.
         # T-28-01: ValueError = no serve script → graceful skip.
         # T-28-02: ContainerStartError = build/timeout failure → graceful skip.
-        # managed_app_container yields network-internal http://<name>:<port> after
-        # a confirmed HTTP 200 health-check (PWGEN-02: generation only after 200).
         e2e_skip_note: str | None = None
         try:
             with managed_app_container(cloned.workspace_path, compose_network) as playwright_deployment_url:
@@ -476,9 +499,10 @@ async def run(
                                 "docker", "run", "--rm",
                                 "--network", compose_network,
                                 "-v", f"{cloned.workspace_path}:/workspace",
+                                "-w", "/workspace",
                                 "-e", f"BASE_URL={playwright_deployment_url}",
                                 image,
-                                "npx", "playwright", "test", f"/workspace/{change.path}",
+                                "npx", "--yes", "@playwright/test", "test", f"/workspace/{change.path}",
                             ],
                         )
                         result = run_command(cmd)
@@ -490,32 +514,18 @@ async def run(
                             result.timed_out,
                         )
 
-                # Step 4e — Python Playwright evaluation via Claude Code CLI.
-                pw_py_file_changes = await run_claude_playwright_generator(
-                    workspace_path=cloned.workspace_path,
-                    issue_key=issue_key,
-                    issue_summary=issue_summary,
-                    issue_description=issue_description,
-                    codebase_context=codebase_context,
-                    relevant_file_contents=relevant_file_contents,
-                )
-                for change in pw_py_file_changes:
-                    # T-24-01: traversal guard only
-                    resolved = (workspace_root / change.path).resolve()
-                    if not str(resolved).startswith(str(workspace_root) + "/"):
-                        logger.warning("Skipping Playwright file (path-traversal): %s", change.path)
-                        continue
-
-                    image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                # Execute pre-generated Python Playwright tests against the live app.
+                image = os.environ.get("QA_SANDBOX_IMAGE", "qa-sandbox")
+                for path in pw_py_paths:
                     cmd = ToolchainCommand(
-                        name=f"playwright-py:{change.path}",
+                        name=f"playwright-py:{path}",
                         command=[
                             "docker", "run", "--rm",
                             "--network", compose_network,
                             "-v", f"{cloned.workspace_path}:/workspace",
                             "-e", f"BASE_URL={playwright_deployment_url}",
                             image,
-                            "python", "-m", "pytest", f"/workspace/{change.path}",
+                            "python", "-m", "pytest", f"/workspace/{path}",
                             "--browser", "chromium", "--tb=short", "-q",
                         ],
                     )
@@ -523,8 +533,11 @@ async def run(
                     playwright_py_results.append(result)
                     logger.info(
                         "Python Playwright test %s exit=%d timed_out=%s",
-                        change.path, result.returncode, result.timed_out,
+                        path, result.returncode, result.timed_out,
                     )
+                    if result.returncode != 0:
+                        logger.info("Playwright stdout:\n%s", result.stdout[:3000] if result.stdout else "(empty)")
+                        logger.info("Playwright stderr:\n%s", result.stderr[:3000] if result.stderr else "(empty)")
 
         except (ValueError, ContainerStartError, OSError) as exc:
             # T-28-01 / T-28-02: No serve script or container failed to start.
@@ -653,6 +666,7 @@ async def run(
             unit_test_results, e2e_results, static_results, autofix_pr_url, still_failing,
             npm_audit_fix_pr_url=npm_audit_fix_pr_url,
             playwright_py_results=playwright_py_results,
+            sonar_metrics=sonar_metrics,
         )
         qa_page_url = await publish_qa_report(
             project, issue_key, comment_text, remediation_html, sonar_metrics=sonar_metrics
@@ -815,6 +829,7 @@ def _build_remediation_html(
     still_failing: bool,
     npm_audit_fix_pr_url: str | None = None,
     playwright_py_results: list[TestResult] | None = None,
+    sonar_metrics: "SonarMetrics | None" = None,
 ) -> str:
     """Build an HTML Remediation Steps section for the Confluence QA page.
 
@@ -826,8 +841,9 @@ def _build_remediation_html(
     e2e_failures = [r for r in e2e_results if r.returncode != 0 and not r.timed_out]
     static_failures = [r for r in static_results if r.returncode != 0 and not r.timed_out]
     pw_py_failures = [r for r in (playwright_py_results or []) if r.returncode != 0 and not r.timed_out]
+    sonar_failed = sonar_metrics is not None and sonar_metrics.gate_status == "FAILED"
 
-    if not (unit_failures or e2e_failures or static_failures or pw_py_failures):
+    if not (unit_failures or e2e_failures or static_failures or pw_py_failures or sonar_failed):
         return ""
 
     if unit_failures:
@@ -878,6 +894,28 @@ def _build_remediation_html(
             "<li><strong>Python Playwright Evaluation:</strong> Run "
             "<code>pytest tests/playwright/ --browser chromium</code> locally to reproduce "
             "failures and fix the implementation or test selectors.</li>"
+        )
+
+    if sonar_failed and sonar_metrics:
+        dashboard_link = f'<a href="{sonar_metrics.dashboard_url}">SonarQube dashboard</a>'
+        problems = []
+        if sonar_metrics.bugs > 0:
+            problems.append(f"{sonar_metrics.bugs} bug(s)")
+        if sonar_metrics.vulnerabilities > 0:
+            problems.append(f"{sonar_metrics.vulnerabilities} vulnerability/vulnerabilities")
+        if sonar_metrics.security_hotspots > 0:
+            problems.append(f"{sonar_metrics.security_hotspots} security hotspot(s)")
+        if sonar_metrics.code_smells > 0:
+            problems.append(f"{sonar_metrics.code_smells} code smell(s)")
+        if sonar_metrics.duplications > 3.0:
+            problems.append(f"{sonar_metrics.duplications:.1f}% duplication")
+        if sonar_metrics.coverage is not None and sonar_metrics.coverage < 80.0:
+            problems.append(f"{sonar_metrics.coverage:.1f}% coverage (threshold 80%)")
+        problem_str = ", ".join(problems) if problems else "see dashboard for details"
+        items.append(
+            f"<li><strong>SonarQube Quality Gate FAILED</strong> ({problem_str}): "
+            f"Review findings on the {dashboard_link}, fix the flagged issues, and "
+            f"re-trigger QA.</li>"
         )
 
     return "<ul>" + "".join(items) + "</ul>"

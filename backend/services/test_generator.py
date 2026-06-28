@@ -142,6 +142,47 @@ def generate_unit_tests(
     return _parse_file_changes(route_result.content)
 
 
+def generate_playwright_config(
+    codebase_context: str | None,
+    relevant_file_contents: dict[str, str],
+) -> list[FileChange]:
+    """Generate playwright.config.ts + baseline smoke test for repos without E2E setup.
+
+    Called by dev_pipeline when no playwright.config.* is found in the cloned workspace.
+    Returned FileChange list is appended to the PR's file_changes before commit.
+    """
+    logger.info("Generating playwright.config.ts and smoke test (no existing config detected)")
+
+    if relevant_file_contents:
+        file_blocks = "\n\n".join(
+            f"### {path}\n{content}" for path, content in relevant_file_contents.items()
+        )
+        file_contents_section = f"Relevant files:\n\n{file_blocks}\n\n"
+    else:
+        file_contents_section = ""
+
+    prompt = (
+        "You are a senior engineer setting up Playwright E2E testing for a project that has none.\n\n"
+        "Codebase context:\n"
+        f"{codebase_context or ''}\n\n"
+        f"{file_contents_section}"
+        "Generate EXACTLY two files:\n"
+        "1. playwright.config.ts — a minimal Playwright config (chromium only, baseURL from "
+        "   BASE_URL env var defaulting to http://localhost:3000, 30s timeout, no retries)\n"
+        "2. tests/e2e/smoke.spec.ts — a single smoke test that loads the homepage and "
+        "   asserts the page title is non-empty\n\n"
+        "For each file use EXACTLY this format:\n\n"
+        "### FILE: playwright.config.ts\n"
+        "```typescript\n<content>\n```\n\n"
+        "### FILE: tests/e2e/smoke.spec.ts\n"
+        "```typescript\n<content>\n```\n\n"
+        "Output ONLY the two file blocks. No explanations."
+    )
+
+    route_result = route_request("testgen", prompt)
+    return _parse_file_changes(route_result.content)
+
+
 def generate_e2e_tests(
     issue_key: str,
     issue_summary: str,

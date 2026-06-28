@@ -126,7 +126,7 @@ async def run_agentic_codegen(
     options = ClaudeAgentOptions(
         cwd=workspace_path,
         permission_mode="acceptEdits",
-        max_turns=30,
+        max_turns=60,
         model="sonnet",
         env={
             "ANTHROPIC_BASE_URL": "http://litellm:4000",

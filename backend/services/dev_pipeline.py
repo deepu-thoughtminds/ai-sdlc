@@ -36,6 +36,7 @@ from services.hermes_client import (
     post_comment as hermes_post_comment,
 )
 from services.pr_creator import apply_commit_push_and_open_pr
+from services.test_generator import generate_playwright_config
 from services.repo_clone import clone_repository
 from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
 
@@ -268,6 +269,15 @@ async def run(
                 )
                 logger.info("Dev pipeline complete for ticket %s (no code changes generated)", issue_key)
                 return comment_text
+
+            # Step 7b: If the repo has no playwright.config.*, generate one + smoke test
+            # so the QA pipeline's E2E step can run on future tickets.
+            import glob as _glob
+            if not _glob.glob(os.path.join(cloned.workspace_path, "playwright.config.*")):
+                pw_changes = generate_playwright_config(directory_tree, relevant_files)
+                if pw_changes:
+                    file_changes = file_changes + pw_changes
+                    logger.info("Appended playwright.config.ts + smoke test to PR (%d files)", len(pw_changes))
 
             # Step 8: Commit, push, and open the PR.
             pr = apply_commit_push_and_open_pr(
