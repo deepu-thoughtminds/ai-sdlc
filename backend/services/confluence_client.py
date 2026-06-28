@@ -131,7 +131,14 @@ class ConfluenceClient:
         Returns:
             Full URL to the Confluence page.
         """
-        return f"{self.base_url}/wiki/spaces/{space_key}/pages/{page_id}"
+        # Atlassian Cloud base URLs already include the "/wiki" context path,
+        # so strip a trailing "/wiki" before re-adding it to avoid producing a
+        # doubled "/wiki/wiki/spaces/..." link. Works whether or not base_url
+        # carries the suffix.
+        base = self.base_url
+        if base.endswith("/wiki"):
+            base = base[: -len("/wiki")]
+        return f"{base}/wiki/spaces/{space_key}/pages/{page_id}"
 
     async def publish_architecture(
         self,
