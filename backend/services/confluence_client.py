@@ -19,7 +19,7 @@ Threat mitigations:
 import html
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from models.project import Project
 from services.crypto import decrypt_credential
@@ -28,6 +28,9 @@ from services.hermes_client import (
     find_confluence_page,
     update_confluence_page,
 )
+
+if TYPE_CHECKING:
+    from services.sonar_scanner import SonarMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +247,12 @@ class ConfluenceClient:
             return ""
 
     async def publish_qa_report(
-        self, project: Project, issue_key: str, report_text: str, remediation_html: str = ""
+        self,
+        project: Project,
+        issue_key: str,
+        report_text: str,
+        remediation_html: str = "",
+        sonar_metrics: "SonarMetrics | None" = None,
     ) -> str:
         """Publish a brief QA summary as a Confluence page (find-or-update).
 
@@ -259,6 +267,8 @@ class ConfluenceClient:
                 Jira); HTML-escaped and wrapped in <pre> to preserve formatting.
             remediation_html: Optional pre-built HTML for the Remediation Steps
                 section. Omitted (empty string) when all checks pass.
+            sonar_metrics: Optional SonarMetrics dataclass. None when scan was
+                skipped or failed — a graceful fallback note is rendered (REPORT-03).
 
         Returns:
             The full page URL string on success; "" on any failure.
@@ -269,6 +279,7 @@ class ConfluenceClient:
             body_html = (
                 f"<h1>QA Report: {issue_key}</h1>"
                 f"<pre>{_escape(report_text)}</pre>"
+                + _render_sonar_section(sonar_metrics)
                 + (f"<h2>Remediation Steps</h2>{remediation_html}" if remediation_html else "")
             )
 
@@ -321,6 +332,38 @@ def _escape(text: str) -> str:
     or viewer URLs (pre-encoded by drawio_service.generate_viewer_url).
     """
     return html.escape(text, quote=True)
+
+
+def _render_sonar_section(sonar_metrics: "SonarMetrics | None") -> str:
+    """Render the SonarQube HTML section for the Confluence QA report.
+
+    When sonar_metrics is None (scan skipped or failed), returns a graceful
+    unavailable note (REPORT-03). When metrics are present, returns a table
+    with quality gate, per-metric counts, and a dashboard deep link (REPORT-02).
+
+    T-31-02: gate_status goes through _escape() before interpolation; int/float
+    fields are typed values, not raw API strings. dashboard_url is constructed
+    from env var (SONAR_URL) + project_key, not from API response.
+    """
+    if sonar_metrics is None:
+        return "<h2>SonarQube</h2><p>SonarQube scan unavailable.</p>"
+
+    coverage_display = (
+        f"{sonar_metrics.coverage:.1f}%" if sonar_metrics.coverage is not None else "N/A"
+    )
+    return (
+        "<h2>SonarQube</h2>"
+        "<table>"
+        "<tr><th>Metric</th><th>Value</th></tr>"
+        f"<tr><td>Quality Gate</td><td>{_escape(sonar_metrics.gate_status)}</td></tr>"
+        f"<tr><td>Bugs</td><td>{sonar_metrics.bugs}</td></tr>"
+        f"<tr><td>Vulnerabilities</td><td>{sonar_metrics.vulnerabilities}</td></tr>"
+        f"<tr><td>Code Smells</td><td>{sonar_metrics.code_smells}</td></tr>"
+        f"<tr><td>Coverage</td><td>{coverage_display}</td></tr>"
+        f"<tr><td>Duplications</td><td>{sonar_metrics.duplications:.1f}%</td></tr>"
+        "</table>"
+        f'<p><a href="{sonar_metrics.dashboard_url}">View SonarQube Dashboard</a></p>'
+    )
 
 
 def _render_text_only_template(
@@ -445,7 +488,13 @@ async def publish_architecture(
         return ""
 
 
-async def publish_qa_report(project: Project, issue_key: str, report_text: str, remediation_html: str = "") -> str:
+async def publish_qa_report(
+    project: Project,
+    issue_key: str,
+    report_text: str,
+    remediation_html: str = "",
+    sonar_metrics: "SonarMetrics | None" = None,
+) -> str:
     """Module-level convenience wrapper for ConfluenceClient.publish_qa_report.
 
     Constructs a ConfluenceClient from project credentials and delegates to
@@ -460,7 +509,9 @@ async def publish_qa_report(project: Project, issue_key: str, report_text: str, 
             "JIRA_ACCOUNT_EMAIL", ""
         )
         client = ConfluenceClient(project.confluence_url, conf_token, email=conf_email)
-        return await client.publish_qa_report(project, issue_key, report_text, remediation_html)
+        return await client.publish_qa_report(
+            project, issue_key, report_text, remediation_html, sonar_metrics=sonar_metrics
+        )
     except Exception as exc:
         logger.warning(
             "publish_qa_report (module fn) failed for ticket %s: %s — returning empty URL",

@@ -20,6 +20,8 @@ Phases 23-26 (milestone v1.8) add the Autonomous QA Stage. Phase 23 builds the s
 
 Phases 27-28 (milestone v1.9) add Playwright E2E Live Testing. Phase 27 builds the new `app_container.py` service that detects the target app's serve command, spins up an ephemeral Node.js container on the compose network, polls until HTTP 200, and guarantees teardown. Phase 28 wires the live container URL into `qa_pipeline.py` as the authoritative `BASE_URL` for the Playwright generator, gates generation on the health-check result, handles graceful skip when the app cannot be served, and threads the live URL through to test execution and the Confluence/Jira QA report.
 
+Phases 29-31 (milestone v2.0) embed SonarQube static analysis into the QA pipeline. Phase 29 adds SonarQube Community Edition as a persistent Docker Compose service, waits for it to reach UP status, and bootstraps an admin token on first start. Phase 30 adds a sonar-scanner step to the QA pipeline (after static analysis, before Playwright E2E), using a per-repo project key and polling the CE task API until analysis completes — the step never hard-fails the pipeline. Phase 31 appends a SonarQube section to the Confluence QA page with quality gate status, bug/vulnerability/code-smell counts, coverage, duplications, and a deep link to the dashboard; when the scan is unavailable the section shows a graceful fallback note.
+
 ## Phases
 
 **Phase Numbering:**
@@ -661,10 +663,81 @@ Full archive: `.planning/milestones/v1.9-ROADMAP.md`
 
 </details>
 
+## Milestone v2.0: SonarQube QA Integration
+
+- [x] **Phase 29: SonarQube Service Setup** - SonarQube Community Edition on ai-sdlc-net: Docker Compose service, UP health-check readiness poll, bootstrapped admin token on first start (completed 2026-06-27)
+- [x] **Phase 30: Scanner Integration** - sonar-scanner QA pipeline step with per-repo project key, CE task API polling, and graceful pipeline continuation on scan failure or timeout (completed 2026-06-27)
+- [x] **Phase 31: Confluence Report Section** - SonarQube section appended to existing Confluence QA page: quality gate, metrics table, deep link, and graceful unavailability note (completed 2026-06-27)
+
+<details>
+<summary>✅ v2.0 SonarQube QA Integration (Phases 29–31) — SHIPPED 2026-06-27</summary>
+
+See full archive: .planning/milestones/v2.0-ROADMAP.md
+
+</details>
+
+## Milestone v2.0: SonarQube QA Integration — Phase Details
+
+### Phase 29: SonarQube Service Setup
+
+**Goal**: SonarQube Community Edition runs persistently on the compose network, is ready before any scan starts, and the scanner has a valid API token to authenticate with
+**Depends on**: Phase 28
+**Milestone**: v2.0 — sonarqube-qa-integration
+**Requirements**: SONAR-01, SONAR-02, SONAR-03
+**Success Criteria** (what must be TRUE):
+
+  1. `docker compose up` starts a SonarQube container reachable by other services on ai-sdlc-net; the web UI is accessible on the host at localhost:9000 without manual networking steps
+  2. The pipeline waits for SonarQube to report `status=UP` before proceeding — a startup race that triggers a scan against an unready server does not occur
+  3. On first boot, an admin API token is created and stored for scanner use; re-running `docker compose up` after the token already exists does not raise an error or create a duplicate token
+
+**Plans**: 2/2 plans complete
+
+- [x] 29-01-PLAN.md
+- [x] 29-02-PLAN.md
+
+### Phase 30: Scanner Integration
+
+**Goal**: Every QA pipeline run executes sonar-scanner against the cloned project repo, waits for analysis to complete, and never hard-fails the broader pipeline when SonarQube is unavailable or slow
+**Depends on**: Phase 29
+**Milestone**: v2.0 — sonarqube-qa-integration
+**Requirements**: SCAN-01, SCAN-02, SCAN-03, SCAN-04
+**Success Criteria** (what must be TRUE):
+
+  1. A `@jarvis run qa` trigger on a ticket causes a sonar-scanner run against the cloned repo as part of the QA pipeline — the step appears in execution order after static analysis and before Playwright E2E
+  2. Projects with different GitHub repo slugs produce separate SonarQube project keys (e.g. `owner1__repo1` vs `owner2__repo2`) so metrics never cross-contaminate between projects
+  3. The pipeline waits up to 300 seconds for SonarQube to mark the analysis task SUCCESS before proceeding; the timeout is configurable via environment variable
+  4. When SonarQube is down, the scanner exits non-zero, or the CE task times out, the QA pipeline logs the failure, records a scan-unavailable result, and continues to the next step — the overall QA run is not aborted
+
+**Plans**: 2/2 plans complete
+
+Plans:
+
+- [x] 30-02-PLAN.md
+
+- [x] 30-01-PLAN.md — sonar-scanner module + CE task polling wired into QA pipeline (SCAN-01..04)
+
+### Phase 31: Confluence Report Section
+
+**Goal**: Every Confluence QA page produced by the pipeline includes a SonarQube section with actionable quality metrics and a direct link to the dashboard, and shows a clear fallback when the scan did not run
+**Depends on**: Phase 30
+**Milestone**: v2.0 — sonarqube-qa-integration
+**Requirements**: REPORT-01, REPORT-02, REPORT-03
+**Success Criteria** (what must be TRUE):
+
+  1. After a QA run with a successful scan, the Confluence QA page contains a SonarQube section positioned after the existing test results — the page is visibly updated and the section header is present
+  2. The SonarQube section displays: quality gate status (PASSED/FAILED), bug count, vulnerability count, code smell count, coverage percentage, duplications percentage, and a hyperlink that opens the SonarQube project dashboard directly
+  3. When the scan was skipped or failed, the Confluence page shows "SonarQube scan unavailable" in the SonarQube section rather than an empty block or a rendering error
+
+**Plans**: 1/1 plans complete
+
+Plans:
+
+- [x] 31-01-PLAN.md — SonarMetrics fetch, Confluence section rendering, pipeline wiring
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28 → 29 → 30 → 31
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -696,3 +769,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 26. E2E + Trigger Wiring | 0/? | Not started | - |
 | 27. App Container Service | 1/1 | ✅ Complete (v1.9) | 2026-06-26 |
 | 28. QA Pipeline Integration | 1/1 | ✅ Complete (v1.9) | 2026-06-26 |
+| 29. SonarQube Service Setup | 2/2 | Complete    | 2026-06-27 |
+| 30. Scanner Integration | 2/2 | Complete   | 2026-06-27 |
+| 31. Confluence Report Section | 1/1 | Complete    | 2026-06-27 |

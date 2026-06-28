@@ -144,6 +144,8 @@ services:
       - HERMES_BASE_URL=http://hermes:8001
       - DOCKER_SOCKET=/var/run/docker.sock
       - QA_SANDBOX_IMAGE=${QA_SANDBOX_IMAGE:-qa-sandbox}
+      - SONAR_URL=${SONAR_URL:-http://sonarqube:9000}
+      - SONAR_TIMEOUT_SECONDS=${SONAR_TIMEOUT_SECONDS:-300}
       - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/?replicaSet=rs0}
       - MONGODB_DB=${MONGODB_DB:-aisdlc}
     depends_on:
@@ -153,6 +155,8 @@ services:
         condition: service_started
       mongo-init:
         condition: service_completed_successfully
+      sonarqube:
+        condition: service_started
     ports:
       - "8000:8000"
     networks:
@@ -178,6 +182,26 @@ services:
     networks:
       - ai-sdlc-net
 
+  sonarqube:
+    image: sonarqube:lts-community
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    ports:
+      - "9001:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    networks:
+      - ai-sdlc-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+
 networks:
   ai-sdlc-net:
     driver: bridge
@@ -185,3 +209,6 @@ networks:
 volumes:
   mongo_data:
   freellmapi_data:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:

@@ -484,3 +484,144 @@ async def test_publish_architecture_graceful_on_find_failure():
         )
 
     assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# _render_sonar_section and publish_qa_report sonar integration — REPORT-01..03
+# ---------------------------------------------------------------------------
+
+from services.confluence_client import _render_sonar_section  # noqa: E402
+from services.sonar_scanner import SonarMetrics  # noqa: E402
+
+
+def _make_sonar_metrics(gate="PASSED", coverage=82.5) -> SonarMetrics:
+    return SonarMetrics(
+        gate_status=gate,
+        bugs=3,
+        vulnerabilities=1,
+        code_smells=10,
+        coverage=coverage,
+        duplications=4.2,
+        dashboard_url="http://sonar:9000/dashboard?id=org__repo",
+    )
+
+
+class TestRenderSonarSection:
+    def test_none_returns_unavailable_note(self):
+        """_render_sonar_section(None) contains h2 header and unavailable note (REPORT-03)."""
+        result = _render_sonar_section(None)
+        assert "<h2>" in result
+        assert "SonarQube" in result
+        assert "unavailable" in result.lower()
+
+    def test_passed_gate_status_present(self):
+        """_render_sonar_section with PASSED metrics → contains 'PASSED'."""
+        result = _render_sonar_section(_make_sonar_metrics(gate="PASSED"))
+        assert "PASSED" in result
+
+    def test_failed_gate_status_present(self):
+        """gate_status FAILED → contains 'FAILED'."""
+        result = _render_sonar_section(_make_sonar_metrics(gate="FAILED"))
+        assert "FAILED" in result
+
+    def test_metric_counts_present(self):
+        """Rendered section contains bug/vuln/code-smell/duplication values."""
+        result = _render_sonar_section(_make_sonar_metrics())
+        assert "3" in result   # bugs
+        assert "1" in result   # vulnerabilities
+        assert "10" in result  # code smells
+        assert "4.2" in result or "4.2%" in result  # duplications
+
+    def test_dashboard_link_present(self):
+        """Dashboard URL appears in an anchor tag (REPORT-02)."""
+        result = _render_sonar_section(_make_sonar_metrics())
+        assert "http://sonar:9000/dashboard?id=org__repo" in result
+        assert "<a " in result
+
+    def test_coverage_value_present_when_set(self):
+        """coverage=82.5 → '82.5' appears in rendered HTML (REPORT-02)."""
+        result = _render_sonar_section(_make_sonar_metrics(coverage=82.5))
+        assert "82.5" in result
+
+    def test_coverage_none_renders_na(self):
+        """coverage=None → 'N/A' appears in rendered HTML (REPORT-02)."""
+        metrics = SonarMetrics(
+            gate_status="PASSED", bugs=0, vulnerabilities=0, code_smells=0,
+            coverage=None, duplications=0.0,
+            dashboard_url="http://sonar:9000/dashboard?id=org__repo",
+        )
+        result = _render_sonar_section(metrics)
+        assert "N/A" in result
+
+
+@pytest.mark.asyncio
+async def test_publish_qa_report_no_sonar_metrics_arg():
+    """publish_qa_report() called without sonar_metrics → succeeds (backward compat, REPORT-01)."""
+    mock_find = AsyncMock(return_value=None)
+    mock_create = AsyncMock(return_value=_created_page_dict("888"))
+    mock_update = AsyncMock(return_value=_updated_page_dict())
+
+    with patch("services.confluence_client.find_confluence_page", mock_find), \
+         patch("services.confluence_client.create_confluence_page", mock_create), \
+         patch("services.confluence_client.update_confluence_page", mock_update):
+
+        client = _make_client()
+        mock_project = _make_mock_project()
+
+        # Call without sonar_metrics kwarg — should not error
+        result = await client.publish_qa_report(
+            mock_project, "TICKET-1", "QA passed.", ""
+        )
+
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.asyncio
+async def test_publish_qa_report_sonar_metrics_none_includes_sonar_section():
+    """publish_qa_report(sonar_metrics=None) → body has SonarQube h2 section (REPORT-01+03)."""
+    mock_find = AsyncMock(return_value=None)
+    mock_create = AsyncMock(return_value=_created_page_dict("889"))
+    mock_update = AsyncMock(return_value=_updated_page_dict())
+
+    with patch("services.confluence_client.find_confluence_page", mock_find), \
+         patch("services.confluence_client.create_confluence_page", mock_create), \
+         patch("services.confluence_client.update_confluence_page", mock_update):
+
+        client = _make_client()
+        mock_project = _make_mock_project()
+
+        result = await client.publish_qa_report(
+            mock_project, "TICKET-1", "QA passed.", "", sonar_metrics=None
+        )
+
+    assert isinstance(result, str)
+    assert len(result) > 0
+    # The body passed to create_page must contain a SonarQube section
+    _, _, _, _, _, body_html = mock_create.call_args[0]
+    assert "SonarQube" in body_html
+
+
+@pytest.mark.asyncio
+async def test_publish_qa_report_with_sonar_metrics_includes_dashboard_link():
+    """publish_qa_report(sonar_metrics=SonarMetrics) → body has dashboard link (REPORT-01+02)."""
+    mock_find = AsyncMock(return_value=None)
+    mock_create = AsyncMock(return_value=_created_page_dict("890"))
+    mock_update = AsyncMock(return_value=_updated_page_dict())
+
+    with patch("services.confluence_client.find_confluence_page", mock_find), \
+         patch("services.confluence_client.create_confluence_page", mock_create), \
+         patch("services.confluence_client.update_confluence_page", mock_update):
+
+        client = _make_client()
+        mock_project = _make_mock_project()
+
+        result = await client.publish_qa_report(
+            mock_project, "TICKET-1", "QA done.", "",
+            sonar_metrics=_make_sonar_metrics(),
+        )
+
+    assert isinstance(result, str)
+    assert len(result) > 0
+    _, _, _, _, _, body_html = mock_create.call_args[0]
+    assert "http://sonar:9000/dashboard?id=org__repo" in body_html

@@ -1,37 +1,37 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.9
-milestone_name: Playwright E2E Live Testing
-current_phase: 9
-status: Awaiting next milestone
-stopped_at: Phase 28 complete — milestone v1.9 (Playwright E2E Live Testing) 100% done, all 4 UAT tests passed.
-last_updated: "2026-06-26T14:50:35.572Z"
-last_activity: 2026-06-26
-last_activity_desc: Milestone v1.9 completed and archived
+milestone: v2.0
+milestone_name: SonarQube QA Integration
+current_phase: 31
+status: complete
+stopped_at: Phase 30 Plan 01 complete — sonar-scanner step integrated in QA pipeline
+last_updated: "2026-06-27T11:23:33.159Z"
+last_activity: 2026-06-27
+last_activity_desc: Phase 31 complete
 progress:
   total_phases: 9
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-current_phase_name: qa-pipeline-integration
+  completed_phases: 6
+  total_plans: 11
+  completed_plans: 10
+  percent: 67
+current_phase_name: confluence-report-section
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-23)
+See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** Planning next milestone (v2.0 or v1.10)
+**Current focus:** v2.0 milestone complete — SonarQube QA Integration shipped
 
 ## Current Position
 
-Phase: Milestone v1.9 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-26 — Milestone v1.9 completed and archived
+Phase: 31
+Plan: Not started
+Status: Phase complete — ready for verification
+Last activity: 2026-06-27 — Phase 31 complete
 
 ## Milestone History
 
@@ -52,7 +52,7 @@ Last activity: 2026-06-26 — Milestone v1.9 completed and archived
 
 **Velocity:**
 
-- Total plans completed: 28
+- Total plans completed: 34
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -74,6 +74,8 @@ Last activity: 2026-06-26 — Milestone v1.9 completed and archived
 | 24 | 1 | - | - |
 | 27 | 1 | - | - |
 | 28 | 1 | - | - |
+| 29 | 2 | - | - |
+| 31 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -101,6 +103,8 @@ Last activity: 2026-06-26 — Milestone v1.9 completed and archived
 | Phase 23 P23-01 | 2min | 3 tasks | 4 files |
 | Phase 23 P23-02 | 15 | 2 tasks | 4 files |
 | Phase 28 P01 | 12min | 3 tasks | 2 files |
+| Phase 30 P01 | 2 | 2 tasks | 4 files |
+| Phase 31 P01 | 58 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -179,6 +183,10 @@ Recent decisions affecting current work:
 - [Phase ?]: qa_pipeline.run() pre-binds jira_token/jira_email before try block to avoid NameError in failure-comment path if decrypt_credential raises early
 - [Phase ?]: [Phase 28-01]: managed_app_container replaces PLAYWRIGHT_BASE_URL env-var in qa_pipeline Step 4d — health-check gated URL
 - [Phase ?]: [Phase 28-01]: compose_network factored to single call before outer try block in qa_pipeline.run()
+- [Phase ?]: [Phase 30-01]: sonar-scanner step at Step 5.2 in qa_pipeline.run() after run_static_analysis; isolated sonar_scanner.py module, all failure paths return TestResult, never raises
+- [Phase ?]: SonarMetrics dataclass transports quality gate metrics from SonarQube API to Confluence renderer
+- [Phase ?]: TYPE_CHECKING guard in confluence_client.py for SonarMetrics import avoids circular import at runtime
+- [Phase ?]: fetch_sonar_metrics never raises — exceptions return None so QA pipeline is never blocked by metrics fetch failure
 
 ### Pending Todos
 
@@ -228,8 +236,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-26
-Stopped at: Phase 28 complete — milestone v1.9 (Playwright E2E Live Testing) 100% done, all 4 UAT tests passed.
+Last session: 2026-06-27
+Stopped at: Phase 31 complete — v2.0 milestone complete, all 9 phases done
 Resume file: None
 
 ## Operator Next Steps
