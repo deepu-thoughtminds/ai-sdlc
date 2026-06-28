@@ -205,7 +205,8 @@ async def test_publish_architecture_diagram_template_contains_drawio_block():
         assert f">{heading}<" in body_html
 
     assert '<pre class="drawio-xml">' in body_html
-    assert "<mxGraphModel/>" in body_html
+    # The drawio XML is HTML-escaped inside the <pre> block.
+    assert "&lt;mxGraphModel/&gt;" in body_html
     assert "https://app.diagrams.net/?xml=abc" in body_html
 
 

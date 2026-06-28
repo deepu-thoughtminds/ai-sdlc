@@ -50,10 +50,10 @@ import shlex
 import shutil
 import subprocess
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from models.pipeline_state import PipelineState
 from models.project import Project
+from repositories import pipeline_state_repo
 from services.auto_fix_loop import MAX_ATTEMPTS as MAX_AUTOFIX_ATTEMPTS
 from services.auto_fix_loop import run_auto_fix_loop
 from services.codebase_snapshot_reader import get_codebase_snapshot
@@ -69,7 +69,11 @@ from services.sonar_client import ensure_sonarqube_ready
 from services.sonar_scanner import fetch_sonar_metrics, run_sonar_scan
 from services.claude_code_executor import run_claude_playwright_generator
 from services.test_generator import generate_e2e_tests, generate_unit_tests
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +135,7 @@ def _resolve_compose_network() -> str:
     return "ai-sdlc-net"
 
 
-def has_active_qa_run(ticket_key: str, db: Session) -> bool:
+def has_active_qa_run(ticket_key: str, db: Database) -> bool:
     """Return True when a QA PipelineState with status='running' exists for ticket_key.
 
     QATRIG-03: Shared idempotency guard used by both merge_pipeline.py auto-chain
@@ -139,13 +143,9 @@ def has_active_qa_run(ticket_key: str, db: Session) -> bool:
     simultaneous duplicate QA runs for the same ticket.
     """
     return (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == ticket_key,
-            PipelineState.stage == "qa",
-            PipelineState.status == "running",
+        pipeline_state_repo.find_latest(
+            db, ticket_key=ticket_key, stage="qa", statuses=["running"]
         )
-        .first()
         is not None
     )
 
@@ -243,7 +243,7 @@ async def run(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    db: Session,
+    db: Database,
 ) -> str:
     """Run the QA pipeline for a single Jira issue.
 
@@ -261,9 +261,7 @@ async def run(
         issue_key:         Jira issue key (e.g. "PROJ-1").
         issue_summary:     Issue summary (passed for future Phase 24 use).
         issue_description: Issue description (passed for future Phase 24 use).
-        db:                SQLAlchemy session — must be a fresh SessionLocal()
-                           from the background closure, not a request-scoped
-                           session (mirrors T-17-08 / T-16-09 convention).
+        db:                Mongo Database handle (get_database()).
 
     Returns:
         The final comment text posted to Jira.
@@ -276,30 +274,18 @@ async def run(
     # webhook.py creates the row (status="running") before scheduling the
     # task; run() re-uses that row. If no row found (e.g. direct test call),
     # create one.
-    state_row = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == issue_key,
-            PipelineState.stage == "qa",
-            PipelineState.status == "running",
-        )
-        .order_by(PipelineState.id.desc())
-        .first()
+    state_row = pipeline_state_repo.find_latest(
+        db, ticket_key=issue_key, stage="qa", statuses=["running"], order_field="_id"
     )
 
     if state_row is None:
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=issue_key,
-            stage="qa",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, issue_key, "qa", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
-    # T-23-04: Commit qa_attempt=0 BEFORE any execution begins.
-    state_row.qa_attempt = 0
-    db.commit()
+    # T-23-04: Persist qa_attempt=0 BEFORE any execution begins.
+    pipeline_state_repo.update(db, state_row.id, qa_attempt=0)
+    state_row.qa_attempt = 0  # keep local copy in sync for auto_fix_loop
 
     # Ticket-tracking bookkeeping (best-effort).
     safe_upsert_ticket_status(
@@ -360,6 +346,13 @@ async def run(
             issue_description=issue_description,
             codebase_context=codebase_context,
             relevant_file_contents=relevant_file_contents,
+            db=db,
+            project_id=project.id,
+            ticket_key=issue_key,
+        )
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "action", "Generated unit tests",
+            detail=f"{len(file_changes)} file(s)",
         )
 
         # (d) Write each generated file with path-traversal guard (T-24-01)
@@ -477,6 +470,9 @@ async def run(
                         issue_description=issue_description,
                         codebase_context=codebase_context,
                         relevant_file_contents=relevant_file_contents,
+                        db=db,
+                        project_id=project.id,
+                        ticket_key=issue_key,
                     )
                     for change in e2e_file_changes:
                         # T-24-01: traversal guard only
@@ -561,6 +557,11 @@ async def run(
         # Step 5 — Run static analysis tools via Docker subprocess.
         # JS tools run npm ci first, so 300s timeout (vs default 120s).
         static_results = run_static_analysis(cloned.workspace_path, timeout=300)
+        _static_failed = sum(1 for r in static_results if r.returncode != 0 and not r.timed_out)
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "action", "Ran static analysis",
+            detail=f"{len(static_results)} tool(s), {_static_failed} failing",
+        )
 
         # Step 5.2 — SonarQube scan (SCAN-01..04).
         sonar_result = _run_sonar_step(cloned, compose_network, issue_key)
@@ -631,9 +632,9 @@ async def run(
             comment_text += "\n\nnpm audit fix: could not auto-fix — review manually."
 
         # Mark pipeline complete on success.
-        state_row.status = "complete"
-        state_row.draft_content = comment_text
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, status="complete", draft_content=comment_text
+        )
 
         safe_upsert_ticket_status(
             db, project.id, issue_key, pipeline_stage="qa",
@@ -643,13 +644,13 @@ async def run(
             db, project.id, issue_key, "qa", "QA pipeline completed",
             status="success", result_url=autofix_pr_url or None,
         )
+        safe_record_agent_event(
+            db, project.id, issue_key, "qa", "goal", "QA pipeline completed",
+            detail=autofix_pr_url or None,
+        )
 
     except Exception as exc:
-        state_row.status = "failed"
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
+        pipeline_state_repo.update(db, state_row.id, status="failed")
         safe_upsert_ticket_status(
             db, project.id, issue_key, pipeline_stage="qa",
             current_status="QA pipeline failed",

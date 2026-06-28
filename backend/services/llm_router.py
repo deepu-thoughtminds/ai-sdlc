@@ -37,6 +37,7 @@ class LLMResponse:
     provider: str  # "freellmapi" or "main_model"
     content: str  # response text
     model: str = ""  # model name used
+    reasoning: str = ""  # native reasoning tokens, when the provider returns them
 
 
 FREELLMAPI_API_KEY = os.getenv("FREELLMAPI_API_KEY", "")
@@ -85,9 +86,18 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
             resp.raise_for_status()
             data = resp.json()
             # OpenAI format: data["choices"][0]["message"]["content"]
-            response_text = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            response_text = message["content"]
             model_name = data.get("model", freellmapi_model)
-            return LLMResponse(provider="freellmapi", content=response_text, model=model_name)
+            # Best-effort: some OpenAI-compatible providers (e.g. reasoning models)
+            # return native reasoning alongside content. Absent on most free tiers.
+            native_reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+            return LLMResponse(
+                provider="freellmapi",
+                content=response_text,
+                model=model_name,
+                reasoning=native_reasoning,
+            )
         except Exception as exc:
             logger.warning(
                 "freellmapi call failed for stage %s: %s — returning stub response",

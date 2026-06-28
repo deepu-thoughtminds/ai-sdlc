@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 import httpx
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +270,7 @@ async def run(
     github_repo: str,
     github_token: str,
     project_id: int,
-    db: Session,
+    db: Database,
 ) -> None:
     """Scan a GitHub repo and commit a snapshot to .hermes/codebase.md.
 

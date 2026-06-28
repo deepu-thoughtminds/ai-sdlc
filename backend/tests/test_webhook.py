@@ -26,86 +26,26 @@ Uses StaticPool + same dependency override pattern from test_dashboard.py.
 Pipeline service calls are mocked at 'routers.webhook.*' import path.
 """
 
-import asyncio
-import os
+import asyncio  # noqa: F401 — kept so patch("routers.webhook.asyncio...") parity holds
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
-from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-# Set env vars BEFORE importing any app modules.
-_TEST_KEY = Fernet.generate_key().decode()
-os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-
-# ---------------------------------------------------------------------------
-# In-memory SQLite with StaticPool — all connections share the same DB.
-# ---------------------------------------------------------------------------
-
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-from database import Base, get_db  # noqa: E402
-from services.mention_parser import MentionResult  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.pipeline_state  # noqa: E402
-from models.project import Project  # noqa: E402
-from models.pipeline_state import PipelineState  # noqa: E402
-from services.crypto import encrypt_credential  # noqa: E402
-from main import app  # noqa: E402
-
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
-
-
-def override_get_db():
-    db = TestingSession()
-    try:
-        yield db
-    finally:
-        db.close()
-
+from database import get_database
+from main import app
+from repositories import pipeline_state_repo
+from services.crypto import encrypt_credential
+from services.mention_parser import MentionResult
+from tests.support import make_project
 
 pytestmark = pytest.mark.asyncio
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
-
-@pytest.fixture(autouse=True)
-def reset_tables():
-    """Install webhook DB override, drop/recreate tables, restore prior override after.
-
-    The module-level override is NOT installed at import time to avoid
-    contaminating other test modules that load before test_webhook runs.
-    Instead, each test installs and tears down the override via this fixture.
-    """
-    prior_override = app.dependency_overrides.get(get_db)
-    app.dependency_overrides[get_db] = override_get_db
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    if prior_override is not None:
-        app.dependency_overrides[get_db] = prior_override
-    else:
-        app.dependency_overrides.pop(get_db, None)
-
-
-def _create_project(db, key: str = "PROJ") -> Project:
-    """Insert a Project row and return the ORM object."""
-    project = Project(
+def _create_project(db, key: str = "PROJ"):
+    """Insert a project document and return it (a Doc with .id)."""
+    return make_project(
+        db,
         name="Test Project",
         project_key=key,
         jira_url="https://test.atlassian.net",
@@ -115,10 +55,6 @@ def _create_project(db, key: str = "PROJ") -> Project:
         confluence_token=encrypt_credential("fake-confluence-token"),
         github_repo=encrypt_credential("acme/my-app"),
     )
-    db.add(project)
-    db.commit()
-    db.refresh(project)
-    return project
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +129,11 @@ async def test_hermes_mention_returns_action():
     """Test 4: POST with @jarvis describe and a matching project returns action=describe.
     With LLM classification describe is now a valid action (LLM mocked).
     """
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     _describe_result = MentionResult(mention_target="jarvis", action="describe", extra="", entities={})
     with patch("routers.webhook.parse_mention", return_value=_describe_result), \
@@ -223,12 +159,12 @@ async def test_describe_mention_creates_pipeline_state():
     """Test 5: POST with '@jarvis describe' and matching project returns action=describe
     and creates a PipelineState row with status='awaiting_approval'.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         project_id = project.id
     finally:
-        db.close()
+        pass
 
     story_created_payload = {
         "webhook_event": "jira:issue_created",
@@ -255,31 +191,25 @@ async def test_describe_mention_creates_pipeline_state():
     assert body["action"] == "describe"
 
     # Verify PipelineState row was created in DB
-    check_db = TestingSession()
+    check_db = get_database()
     try:
         row = (
-            check_db.query(PipelineState)
-            .filter(
-                PipelineState.project_id == project_id,
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "describe",
-            )
-            .first()
+            pipeline_state_repo.find_latest(check_db, project_id=project_id, ticket_key="PROJ-1", stage="describe")
         )
         assert row is not None, "PipelineState row should exist"
         assert row.status == "awaiting_approval"
         assert row.draft_content == "Draft text."
     finally:
-        check_db.close()
+        pass
 
 
 async def test_issue_created_ignores_non_story():
     """POST /webhook/jira-issue with issue_type='Bug' returns ignored/not_a_story."""
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     bug_created_payload = {
         "webhook_event": "jira:issue_created",
@@ -305,20 +235,12 @@ async def test_issue_created_duplicate_returns_ignored():
     """Second jira:issue_created for a ticket with an active describe PipelineState
     returns action=ignored, reason=duplicate_pipeline.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
-        existing = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-3",
-            stage="describe",
-            status="awaiting_approval",
-            draft_content="Already drafted.",
-        )
-        db.add(existing)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-3", "describe", status="awaiting_approval", draft_content="Already drafted.")
     finally:
-        db.close()
+        pass
 
     story_created_payload = {
         "webhook_event": "jira:issue_created",
@@ -342,11 +264,11 @@ async def test_issue_created_duplicate_returns_ignored():
 
 async def test_assign_mention_calls_assign_pipeline():
     """Test 6: POST with '@jarvis assign @jane.smith' returns action=assign."""
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     assign_payload = {
         "webhook_event": "comment_created",
@@ -373,22 +295,14 @@ async def test_approval_comment_triggers_approval():
     """Test 7: POST with plain 'LGTM' comment and existing awaiting_approval row
     returns action=approval_applied.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
 
         # Insert awaiting_approval PipelineState row
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="describe",
-            status="awaiting_approval",
-            draft_content="Elaborated description.",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "describe", status="awaiting_approval", draft_content="Elaborated description.")
     finally:
-        db.close()
+        pass
 
     approval_payload = {
         "webhook_event": "comment_created",
@@ -441,11 +355,11 @@ async def test_architecture_mention_returns_action():
     """Test 9: POST with '@jarvis architecture' and a matching project returns
     status=received, action=architecture, routed_to=freellmapi.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     _arch_result = MentionResult(mention_target="jarvis", action="architecture", extra="", entities={})
     with patch("routers.webhook.parse_mention", return_value=_arch_result), \
@@ -466,11 +380,11 @@ async def test_architecture_mention_schedules_pipeline():
     """Test 10: POST with '@jarvis architecture' for a known project calls
     asyncio.create_task once to schedule architecture_pipeline.run.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     # Patch asyncio.create_task to prevent background execution in test context.
     # asyncio.create_task receives a coroutine from architecture_pipeline.run();
@@ -518,11 +432,11 @@ async def test_native_jira_shaped_payload_returns_200():
     """Real Jira Cloud / Jira Automation 'issue data' payload shape (webhookEvent,
     issue.fields.summary, comment.author object) must return 200, not 422.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhook/jira-comment", json=NATIVE_JIRA_PAYLOAD)
@@ -543,20 +457,13 @@ async def test_architecture_duplicate_returns_ignored():
     with stage='architecture' and status='running' exists → returns reason=duplicate_pipeline
     with HTTP 200; asyncio.create_task is NOT called.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         # Pre-insert an active (running) PipelineState row
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="architecture",
-            status="running",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "architecture", status="running")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -585,20 +492,13 @@ async def test_architecture_failed_state_allows_new_run():
     """Test 12: Existing PipelineState with status='failed' does NOT block a new run.
     asyncio.create_task IS called.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         # Pre-insert a FAILED PipelineState row — must not block new run
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="architecture",
-            status="failed",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "architecture", status="failed")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -625,27 +525,23 @@ async def test_architecture_creates_pipeline_state_before_task():
     """Test 13: New architecture run creates a PipelineState row with status='running'
     committed BEFORE asyncio.create_task is called.
     """
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         project_id = project.id
     finally:
-        db.close()
+        pass
 
     pipeline_state_seen_in_db: list = []
 
     def _check_db_then_close(coro):
         # At the moment create_task is called, the PipelineState row must already be in DB
-        check_db = TestingSession()
+        check_db = get_database()
         try:
-            row = check_db.query(PipelineState).filter(
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "architecture",
-                PipelineState.status == "running",
-            ).first()
+            row = pipeline_state_repo.find_latest(check_db, ticket_key="PROJ-1", stage="architecture", statuses=["running"])
             pipeline_state_seen_in_db.append(row)
         finally:
-            check_db.close()
+            pass
         coro.close()
         return None
 
@@ -670,11 +566,11 @@ async def test_architecture_creates_pipeline_state_before_task():
 @pytest.mark.asyncio
 async def test_webhook_unknown_intent_posts_help_comment():
     """When @jarvis appears in body but parse_mention returns None → help comment posted."""
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     payload = {
         "webhook_event": "comment_created",
@@ -699,11 +595,11 @@ async def test_webhook_unknown_intent_posts_help_comment():
 @pytest.mark.asyncio
 async def test_webhook_no_jarvis_mention_does_not_post_help_comment():
     """When body has no @jarvis at all and parse_mention returns None → silent ignored."""
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     payload = {
         "webhook_event": "comment_created",
@@ -737,11 +633,11 @@ async def test_webhook_start_coding_schedules_dev_pipeline():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -771,19 +667,12 @@ async def test_start_coding_duplicate_returns_ignored():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="dev_pipeline",
-            status="running",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "dev_pipeline", status="running")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -813,19 +702,12 @@ async def test_start_coding_failed_state_allows_new_run():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="dev_pipeline",
-            status="failed",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "dev_pipeline", status="failed")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -853,26 +735,22 @@ async def test_start_coding_creates_pipeline_state_before_task():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         project_id = project.id
     finally:
-        db.close()
+        pass
 
     pipeline_state_seen_in_db: list = []
 
     def _check_db_then_close(coro):
-        check_db = TestingSession()
+        check_db = get_database()
         try:
-            row = check_db.query(PipelineState).filter(
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "dev_pipeline",
-                PipelineState.status == "running",
-            ).first()
+            row = pipeline_state_repo.find_latest(check_db, ticket_key="PROJ-1", stage="dev_pipeline", statuses=["running"])
             pipeline_state_seen_in_db.append(row)
         finally:
-            check_db.close()
+            pass
         coro.close()
         return None
 
@@ -903,11 +781,11 @@ async def test_webhook_merge_pr_schedules_merge_pipeline():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         _create_project(db, key="PROJ")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -938,19 +816,12 @@ async def test_merge_pr_duplicate_returns_ignored():
     """
     from services.mention_parser import MentionResult
 
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
-        ps = PipelineState(
-            project_id=project.id,
-            ticket_key="PROJ-1",
-            stage="merge_pr",
-            status="running",
-        )
-        db.add(ps)
-        db.commit()
+        pipeline_state_repo.create(db, project.id, "PROJ-1", "merge_pr", status="running")
     finally:
-        db.close()
+        pass
 
     captured_coros: list = []
 
@@ -984,28 +855,24 @@ async def test_merge_pr_creates_pipeline_state_before_task():
     from services.mention_parser import MentionResult
     from unittest.mock import AsyncMock
 
-    db = TestingSession()
+    db = get_database()
     try:
         project = _create_project(db, key="PROJ")
         project_id = project.id
     finally:
-        db.close()
+        pass
 
     pipeline_state_seen_in_db: list = []
 
     def _check_db_then_close(coro):
         # At the moment create_task is called, the PipelineState row must
         # already be committed to the DB.
-        check_db = TestingSession()
+        check_db = get_database()
         try:
-            row = check_db.query(PipelineState).filter(
-                PipelineState.ticket_key == "PROJ-1",
-                PipelineState.stage == "merge_pr",
-                PipelineState.status == "running",
-            ).first()
+            row = pipeline_state_repo.find_latest(check_db, ticket_key="PROJ-1", stage="merge_pr", statuses=["running"])
             pipeline_state_seen_in_db.append(row)
         finally:
-            check_db.close()
+            pass
         coro.close()
         return None
 

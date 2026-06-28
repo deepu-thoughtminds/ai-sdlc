@@ -134,3 +134,75 @@ export async function upsertTicketStatus(
   }
   return res.json() as Promise<TicketStatusPublic>
 }
+
+// ---------------------------------------------------------------------------
+// Ticket detail & agent activity types
+// ---------------------------------------------------------------------------
+
+export interface StageTransactionPublic {
+  id: number
+  ticket_key: string
+  stage: string
+  event: string
+  status: string
+  result_url: string | null
+  detail: string | null
+  created_at: string
+}
+
+export interface TicketDetail {
+  id: number
+  ticket_key: string
+  pipeline_stage: string
+  current_status: string | null
+  summary: string | null
+  issue_type: string | null
+  created_at: string
+  updated_at: string
+  transactions: StageTransactionPublic[]
+}
+
+/** One captured agent event: thinking | action | decision | goal. */
+export interface AgentEventPublic {
+  id: number
+  ticket_key: string
+  stage: string
+  event_type: "thinking" | "action" | "decision" | "goal"
+  content: string
+  tool_name: string | null
+  detail: string | null
+  created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Ticket detail & agent activity API functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch a single ticket's feature details + full stage-transaction timeline.
+ */
+export async function getTicketDetail(
+  projectId: number,
+  ticketKey: string
+): Promise<TicketDetail> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}`
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<TicketDetail>
+}
+
+/**
+ * Fetch the captured agent activity log (thinking/action/decision/goal) for a
+ * ticket, oldest-first.
+ */
+export async function getAgentEvents(
+  projectId: number,
+  ticketKey: string
+): Promise<AgentEventPublic[]> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}/agent-events`
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<AgentEventPublic[]>
+}

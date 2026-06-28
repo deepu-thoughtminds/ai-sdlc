@@ -26,10 +26,30 @@ Threat mitigations:
 
 import logging
 
+from pymongo.database import Database
+
 from services.code_generator import FileChange, _parse_file_changes
 from services.llm_router import route_request
+from services.reasoning import REASONING_INSTRUCTION, split_reasoning
+from services.ticket_tracking import safe_record_reasoning
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_and_parse(
+    route_result,
+    db: Database | None,
+    project_id: int | None,
+    ticket_key: str | None,
+) -> list[FileChange]:
+    """Split off the model's <thinking> reasoning (persist it as qa thinking when a
+    db handle is supplied), then parse the answer into FileChanges."""
+    reasoning, answer = split_reasoning(route_result.content)
+    if getattr(route_result, "reasoning", ""):
+        reasoning = route_result.reasoning
+    if db is not None and project_id is not None and ticket_key is not None:
+        safe_record_reasoning(db, project_id, ticket_key, "qa", reasoning)
+    return _parse_file_changes(answer)
 
 
 def generate_unit_tests(
@@ -38,6 +58,10 @@ def generate_unit_tests(
     issue_description: str,
     codebase_context: str | None,
     relevant_file_contents: dict[str, str],
+    *,
+    db: Database | None = None,
+    project_id: int | None = None,
+    ticket_key: str | None = None,
 ) -> list[FileChange]:
     """Generate pytest unit test files for a Jira issue via freellmapi.
 
@@ -136,10 +160,11 @@ def generate_unit_tests(
         "- Include complete file content for each test file\n"
         "- Use the exact ### FILE: format for each test file\n"
         "- Do not include explanations outside of the file blocks"
+        + REASONING_INSTRUCTION
     )
 
     route_result = route_request("testgen", prompt)
-    return _parse_file_changes(route_result.content)
+    return _capture_and_parse(route_result, db, project_id, ticket_key)
 
 
 def generate_playwright_config(
@@ -189,6 +214,10 @@ def generate_e2e_tests(
     issue_description: str,
     codebase_context: str | None,
     relevant_file_contents: dict[str, str],
+    *,
+    db: Database | None = None,
+    project_id: int | None = None,
+    ticket_key: str | None = None,
 ) -> list[FileChange]:
     """Generate Playwright E2E test files for a Jira issue via freellmapi.
 
@@ -241,7 +270,8 @@ def generate_e2e_tests(
         "- NEVER use page.locator('text=...'). Use page.getByRole() or page.getByText() instead.\n"
         "  Example: await expect(page.getByRole('heading', { name: 'Welcome to Pivot' })).toBeVisible()\n"
         "  Example: await expect(page.getByText('Welcome to Pivot', { exact: false })).toBeVisible()"
+        + REASONING_INSTRUCTION
     )
 
     route_result = route_request("testgen", prompt)
-    return _parse_file_changes(route_result.content)
+    return _capture_and_parse(route_result, db, project_id, ticket_key)

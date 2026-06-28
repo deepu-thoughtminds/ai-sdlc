@@ -18,14 +18,12 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError
 
-from database import SessionLocal, get_db
-from models.pipeline_state import PipelineState
+from database import get_database, get_db
 from models.project import Project, ProjectCreate, ProjectListItem, ProjectPublic, ProjectUpdate
-from models.stage_transaction import StageTransaction
+from repositories import pipeline_state_repo, projects_repo
 from services import codebase_scan_service
 from services.auth import get_current_user
 from services.crypto import decrypt_credential, encrypt_credential
@@ -60,7 +58,7 @@ def _project_to_public(project: Project) -> ProjectPublic:
 @router.post("/projects", response_model=ProjectPublic, status_code=201)
 async def create_project(
     payload: ProjectCreate,
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> ProjectPublic:
     """Create a new project, encrypting all credential tokens and github_repo before storage.
 
@@ -70,68 +68,65 @@ async def create_project(
     SCAN-01: when github_repo is non-empty, schedules an async codebase scan
     background task immediately after project creation.
     """
-    project = Project(
-        name=payload.name,
-        project_key=payload.project_key,
-        jira_url=str(payload.jira_url),
-        jira_email=payload.jira_email,
-        confluence_url=str(payload.confluence_url),
-        # Encrypt tokens before writing to DB (T-02-03)
-        jira_token=encrypt_credential(payload.jira_token),
-        github_token=encrypt_credential(payload.github_token),
-        confluence_token=encrypt_credential(payload.confluence_token),
-        # Encrypt github_repo before writing to DB (GITHUBCFG-01 / T-15-02)
-        github_repo=encrypt_credential(payload.github_repo),
-    )
-    db.add(project)
-    db.commit()
-    db.refresh(project)
+    try:
+        project = projects_repo.create(
+            db,
+            name=payload.name,
+            project_key=payload.project_key,
+            jira_url=str(payload.jira_url),
+            jira_email=payload.jira_email,
+            confluence_url=str(payload.confluence_url),
+            github_url=None,
+            # Encrypt tokens before writing to DB (T-02-03)
+            jira_token=encrypt_credential(payload.jira_token),
+            github_token=encrypt_credential(payload.github_token),
+            confluence_token=encrypt_credential(payload.confluence_token),
+            # Encrypt github_repo before writing to DB (GITHUBCFG-01 / T-15-02)
+            github_repo=encrypt_credential(payload.github_repo),
+        )
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="project_key already in use by another project",
+        )
     logger.info("project created id=%d", project.id)  # T-02-04: no token values logged
 
     if payload.github_repo:
         # SCAN-01: Trigger codebase scan as background task on project onboarding.
-        # PipelineState committed BEFORE asyncio.create_task() so duplicate-guard
+        # PipelineState persisted BEFORE asyncio.create_task() so duplicate-guard
         # (Phase 19) can detect an in-flight scan. ticket_key "__onboarding__" is
         # the sentinel value used when no Jira ticket exists at onboarding time.
-        scan_state = PipelineState(
-            project_id=project.id,
-            ticket_key="__onboarding__",
-            stage="codebase_scan",
-            status="running",
+        pipeline_state_repo.create(
+            db, project.id, "__onboarding__", "codebase_scan", status="running"
         )
-        db.add(scan_state)
-        db.commit()
 
         project_id = project.id
 
         async def _run_scan_background() -> None:
-            # CR-02: Open a fresh session — never reuse the request-scoped db session.
-            bg_db = SessionLocal()
+            # PyMongo's client is shared/thread-safe — just grab the Database handle
+            # (no per-task session to open or close as with SQLAlchemy).
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            if bg_project is None:
+                logger.warning(
+                    "Project id=%s not found in scan background task — aborting",
+                    project_id,
+                )
+                return
+            github_token = decrypt_credential(bg_project.github_token)  # T-18-01: not logged
+            github_repo = decrypt_credential(bg_project.github_repo)
             try:
-                bg_project = bg_db.query(Project).filter(Project.id == project_id).first()
-                if bg_project is None:
-                    logger.warning(
-                        "Project id=%s not found in scan background task — aborting",
-                        project_id,
-                    )
-                    return
-                github_token = decrypt_credential(bg_project.github_token)  # T-18-01: not logged
-                github_repo = decrypt_credential(bg_project.github_repo)
-                try:
-                    await codebase_scan_service.run(github_repo, github_token, project_id, bg_db)
-                except Exception as exc:
-                    logger.warning(
-                        "Codebase scan failed for project id=%s: %s", project_id, exc
-                    )
-                    # Mark PipelineState as error so UI can surface the failure
-                    bg_db.query(PipelineState).filter(
-                        PipelineState.project_id == project_id,
-                        PipelineState.stage == "codebase_scan",
-                        PipelineState.status == "running",
-                    ).update({"status": "error"})
-                    bg_db.commit()
-            finally:
-                bg_db.close()
+                await codebase_scan_service.run(github_repo, github_token, project_id, bg_db)
+            except Exception as exc:
+                logger.warning(
+                    "Codebase scan failed for project id=%s: %s", project_id, exc
+                )
+                # Mark PipelineState as error so UI can surface the failure
+                pipeline_state_repo.update_status_many(
+                    bg_db,
+                    {"project_id": project_id, "stage": "codebase_scan", "status": "running"},
+                    "error",
+                )
 
         asyncio.create_task(_run_scan_background())
         logger.info("Codebase scan scheduled project id=%d", project.id)  # T-18-01: no token
@@ -140,20 +135,20 @@ async def create_project(
 
 
 @router.get("/projects", response_model=list[ProjectListItem])
-def list_projects(db: Session = Depends(get_db)) -> list[Project]:
+def list_projects(db: Database = Depends(get_db)) -> list[Project]:
     """Return all projects as compact list items (no token fields, no URLs)."""
-    return list(db.execute(select(Project)).scalars().all())
+    return projects_repo.list_all(db)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectPublic)
-def get_project(project_id: int, db: Session = Depends(get_db)) -> ProjectPublic:
+def get_project(project_id: int, db: Database = Depends(get_db)) -> ProjectPublic:
     """Return a single project by ID.
 
     Returns ProjectPublic (no token fields, decrypted github_repo) with HTTP 200.
     Returns HTTP 404 if no project with that ID exists.
     T-15-02: github_repo decrypted at response-construction time via _project_to_public.
     """
-    project = db.get(Project, project_id)
+    project = projects_repo.get(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
     return _project_to_public(project)
@@ -163,7 +158,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)) -> ProjectPublic
 def update_project(
     project_id: int,
     payload: ProjectUpdate,
-    db: Session = Depends(get_db),
+    db: Database = Depends(get_db),
 ) -> ProjectPublic:
     """Update an existing project. Only provided fields are changed.
 
@@ -172,59 +167,54 @@ def update_project(
     (T-02-03). Returns ProjectPublic (no token fields). 404 if not found;
     409 if a new project_key collides with another project.
     """
-    project = db.get(Project, project_id)
+    project = projects_repo.get(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
 
     # Only consider fields the client actually sent (exclude_unset).
     data = payload.model_dump(exclude_unset=True)
 
+    set_fields: dict = {}
     # Plain (non-encrypted) fields — HttpUrl values must be coerced to str.
     if "name" in data and data["name"] is not None:
-        project.name = data["name"]
+        set_fields["name"] = data["name"]
     if "project_key" in data and data["project_key"] is not None:
-        project.project_key = data["project_key"]
+        set_fields["project_key"] = data["project_key"]
     if "jira_url" in data and data["jira_url"] is not None:
-        project.jira_url = str(payload.jira_url)
+        set_fields["jira_url"] = str(payload.jira_url)
     if "jira_email" in data and data["jira_email"] is not None:
-        project.jira_email = data["jira_email"]
+        set_fields["jira_email"] = data["jira_email"]
     if "confluence_url" in data and data["confluence_url"] is not None:
-        project.confluence_url = str(payload.confluence_url)
+        set_fields["confluence_url"] = str(payload.confluence_url)
 
     # Encrypted fields — re-encrypt only when a non-empty value is supplied.
     for enc_field in ("jira_token", "github_token", "confluence_token", "github_repo"):
         value = data.get(enc_field)
         if value:  # non-empty string only; empty/None means "leave unchanged"
-            setattr(project, enc_field, encrypt_credential(value))
+            set_fields[enc_field] = encrypt_credential(value)
 
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+        updated = projects_repo.update(db, project_id, **set_fields)
+    except DuplicateKeyError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="project_key already in use by another project",
         )
-    db.refresh(project)
-    logger.info("project updated id=%d", project.id)  # no token values logged
-    return _project_to_public(project)
+    logger.info("project updated id=%d", updated.id)  # no token values logged
+    return _project_to_public(updated)
 
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_project(project_id: int, db: Session = Depends(get_db)) -> Response:
+def delete_project(project_id: int, db: Database = Depends(get_db)) -> Response:
     """Delete a project and its related rows.
 
-    ticket_statuses are removed via the ORM relationship cascade. pipeline_states
-    and stage_transactions have no ORM relationship and SQLite does not enforce FK
-    cascades by default, so they are deleted explicitly here to avoid orphan rows.
-    Returns 204; 404 if not found.
+    projects_repo.delete explicitly clears ticket_statuses, pipeline_states, and
+    stage_transactions for the project (Mongo has no FK cascade) before removing
+    the project document. Returns 204; 404 if not found.
     """
-    project = db.get(Project, project_id)
+    project = projects_repo.get(db, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
-    db.query(PipelineState).filter(PipelineState.project_id == project_id).delete()
-    db.query(StageTransaction).filter(StageTransaction.project_id == project_id).delete()
-    db.delete(project)
-    db.commit()
+    projects_repo.delete(db, project_id)
     logger.info("project deleted id=%d", project_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

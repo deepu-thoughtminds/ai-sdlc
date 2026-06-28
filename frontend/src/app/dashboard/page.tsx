@@ -118,7 +118,11 @@ export default function DashboardPage() {
                     <tbody>
                       {activeTickets.map((ts: TicketStatusPublic) => (
                         <tr key={ts.id} style={{ borderBottom: "1px solid #dee2e6" }}>
-                          <td style={{ padding: "8px 12px", border: "1px solid #dee2e6", fontFamily: "monospace" }}>{ts.ticket_key}</td>
+                          <td style={{ padding: "8px 12px", border: "1px solid #dee2e6", fontFamily: "monospace" }}>
+                            <a href={`/dashboard/${project.id}/${ts.ticket_key}`} style={{ color: "#0070f3" }}>
+                              {ts.ticket_key}
+                            </a>
+                          </td>
                           <td style={{ padding: "8px 12px", border: "1px solid #dee2e6" }}>
                             <span
                               style={{

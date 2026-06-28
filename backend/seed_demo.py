@@ -10,10 +10,8 @@ POST /api/projects. Safe to re-run: it clears this ticket's rows first.
 Delete this file when you're done testing.
 """
 
-from database import SessionLocal
-from models.project import Project  # noqa: F401 — registers the mapper TicketStatus relates to
-from models.stage_transaction import StageTransaction
-from models.ticket_status import TicketStatus
+from database import get_database
+from repositories import stage_transaction_repo, ticket_status_repo
 
 # --- edit these to match your project ---
 PROJECT_ID = 1
@@ -33,41 +31,32 @@ TRANSACTIONS = [
 
 
 def main() -> None:
-    db = SessionLocal()
-    try:
-        # Idempotent: remove any prior rows for this ticket so re-runs are clean.
-        db.query(StageTransaction).filter(
-            StageTransaction.project_id == PROJECT_ID,
-            StageTransaction.ticket_key == TICKET,
-        ).delete()
-        db.query(TicketStatus).filter(
-            TicketStatus.project_id == PROJECT_ID,
-            TicketStatus.ticket_key == TICKET,
-        ).delete()
-        db.commit()
+    db = get_database()
 
-        db.add(TicketStatus(
-            project_id=PROJECT_ID,
-            ticket_key=TICKET,
-            pipeline_stage="qa",
-            current_status="QA pipeline completed",
-            summary="Add login page",
-            issue_type="Story",
-        ))
-        for stage, event, url in TRANSACTIONS:
-            db.add(StageTransaction(
-                project_id=PROJECT_ID,
-                ticket_key=TICKET,
-                stage=stage,
-                event=event,
-                status="success",
-                result_url=url,
-            ))
-        db.commit()
-        print(f"seeded ticket {TICKET} for project {PROJECT_ID} "
-              f"with {len(TRANSACTIONS)} transactions")
-    finally:
-        db.close()
+    # Idempotent: remove any prior rows for this ticket so re-runs are clean.
+    db["stage_transactions"].delete_many(
+        {"project_id": PROJECT_ID, "ticket_key": TICKET}
+    )
+    db["ticket_statuses"].delete_many(
+        {"project_id": PROJECT_ID, "ticket_key": TICKET}
+    )
+
+    ticket_status_repo.upsert(
+        db,
+        PROJECT_ID,
+        TICKET,
+        pipeline_stage="qa",
+        current_status="QA pipeline completed",
+        summary="Add login page",
+        issue_type="Story",
+    )
+    for stage, event, url in TRANSACTIONS:
+        stage_transaction_repo.append(
+            db, PROJECT_ID, TICKET, stage, event, status="success", result_url=url
+        )
+
+    print(f"seeded ticket {TICKET} for project {PROJECT_ID} "
+          f"with {len(TRANSACTIONS)} transactions")
 
 
 if __name__ == "__main__":

@@ -21,10 +21,8 @@ Threat mitigations:
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
 
-from database import Base
+from database import Doc
 from models.ticket_status import VALID_STAGES
 
 # ---------------------------------------------------------------------------
@@ -35,33 +33,15 @@ TRANSACTION_STATUSES: frozenset = frozenset({"success", "failed", "in_progress"}
 
 
 # ---------------------------------------------------------------------------
-# ORM Model
+# Document type
 # ---------------------------------------------------------------------------
 
-
-class StageTransaction(Base):
-    """ORM model for an append-only SDLC stage-transaction record."""
-
-    __tablename__ = "stage_transactions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
-    )
-    ticket_key: Mapped[str] = mapped_column(String(100), nullable=False)
-    stage: Mapped[str] = mapped_column(String(50), nullable=False)
-    event: Mapped[str] = mapped_column(String(500), nullable=False)
-    # status values: success | failed | in_progress
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="success")
-    result_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        Index("ix_stage_transactions_project_ticket", "project_id", "ticket_key"),
-    )
+# Append-only documents in the `stage_transactions` collection. Insert/read
+# logic lives in repositories/stage_transaction_repo.py. `StageTransaction` is a
+# Doc alias kept for type-hint compatibility.
+# Fields: id, project_id, ticket_key, stage, event, status, result_url, detail,
+# created_at.
+StageTransaction = Doc
 
 
 # ---------------------------------------------------------------------------

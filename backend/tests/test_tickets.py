@@ -1,103 +1,36 @@
 """Tests for the ticket status & history endpoints (routers/tickets.py).
 
-Follows the StaticPool in-memory SQLite + dependency-override pattern from
-test_dashboard.py. Auth is stubbed (these tests cover ticket reads, not auth).
+Uses the shared mongomock fixtures in conftest.py. Auth is stubbed there; one
+test removes the stub to assert the routes require auth.
 """
 
-import os
+from fastapi.testclient import TestClient
 
-import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-
-TEST_ENGINE = create_engine(
-    "sqlite:///:memory:",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-from database import Base, get_db  # noqa: E402
-import models.project  # noqa: E402
-import models.ticket_status  # noqa: E402
-import models.stage_transaction  # noqa: E402
-from models.project import Project  # noqa: E402
-from models.stage_transaction import StageTransaction  # noqa: E402
-from models.ticket_status import TicketStatus  # noqa: E402
-from main import app  # noqa: E402
-
-Base.metadata.create_all(TEST_ENGINE)
-TestingSession = sessionmaker(bind=TEST_ENGINE, autocommit=False, autoflush=False)
-
-
-def override_get_db():
-    db = TestingSession()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-from services.auth import get_current_user  # noqa: E402
-
-app.dependency_overrides[get_current_user] = lambda: "test-admin"
-
-from fastapi.testclient import TestClient  # noqa: E402
+from database import get_database
+from main import app
+from repositories import stage_transaction_repo, ticket_status_repo
+from services.auth import get_current_user
+from tests.support import make_project
 
 client = TestClient(app)
 
 
-@pytest.fixture(autouse=True)
-def reset_tables():
-    prior = app.dependency_overrides.get(get_db)
-    app.dependency_overrides[get_db] = override_get_db
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    yield
-    Base.metadata.drop_all(TEST_ENGINE)
-    Base.metadata.create_all(TEST_ENGINE)
-    if prior is not None:
-        app.dependency_overrides[get_db] = prior
-    else:
-        app.dependency_overrides.pop(get_db, None)
-
-
 def _seed() -> int:
     """Create a project, one ticket status, and three transactions. Returns project id."""
-    db = TestingSession()
-    try:
-        p = Project(
-            name="P", project_key="P",
-            jira_url="https://x.atlassian.net", confluence_url="https://x.atlassian.net/wiki",
-            jira_token="c", github_token="c", confluence_token="c", github_repo="c",
-        )
-        db.add(p)
-        db.commit()
-        db.refresh(p)
-
-        db.add(TicketStatus(
-            project_id=p.id, ticket_key="P-1", pipeline_stage="dev",
-            current_status="Coding finished and PR sent",
-            summary="Add login page", issue_type="Story",
-        ))
-        for stage, event in [
-            ("description", "Generated description"),
-            ("architecture", "Published to Confluence"),
-            ("dev", "Coding finished and PR sent"),
-        ]:
-            db.add(StageTransaction(
-                project_id=p.id, ticket_key="P-1", stage=stage, event=event, status="success"
-            ))
-        db.commit()
-        return p.id
-    finally:
-        db.close()
+    db = get_database()
+    p = make_project(db)
+    ticket_status_repo.upsert(
+        db, p.id, "P-1", pipeline_stage="dev",
+        current_status="Coding finished and PR sent",
+        summary="Add login page", issue_type="Story",
+    )
+    for stage, event in [
+        ("description", "Generated description"),
+        ("architecture", "Published to Confluence"),
+        ("dev", "Coding finished and PR sent"),
+    ]:
+        stage_transaction_repo.append(db, p.id, "P-1", stage, event, status="success")
+    return p.id
 
 
 def test_list_tickets() -> None:

@@ -15,7 +15,7 @@ import glob
 import os
 import pathlib
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -177,6 +177,7 @@ async def test_happy_path_url_yielded_to_generation():
     with patch("services.qa_pipeline.managed_app_container", return_value=mock_cm) as mock_mac, \
          patch("services.qa_pipeline.generate_e2e_tests", return_value=[file_change]) as mock_gen, \
          patch("services.qa_pipeline.run_command", return_value=passing_result) as mock_run, \
+         patch("services.qa_pipeline.run_claude_playwright_generator", new_callable=AsyncMock, return_value=[]), \
          patch("glob.glob", return_value=["/workspace/playwright.config.ts"]):
 
         e2e_results, _, e2e_live_url, e2e_skip_note = await _run_e2e_step()

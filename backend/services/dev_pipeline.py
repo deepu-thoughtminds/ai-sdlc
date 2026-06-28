@@ -22,10 +22,10 @@ import os
 import re
 import shutil
 
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from models.pipeline_state import PipelineState
 from models.project import Project
+from repositories import pipeline_state_repo
 from services.confluence_url_finder import find_latest_architecture_url
 from services.crypto import decrypt_credential
 from services.agentic_coder import run_agentic_codegen
@@ -38,7 +38,11 @@ from services.hermes_client import (
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.test_generator import generate_playwright_config
 from services.repo_clone import clone_repository
-from services.ticket_tracking import safe_record_transaction, safe_upsert_ticket_status
+from services.ticket_tracking import (
+    safe_record_agent_event,
+    safe_record_transaction,
+    safe_upsert_ticket_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +120,7 @@ async def run(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    db: Session,
+    db: Database,
 ) -> str:
     """Run the dev pipeline end-to-end for a @jarvis start coding trigger.
 
@@ -143,25 +147,13 @@ async def run(
     # Step 1: Re-use the PipelineState row created by the webhook idempotency
     # guard (webhook.py creates it with status="running" BEFORE scheduling this
     # task). If no row is found (e.g. direct call in tests), create one.
-    state_row = (
-        db.query(PipelineState)
-        .filter(
-            PipelineState.ticket_key == issue_key,
-            PipelineState.stage == "dev_pipeline",
-            PipelineState.status == "running",
-        )
-        .order_by(PipelineState.id.desc())
-        .first()
+    state_row = pipeline_state_repo.find_latest(
+        db, ticket_key=issue_key, stage="dev_pipeline", statuses=["running"], order_field="_id"
     )
     if state_row is None:
-        state_row = PipelineState(
-            project_id=project.id,
-            ticket_key=issue_key,
-            stage="dev_pipeline",
-            status="running",
+        state_row = pipeline_state_repo.create(
+            db, project.id, issue_key, "dev_pipeline", status="running"
         )
-        db.add(state_row)
-        db.commit()
 
     # Ticket-tracking bookkeeping: coding has begun (best-effort).
     safe_upsert_ticket_status(
@@ -193,9 +185,9 @@ async def run(
                 issue_key,
                 AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
             )
-            state_row.status = "complete"
-            state_row.draft_content = comment_text
-            db.commit()
+            pipeline_state_repo.update(
+                db, state_row.id, status="complete", draft_content=comment_text
+            )
             logger.info("Dev pipeline complete for ticket %s (no architecture URL)", issue_key)
             return comment_text
 
@@ -234,7 +226,20 @@ async def run(
         # workspace is always cleaned up (T-16-07 / repo_clone.py contract).
         try:
             # Step 7: Generate code changes via the agentic coder (Claude Agent
-            # SDK routed through the local LiteLLM proxy to freellmapi).
+            # SDK routed through the local LiteLLM proxy to freellmapi). The
+            # on_event closure persists the agent's thinking/actions as they
+            # stream (best-effort; failures never break codegen).
+            def _on_agent_event(
+                event_type: str,
+                content: str,
+                tool_name: str | None,
+                detail: str | None,
+            ) -> None:
+                safe_record_agent_event(
+                    db, project.id, issue_key, "dev", event_type, content,
+                    tool_name=tool_name, detail=detail,
+                )
+
             file_changes = await run_agentic_codegen(
                 cloned.workspace_path,
                 issue_key,
@@ -242,6 +247,7 @@ async def run(
                 issue_description,
                 architecture_content,
                 directory_tree,
+                on_event=_on_agent_event,
             )
             if not file_changes:
                 comment_text = (
@@ -256,9 +262,9 @@ async def run(
                     issue_key,
                     AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
                 )
-                state_row.status = "complete"
-                state_row.draft_content = comment_text
-                db.commit()
+                pipeline_state_repo.update(
+                    db, state_row.id, status="complete", draft_content=comment_text
+                )
                 safe_upsert_ticket_status(
                     db, project.id, issue_key, pipeline_stage="dev",
                     current_status="Coding finished — no code changes generated",
@@ -296,9 +302,9 @@ async def run(
             issue_key,
             AGENT_COMMENT_PREFIX + AGENT_BODY_MARKER + "\n\n" + comment_text,
         )
-        state_row.status = "complete"
-        state_row.draft_content = comment_text
-        db.commit()
+        pipeline_state_repo.update(
+            db, state_row.id, status="complete", draft_content=comment_text
+        )
 
         safe_upsert_ticket_status(
             db, project.id, issue_key, pipeline_stage="dev",
@@ -308,13 +314,12 @@ async def run(
             db, project.id, issue_key, "dev", "Coding finished and PR sent",
             status="success", result_url=pr.html_url,
         )
+        safe_record_agent_event(
+            db, project.id, issue_key, "dev", "goal", "PR ready", detail=pr.html_url,
+        )
 
     except Exception as exc:
-        state_row.status = "failed"
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
+        pipeline_state_repo.update(db, state_row.id, status="failed")
         safe_upsert_ticket_status(
             db, project.id, issue_key, pipeline_stage="dev",
             current_status="Dev pipeline failed",

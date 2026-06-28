@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
+from database import get_database
 from services.describe_pipeline import run
 
 # Set up test encryption key before any module-level imports that read env vars
@@ -69,6 +70,7 @@ def _make_stub_llm_response(content: str):
     """Return a stub LLM route_request response with .content attribute."""
     stub = MagicMock()
     stub.content = content
+    stub.reasoning = ""  # real LLMResponse defaults reasoning to ""
     return stub
 
 
@@ -96,7 +98,7 @@ def test_run_returns_generated_description():
         ]
 
 
-        result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
 
         assert isinstance(result, str)
         assert result == "Elaborated: feature adds login capability with JWT tokens."
@@ -124,7 +126,7 @@ def test_run_with_no_sprint_backlog():
         mock_backlog.return_value = []  # Empty backlog
 
 
-        result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
 
         assert isinstance(result, str)
         assert len(result) > 0
@@ -154,7 +156,7 @@ def test_run_with_no_codebase_snapshot():
         ]
 
 
-        result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
 
         # route_request must be called even with no codebase snapshot
         mock_route.assert_called_once()
@@ -188,7 +190,7 @@ def test_run_includes_snapshot_content_in_prompt():
         mock_backlog.return_value = []
 
 
-        asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
 
         # Verify snapshot content appears in the prompt passed to route_request
         assert mock_route.called, "route_request should have been called"
@@ -223,6 +225,6 @@ def test_run_with_decrypt_failure():
             return_value=_make_stub_llm_response("ok after decrypt failure"),
         ) as mock_route,
     ):
-        result = asyncio.run(run(_make_mock_event(), _make_mock_project()))
+        result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
         mock_route.assert_called_once()
         assert isinstance(result, str)
