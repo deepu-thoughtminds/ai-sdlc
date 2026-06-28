@@ -167,8 +167,12 @@ async def run_claude_playwright_generator(
 
     logger.info("Running Claude Playwright generator for ticket %s via LiteLLM proxy", issue_key)
 
-    async for _message in query(prompt=prompt, options=options):
-        pass
+    try:
+        async for _message in query(prompt=prompt, options=options):
+            pass
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Claude Playwright generator failed for %s: %s", issue_key, exc)
+        return []
 
     # Collect only the specific target file the agent was instructed to write.
     # Using git ls-files --others to find new untracked files (agent writes new files,

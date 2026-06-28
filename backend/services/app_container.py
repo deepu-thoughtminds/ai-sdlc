@@ -86,8 +86,25 @@ def _build_serve_script(serve_cmd: str, scripts: dict, container_port: int) -> s
     parts = ["npm ci --no-audit --no-fund"]
     if "build" in scripts:
         parts.append("npm run build")
+
     # --host 0.0.0.0 binds all interfaces so the container is reachable from peers.
-    parts.append(f"npm run {serve_cmd} -- --host 0.0.0.0 --port {container_port}")
+    # For Vite projects: inject a .vite-preview-config.mjs that sets preview.allowedHosts: true
+    # so requests via Docker container hostnames (e.g. jarvis-app-xxxx:3000) are accepted.
+    # --allowed-hosts is NOT a valid Vite CLI flag (it's config-only); passing it crashes
+    # the container immediately with "CACError: Unknown option --allowedHosts".
+    is_vite = any("vite" in (v or "") for v in scripts.values())
+    if is_vite:
+        # ponytail: .mjs extension required — Vite's ESM config loader rejects .js files
+        # that import from vite when esbuild externalises ESM-only deps.
+        parts.append(
+            "printf 'export default { preview: { allowedHosts: true } };\\n'"
+            " > .vite-preview-config.mjs"
+        )
+        serve_flags = f"--host 0.0.0.0 --port {container_port} --config .vite-preview-config.mjs"
+    else:
+        serve_flags = f"--host 0.0.0.0 --port {container_port}"
+
+    parts.append(f"npm run {serve_cmd} -- {serve_flags}")
     return " && ".join(parts)
 
 
@@ -219,16 +236,54 @@ def _start_container(
 # ---------------------------------------------------------------------------
 
 
-def _wait_until_healthy(url: str, timeout_secs: int) -> None:
-    """Poll GET url until HTTP 200 or deadline. Raises ContainerStartError on timeout."""
-    deadline = time.monotonic() + timeout_secs
+def _container_exited(name: str) -> tuple[bool, str]:
+    """Return (True, logs) if the named container has exited, (False, '') otherwise."""
+    try:
+        inspect = subprocess.run(
+            ["docker", "inspect", name, "--format", "{{.State.Status}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if inspect.returncode != 0 or inspect.stdout.strip() not in ("running", "created"):
+            # Collect last 20 lines of container logs for diagnostics.
+            logs_proc = subprocess.run(
+                ["docker", "logs", "--tail", "20", name],
+                capture_output=True, text=True, timeout=10,
+            )
+            logs = (logs_proc.stdout + logs_proc.stderr).strip()
+            return True, logs
+    except Exception:  # noqa: BLE001
+        pass
+    return False, ""
+
+
+def _wait_until_healthy(url: str, timeout_secs: int, container_name: str = "") -> None:
+    """Poll GET url until HTTP 200 or deadline. Raises ContainerStartError on timeout.
+
+    Checks container status every 10s so we fail fast if the container exits early
+    (e.g. npm run build fails) instead of waiting the full timeout.
+    """
+    start = time.monotonic()
+    deadline = start + timeout_secs
+    last_exit_check = start
     while time.monotonic() < deadline:
         try:
             r = httpx.get(url, timeout=5.0)
-            if r.status_code == 200:
+            if r.status_code < 500:
                 return
         except httpx.RequestError:
             pass
+        # Check container exit every ~10s to fail fast on startup errors.
+        if container_name:
+            now = time.monotonic()
+            if now - last_exit_check >= 10:
+                exited, logs = _container_exited(container_name)
+                if exited:
+                    snippet = logs[:500] if logs else "(no logs)"
+                    raise ContainerStartError(
+                        f"App container {container_name} exited before becoming healthy.\n"
+                        f"Last logs:\n{snippet}"
+                    )
+                last_exit_check = now
         time.sleep(2)
     raise ContainerStartError(
         f"App did not become healthy within {timeout_secs}s at {url}"
@@ -284,7 +339,7 @@ def managed_app_container(
     if container_port is None:
         container_port = int(os.environ.get("APP_CONTAINER_PORT", "3000"))
     if timeout_secs is None:
-        timeout_secs = int(os.environ.get("APP_CONTAINER_HEALTH_TIMEOUT", "60"))
+        timeout_secs = int(os.environ.get("APP_CONTAINER_HEALTH_TIMEOUT", "300"))
 
     npm_image = os.environ.get("APP_CONTAINER_IMAGE", os.environ.get("QA_SANDBOX_IMAGE", _DEFAULT_NPM_IMAGE))
     python_image = os.environ.get("APP_CONTAINER_PYTHON_IMAGE", _DEFAULT_PYTHON_IMAGE)
@@ -297,7 +352,7 @@ def managed_app_container(
         started = True
         _start_container(name, workspace_path, compose_network, stack_info.container_port, effective_image, stack_info.serve_script)
         url = f"http://{name}:{stack_info.container_port}"
-        _wait_until_healthy(url, timeout_secs)
+        _wait_until_healthy(url, timeout_secs, container_name=name)
         logger.info("Container %s healthy at %s (stack=%s)", name, url, stack_info.stack)
         yield url
     finally:

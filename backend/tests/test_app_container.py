@@ -96,6 +96,27 @@ def test_build_serve_script_omits_build_when_absent():
     assert "npm run dev" in script
 
 
+def test_build_serve_script_vite_injects_allowed_hosts_config():
+    """Vite projects must use .vite-preview-config.mjs to set allowedHosts: true.
+
+    --allowed-hosts is NOT a valid Vite CLI flag; it crashes with CACError.
+    The config file approach is the only supported way to set preview.allowedHosts.
+    """
+    scripts = {"preview": "vite preview", "build": "vite build"}
+    script = _build_serve_script("preview", scripts, 3000)
+    assert "--allowed-hosts" not in script, "Invalid Vite CLI flag must not appear"
+    assert ".vite-preview-config.mjs" in script
+    assert "allowedHosts" in script
+
+
+def test_build_serve_script_non_vite_omits_vite_config():
+    """Non-Vite serve scripts (e.g. react-scripts) must not get the vite config."""
+    scripts = {"start": "react-scripts start"}
+    script = _build_serve_script("start", scripts, 3000)
+    assert ".vite-preview-config.mjs" not in script
+    assert "--allowed-hosts" not in script
+
+
 # ---------------------------------------------------------------------------
 # SERVE-02 — _start_container (docker run argv)
 # ---------------------------------------------------------------------------
