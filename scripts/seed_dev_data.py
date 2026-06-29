@@ -63,8 +63,12 @@ def dump() -> None:
     SEEDS_DIR.mkdir(exist_ok=True)
 
     backend_script = """
-import json
+import json, datetime
 from pymongo import MongoClient
+def _serial(v):
+    if isinstance(v, datetime.datetime): return v.isoformat()
+    if isinstance(v, datetime.date): return v.isoformat()
+    raise TypeError(type(v))
 client = MongoClient('mongodb://mongo:27017')
 docs = list(client['aisdlc']['projects'].find())
 for d in docs:
@@ -72,7 +76,7 @@ for d in docs:
         d['_id'] = str(d['_id'])  # make ObjectId JSON-serialisable
 with open('/tmp/backend_dump.json', 'w') as f:
     for d in docs:
-        f.write(json.dumps(d) + '\\n')
+        f.write(json.dumps(d, default=_serial) + '\\n')
 """
     run_script(["docker", "compose", "exec", "-T", "backend", "python3"], backend_script)
     run(["docker", "compose", "cp", "backend:/tmp/backend_dump.json", str(BACKEND_DUMP)])
