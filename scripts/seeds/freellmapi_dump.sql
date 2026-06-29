@@ -1,16 +1,16 @@
 INSERT INTO "settings" ("key","value") VALUES ('embeddings_default_family','gemini-embedding-001');
 INSERT INTO "settings" ("key","value") VALUES ('unified_api_key','freellmapi-2f7230df00a7522f8c6a3a6d0ecd4996825e9a719eab9d60');
-INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_version','2026.06.23');
+INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_version','2026.06.28.065aae');
 INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_tier','monthly');
 INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_json','{
-  "version": "2026.06.23",
-  "generatedAt": "2026-06-23T07:03:01.444Z",
+  "version": "2026.06.28.065aae",
+  "generatedAt": "2026-06-28T19:38:15.292Z",
   "tier": "monthly",
   "counts": {
     "platforms": 15,
-    "models": 85,
-    "enabledModels": 85,
-    "quirks": 11
+    "models": 83,
+    "enabledModels": 83,
+    "quirks": 17
   },
   "platforms": [
     {
@@ -760,26 +760,6 @@ INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_json','{
           "severity": "warning"
         }
       ]
-    },
-    {
-      "platform": "google",
-      "modelId": "gemini-3-flash-preview",
-      "displayName": "Gemini 3 Flash Preview",
-      "intelligenceRank": 11,
-      "speedRank": 5,
-      "sizeLabel": "Frontier",
-      "limits": {
-        "rpm": 10,
-        "rpd": 20,
-        "tpm": 250000,
-        "tpd": null
-      },
-      "monthlyTokenBudget": "~3M",
-      "contextWindow": 1048576,
-      "enabled": true,
-      "supportsVision": true,
-      "supportsTools": true,
-      "quirks": []
     },
     {
       "platform": "nvidia",
@@ -1864,33 +1844,6 @@ INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_json','{
     },
     {
       "platform": "openrouter",
-      "modelId": "nvidia/nemotron-nano-12b-v2-vl:free",
-      "displayName": "Nemotron Nano 12B VL (free)",
-      "intelligenceRank": 26,
-      "speedRank": 9,
-      "sizeLabel": "Medium",
-      "limits": {
-        "rpm": 20,
-        "rpd": 200,
-        "tpm": null,
-        "tpd": null
-      },
-      "monthlyTokenBudget": "~6M",
-      "contextWindow": 128000,
-      "enabled": true,
-      "supportsVision": true,
-      "supportsTools": true,
-      "quirks": [
-        {
-          "slug": "or-free-cap-account-wide",
-          "title": "Daily :free cap is account-wide",
-          "body": "OpenRouter’s :free daily cap (50/day, or 1000/day once you have ever bought $10 of credits) is shared across ALL :free models on the account, not per model. Per-row rpd values here are therefore optimistic; the router’s cooldown handling absorbs the shared 429s.",
-          "severity": "info"
-        }
-      ]
-    },
-    {
-      "platform": "openrouter",
       "modelId": "poolside/laguna-xs.2:free",
       "displayName": "Poolside Laguna XS.2 (free)",
       "intelligenceRank": 26,
@@ -2276,15 +2229,87 @@ INSERT INTO "settings" ("key","value") VALUES ('catalog_applied_json','{
           "modelGlob": "*glm-4.6v*"
         }
       ]
+    },
+    {
+      "slug": "aihorde-anon-slow",
+      "title": "Free volunteer queue, slow",
+      "body": "AI Horde routes to volunteer-run workers through a priority queue, so latency is seconds to minutes, not the sub-second of hosted providers. The anonymous key 0000000000 runs at the lowest priority; register a free key at aihorde.net for higher priority. The provider uses a 120s timeout.",
+      "severity": "warning",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": null
+        }
+      ]
+    },
+    {
+      "slug": "aihorde-no-tools",
+      "title": "No tool calling",
+      "body": "AI Horde''s OpenAI-compatible proxy does not support function/tool calling. The provider drops tools, tool_choice and parallel_tool_calls so a tool-using request still completes as plain chat instead of failing.",
+      "severity": "info",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": null
+        }
+      ]
+    },
+    {
+      "slug": "aihorde-usage-estimated",
+      "title": "Usage is kudos; tokens estimated",
+      "body": "The proxy returns usage as {\"kudos\": N} with no token counts, and rejects max_tokens below 16 and a non-array stop. The AIHordeProvider normalizes the request (floors max_tokens, wraps stop) and synthesizes prompt/completion token estimates so analytics and savings math aren''t zero.",
+      "severity": "info",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": null
+        }
+      ]
+    },
+    {
+      "slug": "aihorde-roster-rotates",
+      "title": "Roster + context depend on online workers",
+      "body": "Model availability changes as volunteer workers come and go, so a listed model can be temporarily unserved. The effective context window is set by the worker (often 4-8K), not the model''s native maximum.",
+      "severity": "info",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": null
+        }
+      ]
+    },
+    {
+      "slug": "aihorde-quality-uneven",
+      "title": "Uneven quality",
+      "body": "Output quality varies by worker and quantization, and some workers append template or instruction text after the answer. Best treated as free fallback capacity, not a primary model.",
+      "severity": "warning",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": null
+        }
+      ]
+    },
+    {
+      "slug": "aihorde-behemoth-slow",
+      "title": "123B has heavy queue (seeded disabled)",
+      "body": "Behemoth-X-123B has deep queue depth (50s+ ETA even on trivial prompts). Seeded disabled; enable only if minute-scale latency is acceptable.",
+      "severity": "warning",
+      "targets": [
+        {
+          "platform": "aihorde",
+          "modelGlob": "*Behemoth-X-123B*"
+        }
+      ]
     }
   ]
 }
 ');
-INSERT INTO "settings" ("key","value") VALUES ('catalog_last_sync_ms','1782364645447');
+INSERT INTO "settings" ("key","value") VALUES ('catalog_last_sync_ms','1782742201447');
 INSERT INTO "settings" ("key","value") VALUES ('catalog_last_error','');
-INSERT INTO "settings" ("key","value") VALUES ('routing_strategy','priority');
-INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (1,'groq','','cf048a329458c24405333e1bbdc0297fbc57a22b7c7cf146e7acf257e2105a73a23cd1a50c8f43b64bebab3fb8e387d5a03fd9b11c32c353','d3ec0c5d0d6b4e37ddf4ba3d971fd0a1','a800d7053b0dc400c79445c6cd85e020','healthy',1,'2026-06-25 05:15:31','2026-06-25 05:16:53',NULL);
-INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (2,'google','','625297ce35731d67941f95bd9d94681ef269fb93e50ee8c69fb06220b5e3edf81b525a37a1290ed7ef381774ffe4b4d99fc4c9107b','8bb1c2347f376914451462044174c09c','1b937b4bdb50eae6e7b31031935f241a','healthy',1,'2026-06-25 05:15:42','2026-06-25 05:16:53',NULL);
-INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (3,'nvidia','','f9fd821f9c452fc4f86432add3494d684c4e27dd3bfb39f36f194fc5e4b04db7cfc03a9f33f6ec97876fc2d5fb4164b0d34e5d1834a30515edebf9c1894ba64ee24f896ab6dc','083403c353965f0c2043c9a40722d6d5','7e702620cbdb2d219d1f9216f7a25505','healthy',1,'2026-06-25 05:15:55','2026-06-25 05:16:53',NULL);
-INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (4,'openrouter','','deaa28fcd826d44e019ffd09e2a937e54307506b782410ec4422cab17b63b1a65ca9130827a82d44d14dbac62455d04efd4b8e81b46f65f79441ef85142e2cdd8ef6f467de709f9257','1a5a2dc0a0f6926fd0015b8535fd8361','a7874cdea461db36105add964c8d713b','healthy',1,'2026-06-25 05:16:08','2026-06-25 05:16:54',NULL);
-INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (5,'opencode','','42ea77136b6bf4ef3197ce2aae86539f01c7fd0468f60ea2616e7681a7e6488445228e3a058a695bcd07a0681f6887f5e9511c6c2e2374cf7e797e478fd66e97a4814b','98d6b461d33f163fa33528d8d8776295','03fe9da77a1ac08c3d51a8d3f76f2b8f','unknown',1,'2026-06-25 05:16:30',NULL,NULL);
+INSERT INTO "settings" ("key","value") VALUES ('routing_strategy','smartest');
+INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (1,'groq','','cf048a329458c24405333e1bbdc0297fbc57a22b7c7cf146e7acf257e2105a73a23cd1a50c8f43b64bebab3fb8e387d5a03fd9b11c32c353','d3ec0c5d0d6b4e37ddf4ba3d971fd0a1','a800d7053b0dc400c79445c6cd85e020','healthy',1,'2026-06-25 05:15:31','2026-06-28 13:54:36',NULL);
+INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (2,'google','','625297ce35731d67941f95bd9d94681ef269fb93e50ee8c69fb06220b5e3edf81b525a37a1290ed7ef381774ffe4b4d99fc4c9107b','8bb1c2347f376914451462044174c09c','1b937b4bdb50eae6e7b31031935f241a','healthy',1,'2026-06-25 05:15:42','2026-06-28 13:54:37',NULL);
+INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (3,'nvidia','','f9fd821f9c452fc4f86432add3494d684c4e27dd3bfb39f36f194fc5e4b04db7cfc03a9f33f6ec97876fc2d5fb4164b0d34e5d1834a30515edebf9c1894ba64ee24f896ab6dc','083403c353965f0c2043c9a40722d6d5','7e702620cbdb2d219d1f9216f7a25505','healthy',1,'2026-06-25 05:15:55','2026-06-28 13:54:37',NULL);
+INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (4,'openrouter','','deaa28fcd826d44e019ffd09e2a937e54307506b782410ec4422cab17b63b1a65ca9130827a82d44d14dbac62455d04efd4b8e81b46f65f79441ef85142e2cdd8ef6f467de709f9257','1a5a2dc0a0f6926fd0015b8535fd8361','a7874cdea461db36105add964c8d713b','healthy',1,'2026-06-25 05:16:08','2026-06-28 13:54:37',NULL);
+INSERT INTO "api_keys" ("id","platform","label","encrypted_key","iv","auth_tag","status","enabled","created_at","last_checked_at","base_url") VALUES (5,'opencode','','42ea77136b6bf4ef3197ce2aae86539f01c7fd0468f60ea2616e7681a7e6488445228e3a058a695bcd07a0681f6887f5e9511c6c2e2374cf7e797e478fd66e97a4814b','98d6b461d33f163fa33528d8d8776295','03fe9da77a1ac08c3d51a8d3f76f2b8f','healthy',1,'2026-06-25 05:16:30','2026-06-28 13:54:38',NULL);
