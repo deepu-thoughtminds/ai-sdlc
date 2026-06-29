@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dev-data seeding for the backend and freellmapi SQLite databases.
+"""Dev-data seeding for the backend (MongoDB) and freellmapi SQLite databases.
 
 Both DBs live in named Docker volumes (app_data, freellmapi_data) that get
 wiped by `docker compose down -v`. This script captures a snapshot of the
@@ -7,21 +7,22 @@ useful rows ("dump") and re-applies them ("seed") after a fresh volume comes
 up, so you don't have to re-create the test project or re-tune freellmapi's
 routing config by hand every time.
 
-Dump output goes to scripts/seeds/*.sql, which is gitignored — those files
-contain the project's real Jira URL/email (plaintext columns) and are local
-working data, not something to commit.
+Dump output goes to scripts/seeds/*.json / *.sql, which is gitignored — those
+files contain the project's real Jira URL/email (plaintext columns) and are
+local working data, not something to commit.
 
 Usage (run from repo root, containers must be up):
     python3 scripts/seed_dev_data.py dump   # snapshot current DB state
     python3 scripts/seed_dev_data.py seed   # re-apply snapshot (idempotent)
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 SEEDS_DIR = Path(__file__).parent / "seeds"
-BACKEND_DUMP = SEEDS_DIR / "backend_dump.sql"
+BACKEND_DUMP = SEEDS_DIR / "backend_dump.json"
 FREELLMAPI_DUMP = SEEDS_DIR / "freellmapi_dump.sql"
 FREELLMAPI_ROUTING_DUMP = SEEDS_DIR / "freellmapi_routing.sql"
 
@@ -43,10 +44,6 @@ FREELLMAPI_ROUTING_DUMP = SEEDS_DIR / "freellmapi_routing.sql"
 # version changes. See dump()/seed() below.
 FREELLMAPI_TABLES = ["settings", "api_keys"]
 
-# backend tables worth seeding. Excludes pipeline_states — that's run-time
-# state, not seed data.
-BACKEND_TABLES = ["projects"]
-
 
 def run(cmd: list[str], **kwargs) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, check=True, **kwargs)
@@ -66,17 +63,19 @@ def dump() -> None:
     SEEDS_DIR.mkdir(exist_ok=True)
 
     backend_script = """
-import sqlite3
-con = sqlite3.connect('/app/data/app.db')
-with open('/tmp/backend_dump.sql', 'w') as f:
-    for line in con.iterdump():
-        if line.startswith('INSERT INTO') and any(
-            line.startswith(f'INSERT INTO "{t}"') for t in %r
-        ):
-            f.write(line + '\\n')
-""" % BACKEND_TABLES
+import json
+from pymongo import MongoClient
+client = MongoClient('mongodb://mongo:27017')
+docs = list(client['aisdlc']['projects'].find())
+for d in docs:
+    if not isinstance(d.get('_id'), (int, float, str, bool)):
+        d['_id'] = str(d['_id'])  # make ObjectId JSON-serialisable
+with open('/tmp/backend_dump.json', 'w') as f:
+    for d in docs:
+        f.write(json.dumps(d) + '\\n')
+"""
     run_script(["docker", "compose", "exec", "-T", "backend", "python3"], backend_script)
-    run(["docker", "compose", "cp", "backend:/tmp/backend_dump.sql", str(BACKEND_DUMP)])
+    run(["docker", "compose", "cp", "backend:/tmp/backend_dump.json", str(BACKEND_DUMP)])
 
     freellmapi_script = """
 const Database = require('better-sqlite3');
@@ -123,21 +122,20 @@ fs.writeFileSync('/tmp/freellmapi_routing.sql', out.join('\\n'));
     print(f"Dumped {BACKEND_DUMP}, {FREELLMAPI_DUMP}, and {FREELLMAPI_ROUTING_DUMP}")
 
 
-def _to_insert_or_ignore(sql_text: str) -> str:
-    return sql_text.replace("INSERT INTO", "INSERT OR IGNORE INTO")
-
-
 def seed() -> None:
     if not BACKEND_DUMP.exists() or not FREELLMAPI_DUMP.exists() or not FREELLMAPI_ROUTING_DUMP.exists():
         sys.exit(f"Missing seed files — run `python3 {__file__} dump` first while the old data is still up.")
 
-    backend_sql = _to_insert_or_ignore(BACKEND_DUMP.read_text())
+    docs_json = BACKEND_DUMP.read_text()
     backend_script = f"""
-import sqlite3
-con = sqlite3.connect('/app/data/app.db')
-con.executescript({backend_sql!r})
-con.commit()
-print('backend seeded')
+import json
+from pymongo import MongoClient
+client = MongoClient('mongodb://mongo:27017')
+col = client['aisdlc']['projects']
+docs = [json.loads(line) for line in {docs_json!r}.splitlines() if line.strip()]
+for d in docs:
+    col.replace_one({{'_id': d['_id']}}, d, upsert=True)
+print('backend seeded:', len(docs), 'docs')
 """
     run_script(["docker", "compose", "exec", "-T", "backend", "python3"], backend_script)
 
