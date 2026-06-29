@@ -204,6 +204,7 @@ None — v1.8 roadmap created (Phases 23–26); ready to begin Phase 23 planning
 | 260625-6tz | scripts/seed_dev_data.py (dump/seed) to restore backend test project + freellmapi routing settings after `docker compose down -v` wipes volumes | 2026-06-25 |
 | 20260626-playwright-python-e2e | Python Playwright evaluation via Claude Code CLI in QA pipeline: generate pytest-playwright scripts, run in Docker, include results in Jira comment + Confluence QA report | 2026-06-26 |
 | 260625-7z1 | Fix qa_pipeline.py to dispatch .test.ts/.test.tsx/.spec.ts/.spec.tsx files to `npm ci && npm test` inside qa-sandbox instead of hardcoding pytest; .py files unchanged | 2026-06-25 |
+| 260629-st | Migrate seed script backend dump/seed from SQLite to MongoDB (pymongo, projects collection, upsert) | 2026-06-29 |
 
 ### Blockers/Concerns
 
