@@ -65,6 +65,12 @@ def _opencode_config() -> str:
             "opencode": {
                 "options": {"apiKey": api_key}
             }
+        },
+        "mcp": {
+            "codebase-memory-mcp": {
+                "type": "local",
+                "command": ["codebase-memory-mcp"]
+            }
         }
     })
 
