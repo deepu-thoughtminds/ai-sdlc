@@ -198,6 +198,7 @@ async def run_agentic_codegen(
             "ANTHROPIC_BASE_URL": "http://litellm:4000",
             "ANTHROPIC_AUTH_TOKEN": os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local"),
             "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+            "CLAUDE_CODE_DISABLE_EXTENDED_THINKING": "1",
         },
         allowed_tools=["Read", "Write", "Bash", "Glob", "Grep"],
     )
