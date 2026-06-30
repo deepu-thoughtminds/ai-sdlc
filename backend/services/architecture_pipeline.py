@@ -10,6 +10,12 @@ Single-pass, complexity-aware architecture pipeline that:
      with is_complex=False.
   6. Posts a final Jira comment string. Sets PipelineState.status="complete".
 
+Phase 34 migration:
+  - route_request() replaced by _run_opencode_arch() — opencode CLI subprocess.
+  - get_codebase_snapshot() replaced by _query_arch_context() — cbm graph search.
+  AGENT-05: no direct opencode.ai API calls remain in this pipeline.
+  CTX-03: graph queried via _query_arch_context() before pipeline runs.
+
 Threat mitigations:
   T-04-01: prompt contains only issue_key/summary/description — no token values
            are ever interpolated into the LLM prompt.
@@ -17,23 +23,27 @@ Threat mitigations:
            pipeline continues and posts Jira comment without URL.
   T-21-01: github_token and github_repo decrypted values never logged — only
            issue_key is logged in all logger calls.
-  T-21-02: Snapshot text truncated to 8000 chars to prevent token overrun.
-           When snapshot is None, pipeline continues with fallback text
+  T-21-02: Graph context text truncated to 8000 chars to prevent token overrun.
+           When graph context is unavailable, pipeline continues with fallback text
            "(no codebase context available)".
 
-ARCHCTX-01: run() decrypts github_repo/github_token and calls
-get_codebase_snapshot() exactly once, then passes the result to both
-classify_complexity() and _run_complex()/_run_simple() (ARCHCTX-02).
+ARCHCTX-01: run() queries codebase graph via _query_arch_context() exactly once,
+then passes the result to both classify_complexity() and
+_run_complex()/_run_simple() (ARCHCTX-02).
 """
 
+import asyncio
+import json
 import logging
 import os
+import tempfile
 
 from pymongo.database import Database
 
 from models.project import Project
 from repositories import pipeline_state_repo
-from services.codebase_snapshot_reader import get_codebase_snapshot
+from services.agentic_coder import _opencode_config
+from services.cbm_client import cbm_call
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
 from services.crypto import decrypt_credential
@@ -46,7 +56,6 @@ from services.ticket_tracking import (
 )
 from services.drawio_service import generate_diagram, generate_viewer_url
 from services.hermes_client import post_comment as hermes_post_comment
-from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +64,81 @@ AGENT_COMMENT_PREFIX = "🤖 **Jarvis:**\n\n"
 
 # Plain-ASCII marker embedded in every agent comment body.
 AGENT_BODY_MARKER = "[jarvis-bot]"
+
+
+async def _run_opencode_arch(prompt: str) -> tuple[str, str]:
+    """Invoke opencode CLI for an architecture-generation prompt.
+
+    Mirrors _run_opencode_describe from describe_pipeline.py.
+
+    Returns (content, reasoning) where content is the joined assistant text
+    and reasoning is empty string (opencode CLI does not expose reasoning tokens
+    separately; split_reasoning in the caller handles <thinking> blocks).
+
+    Degrades gracefully: returns ("", "") on timeout or subprocess failure.
+    """
+    model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = [
+            opencode_bin, "run", prompt,
+            "--model", model,
+            "--dir", tmpdir,
+            "--dangerously-skip-permissions",
+            "--format", "json",
+        ]
+        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config()}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+        except asyncio.TimeoutError:
+            logger.warning("opencode CLI timed out for architecture prompt")
+            return "", ""
+        except Exception as exc:
+            logger.warning("opencode CLI failed for architecture: %s", exc)
+            return "", ""
+
+        text_parts: list[str] = []
+        for line in stdout_bytes.decode(errors="replace").splitlines():
+            try:
+                ev = json.loads(line)
+                if ev.get("type") == "assistant":
+                    for part in ev.get("content", []):
+                        if part.get("type") == "text" and part.get("text"):
+                            text_parts.append(part["text"].strip())
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return "\n\n".join(text_parts), ""
+
+
+async def _query_arch_context(issue_summary: str) -> str:
+    """Query codebase graph via cbm_call for architecture context.
+
+    CTX-03: called once in run() before the architecture pipeline runs.
+
+    Returns graph node text string, or a fallback string on failure.
+    """
+    try:
+        graph_result = await asyncio.to_thread(
+            cbm_call,
+            "search_graph",
+            {"query": issue_summary, "limit": 20},
+        )
+        nodes = graph_result.get("nodes", graph_result.get("results", []))
+        if nodes:
+            return "\n".join(
+                f"- {n.get('name', n.get('id', ''))} ({n.get('file', n.get('path', ''))})"
+                for n in nodes[:20]
+            )
+        return "(no graph context available)"
+    except Exception as exc:
+        logger.warning("cbm search_graph failed for arch context: %s", exc)
+        return "(codebase graph unavailable)"
 
 
 def _parse_sections(llm_output: str, section_names: list[str]) -> dict[str, str]:
@@ -154,38 +238,18 @@ async def run(
 
     comment_text = ""
     try:
-        # Step 1.5 (ARCHCTX-01): decrypt github_repo/github_token and fetch the
-        # codebase snapshot exactly once. T-21-01: decrypted values never logged.
-        try:
-            github_token = decrypt_credential(project.github_token) if project.github_token else ""
-        except Exception as exc:
-            logger.warning(
-                "Failed to decrypt github_token for ticket %s — snapshot skipped: %s",
-                issue_key,
-                exc,
-            )
-            github_token = ""
-
-        try:
-            github_repo = decrypt_credential(project.github_repo) if project.github_repo else ""
-        except Exception as exc:
-            logger.warning(
-                "Failed to decrypt github_repo for ticket %s — snapshot skipped: %s",
-                issue_key,
-                exc,
-            )
-            github_repo = ""
-
-        snapshot = await get_codebase_snapshot(github_repo, github_token)
+        # Step 1.5 (ARCHCTX-01 / CTX-03): query codebase graph via cbm once.
+        # T-21-01: no token values are logged — only issue_key.
+        graph_context = await _query_arch_context(issue_summary)
         safe_record_agent_event(
-            db, project.id, issue_key, "architecture", "action", "Read codebase snapshot",
-            detail=f"{len(snapshot)} chars" if snapshot else "no snapshot available",
+            db, project.id, issue_key, "architecture", "action", "Queried codebase graph",
+            detail=f"{len(graph_context)} chars" if graph_context else "no graph context",
         )
 
         # Step 2: Classify the ticket complexity.
         complexity, rationale = classify_complexity(
             issue_key, issue_summary, issue_description, db, project.id,
-            codebase_snapshot=snapshot,
+            codebase_snapshot=graph_context,
         )
         pipeline_state_repo.update(
             db, state_row.id, complexity=complexity, complexity_rationale=rationale
@@ -201,11 +265,11 @@ async def run(
 
         if complexity == "complex":
             comment_text = await _run_complex(
-                project, issue_key, issue_summary, issue_description, snapshot, db
+                project, issue_key, issue_summary, issue_description, graph_context, db
             )
         else:
             comment_text = await _run_simple(
-                project, issue_key, issue_summary, issue_description, snapshot, db
+                project, issue_key, issue_summary, issue_description, graph_context, db
             )
 
         # Step 3: Post the architecture comment to Jira BEFORE finalising state.
@@ -287,35 +351,35 @@ async def _run_complex(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    snapshot: str | None,
+    graph_context: str | None,
     db: Database,
 ) -> str:
     """Execute the complex-ticket branch of the architecture pipeline.
 
-    Requests six labelled sections from the LLM, generates a drawio diagram,
-    and publishes to Confluence with is_complex=True.
+    Requests six labelled sections from the LLM via opencode CLI, generates a
+    drawio diagram, and publishes to Confluence with is_complex=True.
 
     T-04-01: only issue_key/summary/description are included in the prompt.
-    T-21-02: snapshot truncated to 8000 chars; fallback text used when None.
+    T-21-02: graph context truncated to 8000 chars; fallback text used when None.
 
     Args:
-        snapshot: Codebase snapshot text fetched once in run() (ARCHCTX-01),
+        graph_context: Codebase graph text fetched once in run() (ARCHCTX-01),
             or None when unavailable.
 
     Returns:
         Human-readable Jira comment text.
     """
-    codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
+    codebase_text = graph_context[:8000] if graph_context else "(no codebase context available)"
 
     # Build prompt for complex architecture.
-    # T-WR-02: truncate summary/description to prevent token overrun (consistent with T-21-02 for snapshot).
+    # T-WR-02: truncate summary/description to prevent token overrun.
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
         "the following Jira ticket. Do NOT generate multiple options.\n\n"
         f"Ticket: {issue_key}\n"
         f"Summary: {issue_summary[:2000]}\n"
         f"Description: {issue_description[:4000]}\n\n"
-        f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
+        f"Codebase context (module graph):\n{codebase_text}\n\n"
         "Reference specific module names and file paths from the codebase context "
         "where relevant.\n\n"
         "Respond with exactly these six labelled sections in this order:\n\n"
@@ -343,10 +407,8 @@ async def _run_complex(
         "Risks",
     ]
 
-    route_result = route_request("architecture", prompt)
-    reasoning, answer = split_reasoning(route_result.content)
-    if route_result.reasoning:
-        reasoning = route_result.reasoning
+    content, _ = await _run_opencode_arch(prompt)
+    reasoning, answer = split_reasoning(content)
     safe_record_reasoning(db, project.id, issue_key, "architecture", reasoning)
     sections = _parse_sections(answer, section_names)
 
@@ -437,35 +499,35 @@ async def _run_simple(
     issue_key: str,
     issue_summary: str,
     issue_description: str,
-    snapshot: str | None,
+    graph_context: str | None,
     db: Database,
 ) -> str:
     """Execute the simple-ticket branch of the architecture pipeline.
 
-    Requests four labelled sections from the LLM. Does NOT call generate_diagram.
-    Publishes to Confluence with is_complex=False.
+    Requests four labelled sections from the LLM via opencode CLI. Does NOT call
+    generate_diagram. Publishes to Confluence with is_complex=False.
 
     T-04-01: only issue_key/summary/description are included in the prompt.
-    T-21-02: snapshot truncated to 8000 chars; fallback text used when None.
+    T-21-02: graph context truncated to 8000 chars; fallback text used when None.
 
     Args:
-        snapshot: Codebase snapshot text fetched once in run() (ARCHCTX-01),
+        graph_context: Codebase graph text fetched once in run() (ARCHCTX-01),
             or None when unavailable.
 
     Returns:
         Human-readable Jira comment text.
     """
-    codebase_text = snapshot[:8000] if snapshot else "(no codebase context available)"
+    codebase_text = graph_context[:8000] if graph_context else "(no codebase context available)"
 
     # Build prompt for simple architecture.
-    # T-WR-02: truncate summary/description to prevent token overrun (consistent with T-21-02 for snapshot).
+    # T-WR-02: truncate summary/description to prevent token overrun.
     prompt = (
         "You are a software architect. Generate ONE recommended architecture for "
         "the following Jira ticket. Do NOT generate multiple options.\n\n"
         f"Ticket: {issue_key}\n"
         f"Summary: {issue_summary[:2000]}\n"
         f"Description: {issue_description[:4000]}\n\n"
-        f"Codebase context (.hermes/codebase.md snapshot):\n{codebase_text}\n\n"
+        f"Codebase context (module graph):\n{codebase_text}\n\n"
         "Reference specific module names and file paths from the codebase context "
         "where relevant.\n\n"
         "Respond with exactly these four labelled sections in this order:\n\n"
@@ -482,10 +544,8 @@ async def _run_simple(
 
     section_names = ["Summary", "Approach", "Key Decisions", "Risks"]
 
-    route_result = route_request("architecture", prompt)
-    reasoning, answer = split_reasoning(route_result.content)
-    if route_result.reasoning:
-        reasoning = route_result.reasoning
+    content, _ = await _run_opencode_arch(prompt)
+    reasoning, answer = split_reasoning(content)
     safe_record_reasoning(db, project.id, issue_key, "architecture", reasoning)
     sections = _parse_sections(answer, section_names)
 
