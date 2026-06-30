@@ -71,18 +71,26 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
     main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
 
     if stage in HEAVY_STAGES:
-        logger.info("Routing %s to freellmapi at %s", stage, freellmapi_base_url)
+        # testgen routes to LiteLLM → gpt-4.1-mini to avoid freellmapi rate limits
+        if stage == "testgen":
+            base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
+            api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local")
+            model = "gpt-4.1-mini"
+            logger.info("Routing %s to LiteLLM/gpt-4.1-mini at %s", stage, base_url)
+        else:
+            base_url = freellmapi_base_url
+            api_key = freellmapi_api_key
+            model = freellmapi_model
+            logger.info("Routing %s to freellmapi at %s", stage, base_url)
         payload = {
-            "model": freellmapi_model,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
         try:
-            # testgen prompts include full file contents and can be large;
-            # ponytail: bump to 240s, raise if specific stages still timeout
-            timeout = 240.0 if stage == "testgen" else 90.0
+            timeout = 120.0 if stage == "testgen" else 90.0
             resp = httpx.post(
-                f"{freellmapi_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {freellmapi_api_key}"},
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
                 timeout=timeout,
             )
@@ -107,7 +115,7 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
                 stage,
                 exc,
             )
-            return LLMResponse(provider="freellmapi", content="[stub]", model=freellmapi_model)
+            return LLMResponse(provider="freellmapi", content="[stub]", model=model)
 
     # Light stage — stub response in Walking Skeleton
     logger.info("Routing %s to main model %s", stage, main_model)
