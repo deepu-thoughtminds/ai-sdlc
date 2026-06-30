@@ -16,7 +16,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 _MAX_ARCHITECTURE_CHARS = 8000
-_MAX_DIRECTORY_TREE_CHARS = 4000
+_MAX_CODEBASE_CONTEXT_CHARS = 4000
 _MAX_EVENT_CHARS = 2000
 _OPENCODE_TIMEOUT = 600  # 10 min
 
@@ -35,7 +35,7 @@ def _build_task_prompt(
     issue_summary: str,
     issue_description: str,
     architecture_content: str,
-    directory_tree: str,
+    codebase_context: str,
 ) -> str:
     return (
         "You are a senior software engineer implementing a Jira story directly "
@@ -46,8 +46,8 @@ def _build_task_prompt(
         f"Description:\n{issue_description}\n\n"
         "Architecture Design:\n"
         f"{architecture_content[:_MAX_ARCHITECTURE_CHARS]}\n\n"
-        "Existing Codebase Structure:\n"
-        f"{directory_tree[:_MAX_DIRECTORY_TREE_CHARS]}\n\n"
+        "Codebase context (module graph):\n"
+        f"{codebase_context[:_MAX_CODEBASE_CONTEXT_CHARS]}\n\n"
         "CRITICAL RULES:\n"
         "- Make MINIMAL, TARGETED changes. Only modify the specific lines needed.\n"
         "- NEVER rewrite an entire file when a small edit will do.\n"
@@ -105,12 +105,12 @@ async def run_agentic_codegen(
     issue_summary: str,
     issue_description: str,
     architecture_content: str,
-    directory_tree: str,
+    codebase_context: str,
     on_event: OnEvent | None = None,
 ) -> list[FileChange]:
     """Run OpenCode CLI against workspace_path and return changed FileChange list."""
     task_prompt = _build_task_prompt(
-        issue_key, issue_summary, issue_description, architecture_content, directory_tree
+        issue_key, issue_summary, issue_description, architecture_content, codebase_context
     )
 
     model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
