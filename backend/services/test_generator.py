@@ -268,8 +268,11 @@ def generate_e2e_tests(
         "- Do not include explanations outside of the file blocks\n"
         "- ALWAYS set viewport at the start of each test: await page.setViewportSize({ width: 1280, height: 720 })\n"
         "- NEVER use page.locator('text=...'). Use page.getByRole() or page.getByText() instead.\n"
-        "  Example: await expect(page.getByRole('heading', { name: 'Welcome to Pivot' })).toBeVisible()\n"
-        "  Example: await expect(page.getByText('Welcome to Pivot', { exact: false })).toBeVisible()"
+        "- Prefer structural assertions over exact-text assertions: verify the page loads, "
+        "  key elements are visible, and navigation works — not that a specific string is present.\n"
+        "  Good: await expect(page.getByRole('heading')).toBeVisible()\n"
+        "  Bad:  await expect(page.getByText('Welcome to Pivot', { exact: true })).toBeVisible()\n"
+        "- Only assert specific text if it is explicitly hardcoded in the file contents provided."
         + REASONING_INSTRUCTION
     )
 
