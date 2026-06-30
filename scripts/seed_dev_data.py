@@ -63,14 +63,14 @@ def dump() -> None:
     SEEDS_DIR.mkdir(exist_ok=True)
 
     backend_script = """
-import json, datetime
+import os, json, datetime
 from pymongo import MongoClient
 def _serial(v):
     if isinstance(v, datetime.datetime): return v.isoformat()
     if isinstance(v, datetime.date): return v.isoformat()
     raise TypeError(type(v))
-client = MongoClient('mongodb://mongo:27017')
-docs = list(client['aisdlc']['projects'].find())
+client = MongoClient(os.environ["MONGODB_URI"])
+docs = list(client[os.environ.get("MONGODB_DB", "aisdlc")]['projects'].find())
 for d in docs:
     if not isinstance(d.get('_id'), (int, float, str, bool)):
         d['_id'] = str(d['_id'])  # make ObjectId JSON-serialisable
@@ -132,10 +132,10 @@ def seed() -> None:
 
     docs_json = BACKEND_DUMP.read_text()
     backend_script = f"""
-import json
+import os, json
 from pymongo import MongoClient
-client = MongoClient('mongodb://mongo:27017')
-col = client['aisdlc']['projects']
+client = MongoClient(os.environ["MONGODB_URI"])
+col = client[os.environ.get("MONGODB_DB", "aisdlc")]['projects']
 docs = [json.loads(line) for line in {docs_json!r}.splitlines() if line.strip()]
 for d in docs:
     col.replace_one({{'_id': d['_id']}}, d, upsert=True)
