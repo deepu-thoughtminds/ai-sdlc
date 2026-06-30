@@ -1,15 +1,12 @@
-"""LLM router: routes all heavy stages to LiteLLM/gpt-4.1-mini.
+"""LLM router: routes heavy stages directly to opencode.ai Zen API.
 
 Heavy stages (describe, architecture, codegen, testgen, classify, autofix)
-are sent via the LiteLLM proxy OpenAI-compatible endpoint. Light stages
-return a stub response.
+call opencode.ai/zen/v1 (OpenAI-compatible) with deepseek-v4-flash-free.
+Light stages return a stub response.
 
 Threat mitigations applied:
-- T-02-05: Stage is checked against HEAVY_STAGES; routing only happens for
-  stages already validated by parse_mention's KNOWN_STAGES guard.
-- T-02-03: LiteLLM proxy is an internal service on ai-sdlc-net.
-- T-03-05: Prompt content comes from Jira comment body (validated max_length
-  at webhook layer).
+- T-02-05: Stage checked against HEAVY_STAGES before any LLM call.
+- T-03-05: Prompt content validated at webhook layer (max_length).
 """
 
 import logging
@@ -22,11 +19,12 @@ logger = logging.getLogger(__name__)
 
 HEAVY_STAGES = {"describe", "architecture", "codegen", "testgen", "classify", "autofix"}
 
+_OPENCODE_BASE_URL = "https://opencode.ai/zen/v1"
+_DEFAULT_MODEL = "deepseek-v4-flash-free"
+
 
 @dataclass
 class LLMResponse:
-    """Response from an LLM routing call."""
-
     provider: str
     content: str
     model: str = ""
@@ -34,20 +32,19 @@ class LLMResponse:
 
 
 def route_request(stage: str, prompt: str) -> LLMResponse:
-    """Route a prompt to gpt-4.1-mini via LiteLLM for heavy stages, stub for light."""
+    """Route a prompt to opencode.ai for heavy stages, stub for light."""
     if stage not in HEAVY_STAGES:
         main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
-        logger.info("Routing %s to main model %s", stage, main_model)
+        logger.info("Routing %s to main model %s (stub)", stage, main_model)
         return LLMResponse(provider="main_model", content="[stub]", model=main_model)
 
-    base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
-    api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local")
-    model = "deepseek-v4-flash-free"
-    logger.info("Routing %s to LiteLLM/deepseek-v4-flash-free at %s", stage, base_url)
+    api_key = os.environ.get("OPENCODE_API_KEY", "")
+    model = os.environ.get("OPENCODE_MODEL", _DEFAULT_MODEL)
+    logger.info("Routing %s to opencode.ai/%s", stage, model)
 
     try:
         resp = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
+            f"{_OPENCODE_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": [{"role": "user", "content": prompt}]},
             timeout=120.0,
@@ -55,13 +52,13 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
         resp.raise_for_status()
         data = resp.json()
         message = data["choices"][0]["message"]
-        native_reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
         return LLMResponse(
-            provider="litellm",
+            provider="opencode",
             content=message["content"],
             model=data.get("model", model),
-            reasoning=native_reasoning,
+            reasoning=reasoning,
         )
     except Exception as exc:
-        logger.warning("LiteLLM call failed for stage %s: %s — returning stub", stage, exc)
-        return LLMResponse(provider="litellm", content="[stub]", model=model)
+        logger.warning("opencode.ai call failed for stage %s: %s — returning stub", stage, exc)
+        return LLMResponse(provider="opencode", content="[stub]", model=model)
