@@ -42,8 +42,8 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
 
     base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
     api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local")
-    model = "gpt-4.1-mini"
-    logger.info("Routing %s to LiteLLM/gpt-4.1-mini at %s", stage, base_url)
+    model = "deepseek-v4-flash-free"
+    logger.info("Routing %s to LiteLLM/deepseek-v4-flash-free at %s", stage, base_url)
 
     try:
         resp = httpx.post(
