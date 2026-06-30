@@ -16,6 +16,7 @@ Threat mitigations:
            in webhook.py — this module re-uses that row (Step 1).
 """
 
+import asyncio
 import itertools
 import logging
 import os
@@ -29,7 +30,7 @@ from repositories import pipeline_state_repo
 from services.confluence_url_finder import find_latest_architecture_url
 from services.crypto import decrypt_credential
 from services.agentic_coder import run_agentic_codegen
-from services.graphify_service import get_codebase_summary
+from services.cbm_client import cbm_call
 from services.hermes_client import (
     get_comments,
     get_confluence_page_content,
@@ -113,6 +114,32 @@ def read_relevant_files(
 
     logger.debug("read_relevant_files: %d file(s) matched in %s", len(result), workspace_path)
     return result
+
+
+async def _query_dev_context(issue_key: str, issue_summary: str) -> str:
+    """Query codebase-memory-mcp graph for context relevant to the dev task.
+
+    Returns formatted "- name (file)" lines or a fallback string on empty/error.
+    Per CTX-04: no project credentials are passed to cbm_call.
+    """
+    graph_text = "(codebase graph unavailable)"
+    try:
+        graph_result = await asyncio.to_thread(
+            cbm_call,
+            "search_graph",
+            {"query": issue_summary, "limit": 20},
+        )
+        nodes = graph_result.get("nodes", graph_result.get("results", []))
+        if nodes:
+            graph_text = "\n".join(
+                f"- {n.get('name', n.get('id', ''))} ({n.get('file', n.get('path', ''))})"
+                for n in nodes[:20]
+            )
+        else:
+            graph_text = "(no graph context available)"
+    except Exception as exc:
+        logger.warning("cbm search_graph failed for %s: %s", issue_key, exc)
+    return graph_text
 
 
 async def run(
@@ -199,23 +226,11 @@ async def run(
             project.confluence_url, confluence_email, confluence_token, page_id
         )
 
-        # Step 5: Build codebase context and clone the repository.
+        # Step 5: Query codebase graph context and clone the repository.
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
-        # Derive github_url from github_repo slug when the project record does not
-        # carry an explicit github_url.  github_repo is always stored as an
-        # "owner/repo" slug (validated by ProjectCreate pattern), so constructing
-        # the HTTPS URL from it is safe.  This ensures get_codebase_summary can
-        # fetch the directory tree even for projects onboarded before github_url
-        # was added to the schema, fixing the root cause of the LLM creating new
-        # files instead of editing existing ones (empty codebase_context → LLM has
-        # no knowledge of existing file paths).
-        github_url = getattr(project, "github_url", None) or ""
-        if not github_url and github_repo and "/" in github_repo:
-            github_host = os.environ.get("GITHUB_HOST", "github.com")
-            github_url = f"https://{github_host}/{github_repo}"
-        codebase_context = get_codebase_summary(github_url, github_token)
-        directory_tree = codebase_context.directory_tree if codebase_context else ""
+        # CTX-04: query cbm graph before cloning so codegen prompt has context.
+        graph_text = await _query_dev_context(issue_key, issue_summary)
 
         cloned = clone_repository(github_repo, github_token)
         relevant_files = read_relevant_files(
@@ -246,7 +261,7 @@ async def run(
                 issue_summary,
                 issue_description,
                 architecture_content,
-                directory_tree,
+                graph_text,
                 on_event=_on_agent_event,
             )
             if not file_changes:
@@ -280,7 +295,7 @@ async def run(
             # so the QA pipeline's E2E step can run on future tickets.
             import glob as _glob
             if not _glob.glob(os.path.join(cloned.workspace_path, "playwright.config.*")):
-                pw_changes = generate_playwright_config(directory_tree, relevant_files)
+                pw_changes = generate_playwright_config(graph_text, relevant_files)
                 if pw_changes:
                     file_changes = file_changes + pw_changes
                     logger.info("Appended playwright.config.ts + smoke test to PR (%d files)", len(pw_changes))
