@@ -28,8 +28,8 @@ REASONING_INSTRUCTION = (
     "repeating the reasoning."
 )
 
-# First <thinking> … first </thinking>, case-insensitive, across newlines.
-_THINKING_RE = re.compile(r"<thinking>(.*?)</thinking>", re.IGNORECASE | re.DOTALL)
+# Match <thinking>…</thinking> OR <think>…</think> (DeepSeek/QwQ style).
+_THINKING_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>", re.IGNORECASE | re.DOTALL)
 
 
 def split_reasoning(text: str) -> tuple[str, str]:

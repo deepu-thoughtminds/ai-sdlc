@@ -77,11 +77,14 @@ def route_request(stage: str, prompt: str) -> LLMResponse:
             "messages": [{"role": "user", "content": prompt}],
         }
         try:
+            # testgen prompts include full file contents and can be large;
+            # ponytail: bump to 240s, raise if specific stages still timeout
+            timeout = 240.0 if stage == "testgen" else 90.0
             resp = httpx.post(
                 f"{freellmapi_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {freellmapi_api_key}"},
                 json=payload,
-                timeout=90.0,
+                timeout=timeout,
             )
             resp.raise_for_status()
             data = resp.json()
