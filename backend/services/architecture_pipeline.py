@@ -98,6 +98,8 @@ async def _run_opencode_arch(prompt: str) -> tuple[str, str]:
             stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=120.0)
         except asyncio.TimeoutError:
             logger.warning("opencode CLI timed out for architecture prompt")
+            proc.kill()
+            await proc.wait()
             return "", ""
         except Exception as exc:
             logger.warning("opencode CLI failed for architecture: %s", exc)
