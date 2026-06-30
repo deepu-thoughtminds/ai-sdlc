@@ -1,27 +1,20 @@
 #!/usr/bin/env bash
-# Wipe the local MongoDB data and start fresh.
+# OBSOLETE: MongoDB now lives on MongoDB Atlas, not a local Docker volume.
 #
-# Drops the `mongo_data` Docker volume (the only place app data lives) and brings
-# Mongo back up; the backend recreates empty collections + indexes on its next
-# startup. Use this to reset state between test runs.
+# There is no `mongo_data` volume to drop anymore. To clear application data on
+# Atlas, use clear_db.py (it reads MONGODB_URI/MONGODB_DB from the backend
+# container's env, so it targets whatever Atlas database the stack is pointed at):
 #
-#   bash scripts/reset-mongo.sh
+#   docker compose exec backend python scripts/clear_db.py          # prompts
+#   docker compose exec backend python scripts/clear_db.py --yes    # no prompt
 #
-# PowerShell equivalent:
-#   docker compose down -v; docker compose up -d mongo mongo-init
+# The backend recreates empty collections + indexes on its next startup.
 #
-# Targeted cleanup (keep the DB, clear one collection) instead of a full wipe:
-#   docker compose exec mongo mongosh aisdlc --eval "db.stage_transactions.deleteMany({})"
-#
-# Note: per-document deletes free logical space but WiredTiger does not return
-# disk to the OS until the volume is dropped (which this script does).
-set -euo pipefail
-
-echo "Stopping stack and removing volumes (mongo_data will be deleted)..."
-docker compose down -v
-
-echo "Starting MongoDB (single-node replica set) and initialising..."
-docker compose up -d mongo mongo-init
-
-echo "Done. MongoDB is empty; start the backend to recreate collections + indexes:"
-echo "  docker compose up -d backend"
+# Targeted cleanup of a single collection (keep the rest):
+#   docker compose exec backend python -c \
+#     "import os; from pymongo import MongoClient; \
+#      MongoClient(os.environ['MONGODB_URI'])[os.environ.get('MONGODB_DB','aisdlc')] \
+#      ['stage_transactions'].delete_many({})"
+echo "reset-mongo.sh is obsolete — MongoDB is on Atlas now."
+echo "Use: docker compose exec backend python scripts/clear_db.py"
+exit 0

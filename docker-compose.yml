@@ -92,44 +92,9 @@ services:
       - ai-sdlc-net
     restart: unless-stopped
 
-  mongo:
-    image: mongo:7
-    # Single-node replica set (rs0): gives multi-document transaction support and
-    # matches a hosted Atlas topology, so switching environments is a MONGODB_URI
-    # change only. For a devops-managed environment, set MONGODB_URI to the
-    # provisioned database (Atlas or self-hosted) and drop this service via a
-    # compose override — the backend connects to whatever MONGODB_URI points at.
-    command: ["--replSet", "rs0", "--bind_ip_all"]
-    volumes:
-      - mongo_data:/data/db
-    ports:
-      - "27017:27017"
-    networks:
-      - ai-sdlc-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
-  mongo-init:
-    image: mongo:7
-    depends_on:
-      mongo:
-        condition: service_healthy
-    networks:
-      - ai-sdlc-net
-    restart: "no"
-    # Idempotent replica-set initiation: rs.status() succeeds once initiated, so
-    # initiate only runs on a fresh volume. Exits 0 either way.
-    entrypoint:
-      - bash
-      - -c
-      - >-
-        mongosh --host mongo:27017 --quiet --eval
-        'try { rs.status() } catch (e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]}) }'
+  # MongoDB is hosted on MongoDB Atlas — no local mongo container. The backend
+  # connects to whatever MONGODB_URI points at (set in .env). See .env.example
+  # for the Atlas SRV connection-string format.
 
   backend:
     build:
@@ -146,15 +111,13 @@ services:
       - QA_SANDBOX_IMAGE=${QA_SANDBOX_IMAGE:-qa-sandbox}
       - SONAR_URL=${SONAR_URL:-http://sonarqube:9000}
       - SONAR_TIMEOUT_SECONDS=${SONAR_TIMEOUT_SECONDS:-300}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/?replicaSet=rs0}
+      - MONGODB_URI=${MONGODB_URI:?MONGODB_URI must be set (Atlas SRV string) in .env}
       - MONGODB_DB=${MONGODB_DB:-aisdlc}
     depends_on:
       hermes:
         condition: service_started
       litellm:
         condition: service_started
-      mongo-init:
-        condition: service_completed_successfully
       sonarqube:
         condition: service_started
     ports:
@@ -210,7 +173,6 @@ networks:
     driver: bridge
 
 volumes:
-  mongo_data:
   freellmapi_data:
   sonarqube_data:
   sonarqube_logs:
