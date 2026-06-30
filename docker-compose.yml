@@ -1,32 +1,4 @@
 services:
-  freellmapi:
-    build:
-      context: ./freellmapi
-      dockerfile: Dockerfile
-    ports:
-      - "3001:3001"
-    environment:
-      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY}
-      - PORT=3001
-      - HOST_BIND=0.0.0.0
-    volumes:
-      - freellmapi_data:/app/server/data
-    networks:
-      - ai-sdlc-net
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:3001/api/ping').then((res) => { if (!res.ok) process.exit(1); }).catch(() => process.exit(1));"
-        ]
-      interval: 30s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     ports:
@@ -35,11 +7,8 @@ services:
       - ./litellm/config.yaml:/app/config.yaml:ro
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm-local}
-      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
-    depends_on:
-      - freellmapi
     networks:
       - ai-sdlc-net
     restart: unless-stopped
@@ -59,11 +28,8 @@ services:
     env_file: .env
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
-      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
       - MCP_ATLASSIAN_URL=${MCP_ATLASSIAN_URL:-http://mcp-atlassian:9000/mcp}
     depends_on:
-      - freellmapi
       - mcp-atlassian
     networks:
       - ai-sdlc-net
@@ -174,7 +140,6 @@ networks:
     driver: bridge
 
 volumes:
-  freellmapi_data:
   sonarqube_data:
   sonarqube_logs:
   sonarqube_extensions:

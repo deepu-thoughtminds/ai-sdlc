@@ -1,7 +1,7 @@
 """LLM-powered intent classifier for @jarvis mention text.
 
 Routes free-text @jarvis phrases to structured actions using LLM classification
-via freellmapi. Replaces the KNOWN_STAGES whitelist with open-vocabulary intent
+via LiteLLM. Replaces the KNOWN_STAGES whitelist with open-vocabulary intent
 recognition so team members can trigger SDLC actions using natural language.
 
 Threat mitigations applied:

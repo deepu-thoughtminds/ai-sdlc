@@ -1,6 +1,6 @@
 """Bounded auto-fix loop — AUTOFIX-01, AUTOFIX-02, AUTOFIX-03.
 
-On unit test failure, generates a targeted fix via freellmapi using the
+On unit test failure, generates a targeted fix via LiteLLM using the
 specific failing test output (not full regeneration), applies it, and
 re-runs only the failing tests — up to MAX_ATTEMPTS times. Terminates
 early on non-progress (identical failure fingerprints across attempts).

@@ -2,10 +2,10 @@
 
 Implements CLASSIFY-01 and CLASSIFY-02: given a Jira ticket's summary and
 description, classifies the requested change as 'small' or 'complex' using
-a single freellmapi LLM call with structured JSON output.
+a single LLM call with structured JSON output.
 
 CLASSIFY-01: classify_complexity() makes exactly one route_request('classify', prompt)
-             call; routes through freellmapi via HEAVY_STAGES.
+             call; routes through LiteLLM via HEAVY_STAGES.
 CLASSIFY-02: LLM prompt requests JSON keys: classification ('small'|'complex'),
              rationale (str), component_count (int).
 

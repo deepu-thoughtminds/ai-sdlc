@@ -1,18 +1,15 @@
-"""LLM router: routes requests to freellmapi (heavy) or main model (light).
+"""LLM router: routes all heavy stages to LiteLLM/gpt-4.1-mini.
 
-Heavy stages (describe, architecture, codegen, testgen) are sent to the
-freellmapi service via the OpenAI-compatible /v1/chat/completions endpoint
-with Bearer auth. Light stages (assign) use the configured main model —
-in the Walking Skeleton, the light path returns a stub response without
-making a real API call.
+Heavy stages (describe, architecture, codegen, testgen, classify, autofix)
+are sent via the LiteLLM proxy OpenAI-compatible endpoint. Light stages
+return a stub response.
 
 Threat mitigations applied:
 - T-02-05: Stage is checked against HEAVY_STAGES; routing only happens for
   stages already validated by parse_mention's KNOWN_STAGES guard.
-- T-02-03: freellmapi is an internal service on ai-sdlc-net; prompts do not
-  leave the Docker network.
+- T-02-03: LiteLLM proxy is an internal service on ai-sdlc-net.
 - T-03-05: Prompt content comes from Jira comment body (validated max_length
-  at webhook layer); freellmapi is internal-only; no tool-calling surface.
+  at webhook layer).
 """
 
 import logging
@@ -23,10 +20,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# "describe" added in phase 03-01 — routes to freellmapi/Ollama for
-# codebase-aware description elaboration.
-# "classify" added in Phase 10 — routes complexity classification to freellmapi
-# for deterministic JSON-structured LLM judgment (CLASSIFY-01, CLASSIFY-02).
 HEAVY_STAGES = {"describe", "architecture", "codegen", "testgen", "classify", "autofix"}
 
 
@@ -34,89 +27,41 @@ HEAVY_STAGES = {"describe", "architecture", "codegen", "testgen", "classify", "a
 class LLMResponse:
     """Response from an LLM routing call."""
 
-    provider: str  # "freellmapi" or "main_model"
-    content: str  # response text
-    model: str = ""  # model name used
-    reasoning: str = ""  # native reasoning tokens, when the provider returns them
-
-
-FREELLMAPI_API_KEY = os.getenv("FREELLMAPI_API_KEY", "")
-FREELLMAPI_MODELS = os.getenv("FREELLMAPI_MODELS", "auto")
+    provider: str
+    content: str
+    model: str = ""
+    reasoning: str = ""
 
 
 def route_request(stage: str, prompt: str) -> LLMResponse:
-    """Route a prompt to the appropriate LLM provider based on stage.
+    """Route a prompt to gpt-4.1-mini via LiteLLM for heavy stages, stub for light."""
+    if stage not in HEAVY_STAGES:
+        main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
+        logger.info("Routing %s to main model %s", stage, main_model)
+        return LLMResponse(provider="main_model", content="[stub]", model=main_model)
 
-    Heavy stages → freellmapi via OpenAI-compatible /v1/chat/completions endpoint.
-    Light stages → main model stub (no real API call in Walking Skeleton).
+    base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
+    api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local")
+    model = "gpt-4.1-mini"
+    logger.info("Routing %s to LiteLLM/gpt-4.1-mini at %s", stage, base_url)
 
-    OpenAI /v1/chat/completions request format:
-      POST {FREELLMAPI_BASE_URL}/v1/chat/completions
-      Authorization: Bearer {FREELLMAPI_API_KEY}
-      {"model": "auto", "messages": [{"role": "user", "content": "<prompt>"}]}
-
-    OpenAI /v1/chat/completions response format:
-      {"choices": [{"message": {"role": "assistant", "content": "<text>"}}], ...}
-
-    Args:
-        stage: The pipeline stage name (must have been validated by parse_mention).
-        prompt: The full prompt text to send to the model.
-
-    Returns:
-        LLMResponse with provider, content, and model fields.
-    """
-    freellmapi_base_url = os.environ.get("FREELLMAPI_BASE_URL", "http://freellmapi:3001/v1")
-    freellmapi_api_key = os.environ.get("FREELLMAPI_API_KEY", FREELLMAPI_API_KEY)
-    freellmapi_model = os.environ.get("FREELLMAPI_MODELS", FREELLMAPI_MODELS)
-    main_model = os.environ.get("MAIN_MODEL", "claude-3-5-haiku-20241022")
-
-    if stage in HEAVY_STAGES:
-        # testgen routes to LiteLLM → gpt-4.1-mini to avoid freellmapi rate limits
-        if stage == "testgen":
-            base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000/v1")
-            api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local")
-            model = "gpt-4.1-mini"
-            logger.info("Routing %s to LiteLLM/gpt-4.1-mini at %s", stage, base_url)
-        else:
-            base_url = freellmapi_base_url
-            api_key = freellmapi_api_key
-            model = freellmapi_model
-            logger.info("Routing %s to freellmapi at %s", stage, base_url)
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        try:
-            timeout = 120.0 if stage == "testgen" else 90.0
-            resp = httpx.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # OpenAI format: data["choices"][0]["message"]["content"]
-            message = data["choices"][0]["message"]
-            response_text = message["content"]
-            model_name = data.get("model", freellmapi_model)
-            # Best-effort: some OpenAI-compatible providers (e.g. reasoning models)
-            # return native reasoning alongside content. Absent on most free tiers.
-            native_reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
-            return LLMResponse(
-                provider="freellmapi",
-                content=response_text,
-                model=model_name,
-                reasoning=native_reasoning,
-            )
-        except Exception as exc:
-            logger.warning(
-                "freellmapi call failed for stage %s: %s — returning stub response",
-                stage,
-                exc,
-            )
-            return LLMResponse(provider="freellmapi", content="[stub]", model=model)
-
-    # Light stage — stub response in Walking Skeleton
-    logger.info("Routing %s to main model %s", stage, main_model)
-    return LLMResponse(provider="main_model", content="[stub]", model=main_model)
+    try:
+        resp = httpx.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        message = data["choices"][0]["message"]
+        native_reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        return LLMResponse(
+            provider="litellm",
+            content=message["content"],
+            model=data.get("model", model),
+            reasoning=native_reasoning,
+        )
+    except Exception as exc:
+        logger.warning("LiteLLM call failed for stage %s: %s — returning stub", stage, exc)
+        return LLMResponse(provider="litellm", content="[stub]", model=model)

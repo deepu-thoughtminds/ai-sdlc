@@ -1,7 +1,7 @@
 """Test generation service — TESTGEN-01.
 
 Builds a structured prompt from the Jira issue, codebase snapshot context,
-and relevant file contents, then calls freellmapi via route_request('testgen', ...)
+and relevant file contents, then calls route_request('testgen', ...)
 to generate pytest unit test files.
 
 The LLM is prompted to respond with structured sections using the convention:
