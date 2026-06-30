@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: SonarQube QA Integration
-current_phase: 31
-status: complete
-stopped_at: Phase 30 Plan 01 complete — sonar-scanner step integrated in QA pipeline
-last_updated: "2026-06-27T11:23:33.159Z"
-last_activity: 2026-06-27
-last_activity_desc: Phase 31 complete
+milestone: v2.1
+milestone_name: OpenCode CLI Coding Agent
+status: planning
+last_updated: "2026-06-30T12:17:15.986Z"
+last_activity: 2026-06-30
 progress:
-  total_phases: 9
-  completed_phases: 6
-  total_plans: 11
-  completed_plans: 10
-  percent: 67
-current_phase_name: confluence-report-section
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 31
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-06-27 — Phase 31 complete
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-30 — Milestone v2.1 started
 
 ## Milestone History
 

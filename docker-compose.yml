@@ -60,6 +60,10 @@ services:
       - SONAR_TIMEOUT_SECONDS=${SONAR_TIMEOUT_SECONDS:-300}
       - MONGODB_URI=${MONGODB_URI:?MONGODB_URI must be set (Atlas SRV string) in .env}
       - MONGODB_DB=${MONGODB_DB:-aisdlc}
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY:?OPENCODE_API_KEY must be set}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-opencode/deepseek-v4-flash-free}
+      - OPENCODE_DISABLE_AUTOUPDATE=1
+      - CBM_CACHE_DIR=/app/cbm-cache
     depends_on:
       hermes:
         condition: service_started
