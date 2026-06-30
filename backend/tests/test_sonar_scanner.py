@@ -157,12 +157,6 @@ def test_run_sonar_step_not_ready(monkeypatch):
     import sys
     from unittest.mock import MagicMock as _MagicMock
 
-    # claude_agent_sdk is only present inside the Docker container; stub it so
-    # qa_pipeline can be imported in a plain dev environment.
-    if "claude_agent_sdk" not in sys.modules:
-        _stub = _MagicMock()
-        sys.modules["claude_agent_sdk"] = _stub
-
     from services.sonar_client import SonarQubeNotReadyError
     from services.qa_pipeline import _run_sonar_step
 

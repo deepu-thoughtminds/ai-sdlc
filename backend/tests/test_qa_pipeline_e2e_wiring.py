@@ -19,11 +19,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Stub claude_agent_sdk if not installed (it is only available inside Docker).
-# This allows the test to run locally as well as in the container.
-if "claude_agent_sdk" not in sys.modules:
-    _sdk_stub = MagicMock()
-    sys.modules["claude_agent_sdk"] = _sdk_stub
 
 from services.app_container import ContainerStartError
 from services.qa_pipeline import _format_qa_comment
