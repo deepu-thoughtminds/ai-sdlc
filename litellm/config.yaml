@@ -3,5 +3,10 @@ model_list:
     litellm_params:
       model: gpt-4.1-mini
       api_key: os.environ/OPENAI_API_KEY
+  # Claude Code SDK hardcodes claude-sonnet-4-6; alias it to gpt-4.1-mini
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
 general_settings:
   master_key: "sk-litellm-local"
