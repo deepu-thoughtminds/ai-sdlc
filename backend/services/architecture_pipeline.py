@@ -43,7 +43,7 @@ from pymongo.database import Database
 from models.project import Project
 from repositories import pipeline_state_repo
 from services.agentic_coder import _opencode_config
-from services.cbm_client import cbm_call
+from services.cbm_client import cbm_search_with_auto_index
 from services.complexity_classifier import classify_complexity
 from services.confluence_client import publish_architecture
 from services.crypto import decrypt_credential
@@ -67,69 +67,74 @@ AGENT_BODY_MARKER = "[jarvis-bot]"
 
 
 async def _run_opencode_arch(prompt: str) -> tuple[str, str]:
-    """Invoke opencode CLI for an architecture-generation prompt.
+    """Invoke opencode CLI for an architecture-generation prompt, with model fallback.
 
-    Mirrors _run_opencode_describe from describe_pipeline.py.
-
-    Returns (content, reasoning) where content is the joined assistant text
-    and reasoning is empty string (opencode CLI does not expose reasoning tokens
-    separately; split_reasoning in the caller handles <thinking> blocks).
-
-    Degrades gracefully: returns ("", "") on timeout or subprocess failure.
+    Tries OPENCODE_MODEL first, then OPENCODE_FALLBACK_MODEL on empty result.
+    Returns (content, "") — degrades to ("", "") if all models fail.
     """
-    model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    primary = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    fallback = os.environ.get("OPENCODE_FALLBACK_MODEL", "opencode/mimo-v2.5-free")
     opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cmd = [
-            opencode_bin, "run", prompt,
-            "--model", model,
-            "--dir", tmpdir,
-            "--dangerously-skip-permissions",
-            "--format", "json",
-        ]
-        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config()}
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=120.0)
-        except asyncio.TimeoutError:
-            logger.warning("opencode CLI timed out for architecture prompt")
-            proc.kill()
-            await proc.wait()
-            return "", ""
-        except Exception as exc:
-            logger.warning("opencode CLI failed for architecture: %s", exc)
-            return "", ""
+    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config(with_mcp=False)}
 
-        text_parts: list[str] = []
-        for line in stdout_bytes.decode(errors="replace").splitlines():
+    for model in (primary, fallback):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd = [
+                opencode_bin, "run", prompt,
+                "--model", model,
+                "--dir", tmpdir,
+                "--dangerously-skip-permissions",
+                "--format", "json",
+            ]
             try:
-                ev = json.loads(line)
-                if ev.get("type") == "assistant":
-                    for part in ev.get("content", []):
-                        if part.get("type") == "text" and part.get("text"):
-                            text_parts.append(part["text"].strip())
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return "\n\n".join(text_parts), ""
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.warning("opencode CLI timed out for architecture (model=%s)", model)
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+                continue
+            except Exception as exc:
+                logger.warning("opencode CLI failed for architecture (model=%s): %s", model, exc)
+                continue
+
+            if proc.returncode != 0:
+                logger.warning("opencode exited %s (model=%s): %s", proc.returncode, model, stderr_bytes.decode(errors="replace")[:500])
+                continue
+
+            text_parts: list[str] = []
+            for line in stdout_bytes.decode(errors="replace").splitlines():
+                try:
+                    ev = json.loads(line)
+                    if ev.get("type") == "text" and ev.get("part", {}).get("text"):
+                        text_parts.append(ev["part"]["text"].strip())
+                    elif ev.get("type") == "assistant":
+                        for part in ev.get("content", []):
+                            if part.get("type") == "text" and part.get("text"):
+                                text_parts.append(part["text"].strip())
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result = "\n\n".join(text_parts)
+            if result:
+                return result, ""
+            logger.warning("opencode produced no text (model=%s); stderr: %s", model, stderr_bytes.decode(errors="replace")[:500])
+
+    return "", ""
 
 
-async def _query_arch_context(issue_summary: str) -> str:
-    """Query codebase graph via cbm_call for architecture context.
-
-    CTX-03: called once in run() before the architecture pipeline runs.
-
-    Returns graph node text string, or a fallback string on failure.
-    """
+async def _query_arch_context(issue_summary: str, github_repo: str, github_token: str) -> str:
+    """Query codebase graph for architecture context, auto-indexing if needed."""
     try:
         graph_result = await asyncio.to_thread(
-            cbm_call,
-            "search_graph",
-            {"query": issue_summary, "limit": 20},
+            cbm_search_with_auto_index,
+            issue_summary, 20, github_repo, github_token,
         )
         nodes = graph_result.get("nodes", graph_result.get("results", []))
         if nodes:
@@ -242,7 +247,9 @@ async def run(
     try:
         # Step 1.5 (ARCHCTX-01 / CTX-03): query codebase graph via cbm once.
         # T-21-01: no token values are logged — only issue_key.
-        graph_context = await _query_arch_context(issue_summary)
+        _github_token = decrypt_credential(project.github_token) if project.github_token else ""
+        _github_repo = decrypt_credential(project.github_repo) if project.github_repo else ""
+        graph_context = await _query_arch_context(issue_summary, _github_repo, _github_token)
         safe_record_agent_event(
             db, project.id, issue_key, "architecture", "action", "Queried codebase graph",
             detail=f"{len(graph_context)} chars" if graph_context else "no graph context",

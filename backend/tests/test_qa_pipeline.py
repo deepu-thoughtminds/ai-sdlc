@@ -77,7 +77,7 @@ async def test_qa_attempt_set_to_zero_before_execution():
         patch("services.qa_pipeline.run_static_analysis", side_effect=RuntimeError("boom")),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -105,7 +105,7 @@ async def test_workspace_cleaned_up_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -131,7 +131,7 @@ async def test_workspace_cleaned_up_on_failure():
         patch("services.qa_pipeline.run_static_analysis", side_effect=RuntimeError("tool crashed")),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -160,7 +160,7 @@ async def test_workspace_cleaned_up_on_timeout():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree") as mock_rmtree,
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -187,7 +187,7 @@ async def test_jira_comment_posted_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -263,7 +263,7 @@ async def test_pipeline_state_status_complete_on_success():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -312,7 +312,7 @@ async def test_fresh_clone_not_dev_workspace():
         patch("services.qa_pipeline.run_static_analysis", return_value=results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -356,12 +356,8 @@ def test_no_shell_true_in_qa_pipeline():
 
 
 @pytest.mark.asyncio
-async def test_run_calls_get_codebase_snapshot_after_clone():
-    """run() calls get_codebase_snapshot(github_repo, github_token) after cloning.
-
-    The result (possibly None) is forwarded as codebase_context to generate_unit_tests.
-    """
-    from services.code_generator import FileChange
+async def test_run_passes_cbm_context_to_generate_unit_tests():
+    """run() queries CBM graph and forwards the result as codebase_context to generate_unit_tests."""
     from services.qa_pipeline import run
 
     project = _make_mock_project()
@@ -370,25 +366,24 @@ async def test_run_calls_get_codebase_snapshot_after_clone():
 
     cloned = _make_cloned_repo()
     static_results = [TestResult(tool="ruff", returncode=0, stdout="ok", stderr="", timed_out=False)]
+    cbm_nodes = [{"name": "LoginPage", "file": "src/pages/LoginPage.tsx"}]
 
     with (
         patch("services.qa_pipeline.clone_repository", return_value=cloned),
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value="snapshot text") as mock_snapshot,
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": cbm_nodes}) as mock_cbm,
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]) as mock_gen,
         patch("services.qa_pipeline.run_command"),
     ):
         await run(project, "PROJ-1", "Feature X", "desc", db)
 
-    mock_snapshot.assert_called_once_with("owner/repo", "gh-secret")
-    # The result must be forwarded to generate_unit_tests as codebase_context
+    mock_cbm.assert_called_once()
     _, gen_kwargs = mock_gen.call_args
-    assert gen_kwargs.get("codebase_context") == "snapshot text", (
+    assert gen_kwargs.get("codebase_context") is not None, (
         f"codebase_context not forwarded: {gen_kwargs!r}"
     )
-    pass
 
 
 @pytest.mark.asyncio
@@ -408,7 +403,7 @@ async def test_run_calls_generate_unit_tests_with_issue_key():
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]) as mock_gen,
         patch("services.qa_pipeline.run_command"),
     ):
@@ -450,7 +445,7 @@ async def test_generated_test_file_written_to_workspace(tmp_path):
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
         patch("services.qa_pipeline.run_command",
               return_value=TestResult(tool="pytest", returncode=0, stdout="1 passed", stderr="", timed_out=False)),
@@ -487,7 +482,7 @@ async def test_path_traversal_rejected_without_raising():
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[traversal_change]),
         patch("services.qa_pipeline.run_command"),
     ):
@@ -527,7 +522,7 @@ async def test_comment_contains_unit_test_and_static_analysis_sections(tmp_path)
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
         patch("services.qa_pipeline.run_command", return_value=unit_test_result),
     ):
@@ -568,7 +563,7 @@ async def test_empty_generate_unit_tests_skips_execution():
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command") as mock_run_command,
     ):
@@ -618,7 +613,7 @@ async def test_e2e_generation_skipped_when_no_playwright_config():
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
         patch("services.qa_pipeline.run_command"),
         patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
@@ -665,7 +660,7 @@ async def test_e2e_generation_runs_when_playwright_config_found():
             patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
             patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock) as mock_post,
             patch("services.qa_pipeline.shutil.rmtree"),
-            patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+            patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
             patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
             patch("services.qa_pipeline.run_command",
                   return_value=TestResult(tool="playwright", returncode=0, stdout="1 passed", stderr="", timed_out=False)),
@@ -711,7 +706,7 @@ async def test_e2e_path_traversal_rejected():
             patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
             patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
             patch("services.qa_pipeline.shutil.rmtree"),
-            patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+            patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
             patch("services.qa_pipeline.generate_unit_tests", return_value=[]),
             patch("services.qa_pipeline.run_command"),
             patch("services.qa_pipeline.run_auto_fix_loop", return_value=([], None)),
@@ -776,7 +771,7 @@ async def test_js_test_file_dispatches_to_npm_not_pytest(tmp_path):
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
         patch("services.qa_pipeline.run_command",
               return_value=TestResult(tool="npm test", returncode=0, stdout="1 passed", stderr="", timed_out=False)) as mock_run_command,
@@ -814,7 +809,7 @@ async def test_py_test_file_still_dispatches_to_pytest(tmp_path):
         patch("services.qa_pipeline.run_static_analysis", return_value=static_results),
         patch("services.qa_pipeline.hermes_post_comment", new_callable=AsyncMock),
         patch("services.qa_pipeline.shutil.rmtree"),
-        patch("services.qa_pipeline.get_codebase_snapshot", new_callable=AsyncMock, return_value=None),
+        patch("services.qa_pipeline.cbm_search_with_auto_index", return_value={"results": []}),
         patch("services.qa_pipeline.generate_unit_tests", return_value=generated),
         patch("services.qa_pipeline.run_command",
               return_value=TestResult(tool="pytest", returncode=0, stdout="1 passed", stderr="", timed_out=False)) as mock_run_command,

@@ -57,22 +57,24 @@ def _build_task_prompt(
     )
 
 
-def _opencode_config() -> str:
+def _opencode_config(with_mcp: bool = True) -> str:
     """Inline JSON config passed via OPENCODE_CONFIG_CONTENT."""
     api_key = os.environ.get("OPENCODE_API_KEY", "")
-    return json.dumps({
+    cfg: dict = {
         "provider": {
             "opencode": {
                 "options": {"apiKey": api_key}
             }
-        },
-        "mcp": {
+        }
+    }
+    if with_mcp:
+        cfg["mcp"] = {
             "codebase-memory-mcp": {
                 "type": "local",
                 "command": ["codebase-memory-mcp"]
             }
         }
-    })
+    return json.dumps(cfg)
 
 
 def _parse_json_events(line: str, on_event: OnEvent) -> None:
@@ -80,7 +82,18 @@ def _parse_json_events(line: str, on_event: OnEvent) -> None:
     try:
         ev = json.loads(line)
         kind = ev.get("type", "")
-        if kind == "assistant":
+        if kind == "text" and ev.get("part", {}).get("text"):
+            on_event("thinking", ev["part"]["text"].strip()[:_MAX_EVENT_CHARS], None, None)
+        elif kind == "tool_call" and ev.get("part", {}).get("toolName"):
+            tool = ev["part"]["toolName"]
+            args = ev["part"].get("input") or {}
+            detail = next(
+                (str(v)[:_MAX_EVENT_CHARS] for k, v in args.items()
+                 if k in ("file_path", "path", "command", "pattern") and v),
+                None,
+            )
+            on_event("action", tool, tool, detail)
+        elif kind == "assistant":
             for part in ev.get("content", []):
                 if part.get("type") == "text":
                     text = (part.get("text") or "").strip()
@@ -114,6 +127,7 @@ async def run_agentic_codegen(
     )
 
     model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    # ponytail: agentic_coder doesn't retry on empty — complex streamer; fallback handled at caller level if needed
     opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")
 
     cmd = [
@@ -124,7 +138,7 @@ async def run_agentic_codegen(
         "--format", "json",
     ]
 
-    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config()}
+    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config(with_mcp=False)}
 
     logger.info("Running agentic codegen for ticket %s in %s", issue_key, workspace_path)
 

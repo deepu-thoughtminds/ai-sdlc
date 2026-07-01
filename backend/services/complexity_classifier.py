@@ -28,7 +28,6 @@ import logging
 
 from pymongo.database import Database
 
-from services.llm_router import route_request
 
 logger = logging.getLogger(__name__)
 
@@ -122,22 +121,15 @@ def classify_complexity(
     """
     prompt = _build_classify_prompt(issue_key, summary, description, codebase_snapshot=codebase_snapshot)
 
-    # freellmapi routes classify to a deterministic model; temperature=0 enforced by HEAVY_STAGES routing
-    # TODO: pass temperature=0 explicitly once route_request supports it (CLASSIFY-01)
-    route_result = route_request("classify", prompt)
-
-    try:
-        parsed = json.loads(route_result.content)
-        raw_classification = parsed["classification"]
-        rationale = parsed.get("rationale", "")
-        component_count = parsed.get("component_count")
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        logger.warning(
-            "classify_complexity: failed to parse LLM response for %s: %s — defaulting to small",
-            issue_key,
-            exc,
-        )
-        return ("small", "Classification unavailable — defaulting to small")
+    # ponytail: keyword heuristic — avoids broken REST API; upgrade to LLM when opencode REST works
+    _complex_keywords = ("api", "service", "database", "migration", "integration", "endpoint",
+                         "auth", "pipeline", "microservice", "kafka", "queue", "cache", "deploy")
+    combined = f"{summary} {description}".lower()
+    hits = sum(1 for kw in _complex_keywords if kw in combined)
+    if hits >= 2:
+        raw_classification, rationale, component_count = "complex", f"Matched {hits} complexity keywords", hits
+    else:
+        raw_classification, rationale, component_count = "small", "Few complexity indicators", hits
 
     # Cross-check component_count against the classification string (CLASSIFY-02).
     # Log a warning if they disagree so format drift is visible in logs; trust the

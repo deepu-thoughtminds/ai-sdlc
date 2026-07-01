@@ -27,7 +27,7 @@ from pymongo.database import Database
 
 from models.project import Project
 from services.agentic_coder import _opencode_config
-from services.cbm_client import cbm_call
+from services.cbm_client import cbm_search_with_auto_index
 from services.crypto import decrypt_credential
 from services.hermes_client import post_sprint_backlog
 from services.reasoning import REASONING_INSTRUCTION, split_reasoning
@@ -37,51 +37,61 @@ logger = logging.getLogger(__name__)
 
 
 async def _run_opencode_describe(prompt: str) -> tuple[str, str]:
-    """Invoke opencode CLI for a text-generation prompt.
+    """Invoke opencode CLI for a text-generation prompt, with model fallback.
 
-    Returns (content, reasoning) where content is the joined assistant text
-    and reasoning is empty string (opencode CLI does not expose reasoning tokens
-    separately; split_reasoning in the caller handles <thinking> blocks).
-
-    Degrades gracefully: returns ("", "") on timeout or subprocess failure.
+    Tries OPENCODE_MODEL first, then OPENCODE_FALLBACK_MODEL on empty result.
+    Returns (content, "") — degrades to ("", "") if all models fail.
     """
-    model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    primary = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    fallback = os.environ.get("OPENCODE_FALLBACK_MODEL", "opencode/mimo-v2.5-free")
     opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cmd = [
-            opencode_bin, "run", prompt,
-            "--model", model,
-            "--dir", tmpdir,
-            "--dangerously-skip-permissions",
-            "--format", "json",
-        ]
-        env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config()}
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=120.0)
-        except asyncio.TimeoutError:
-            logger.warning("opencode CLI timed out for describe prompt")
-            return "", ""
-        except Exception as exc:
-            logger.warning("opencode CLI failed for describe: %s", exc)
-            return "", ""
+    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config(with_mcp=False)}
 
-        text_parts: list[str] = []
-        for line in stdout_bytes.decode(errors="replace").splitlines():
+    for model in (primary, fallback):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd = [
+                opencode_bin, "run", prompt,
+                "--model", model,
+                "--dir", tmpdir,
+                "--dangerously-skip-permissions",
+                "--format", "json",
+            ]
             try:
-                ev = json.loads(line)
-                if ev.get("type") == "assistant":
-                    for part in ev.get("content", []):
-                        if part.get("type") == "text" and part.get("text"):
-                            text_parts.append(part["text"].strip())
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return "\n\n".join(text_parts), ""
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.warning("opencode CLI timed out for describe (model=%s)", model)
+                continue
+            except Exception as exc:
+                logger.warning("opencode CLI failed for describe (model=%s): %s", model, exc)
+                continue
+
+            if proc.returncode != 0:
+                logger.warning("opencode exited %s (model=%s): %s", proc.returncode, model, stderr_bytes.decode(errors="replace")[:500])
+                continue
+
+            text_parts: list[str] = []
+            for line in stdout_bytes.decode(errors="replace").splitlines():
+                try:
+                    ev = json.loads(line)
+                    if ev.get("type") == "text" and ev.get("part", {}).get("text"):
+                        text_parts.append(ev["part"]["text"].strip())
+                    elif ev.get("type") == "assistant":
+                        for part in ev.get("content", []):
+                            if part.get("type") == "text" and part.get("text"):
+                                text_parts.append(part["text"].strip())
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result = "\n\n".join(text_parts)
+            if result:
+                return result, ""
+            logger.warning("opencode produced no text (model=%s); stderr: %s", model, stderr_bytes.decode(errors="replace")[:500])
+
+    return "", ""
 
 
 async def run(event: object, project: Project, db: Database) -> str:
@@ -135,9 +145,8 @@ async def run(event: object, project: Project, db: Database) -> str:
     graph_text = "(codebase graph unavailable)"
     try:
         graph_result = await asyncio.to_thread(
-            cbm_call,
-            "search_graph",
-            {"query": f"{ticket_title}", "limit": 20},
+            cbm_search_with_auto_index,
+            ticket_title, 20, github_repo, github_token,
         )
         nodes = graph_result.get("nodes", graph_result.get("results", []))
         if nodes:
@@ -204,6 +213,9 @@ async def run(event: object, project: Project, db: Database) -> str:
     # --- Step 4: Run opencode CLI ---
     logger.info("Running describe pipeline for issue %s", issue_key)
     content, _ = await _run_opencode_describe(prompt)
+    if not content:
+        logger.warning("describe_pipeline: opencode returned empty content for %s — aborting", issue_key)
+        return ""
 
     # Split the model's <thinking> reasoning from the description it should post.
     reasoning, answer = split_reasoning(content)

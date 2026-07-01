@@ -25,7 +25,6 @@ import logging
 import os
 import subprocess
 
-from claude_agent_sdk import ClaudeAgentOptions, query
 
 from services.code_generator import FileChange
 
@@ -102,7 +101,7 @@ def run_claude_code_executor(
     return _collect_file_changes(workspace_path)
 
 
-async def run_claude_playwright_generator(
+def run_claude_playwright_generator(
     workspace_path: str,
     issue_key: str,
     issue_summary: str,
@@ -175,25 +174,26 @@ async def run_claude_playwright_generator(
     )
     target_path.write_text(template, encoding="utf-8")
 
-    options = ClaudeAgentOptions(
-        cwd=workspace_path,
-        permission_mode="acceptEdits",
-        max_turns=30,
-        model="sonnet",
-        env={
-            "ANTHROPIC_BASE_URL": "http://litellm:4000",
-            "ANTHROPIC_AUTH_TOKEN": os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local"),
-            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-        },
-        allowed_tools=["Bash", "Write"],
-    )
+    logger.info("Running Claude Playwright generator for ticket %s via claude CLI", issue_key)
 
-    logger.info("Running Claude Playwright generator for ticket %s via LiteLLM proxy", issue_key)
-
+    env = {
+        **os.environ,
+        "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL", "http://litellm:4000"),
+        "ANTHROPIC_AUTH_TOKEN": os.environ.get("LITELLM_MASTER_KEY", "sk-litellm-local"),
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+    }
     try:
-        async for _message in query(prompt=prompt, options=options):
-            pass
-    except Exception as exc:  # noqa: BLE001
+        result = subprocess.run(
+            ["claude", "--dangerously-skip-permissions", "-p", prompt],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+        )
+        if result.returncode != 0:
+            logger.error("claude CLI exited %d for %s: %s", result.returncode, issue_key, result.stderr)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         logger.error("Claude Playwright generator failed for %s: %s", issue_key, exc)
 
     # Always return the target file — template is the floor, agent enrichment is the ceiling.

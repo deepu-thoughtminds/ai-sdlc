@@ -30,7 +30,7 @@ from repositories import pipeline_state_repo
 from services.confluence_url_finder import find_latest_architecture_url
 from services.crypto import decrypt_credential
 from services.agentic_coder import run_agentic_codegen
-from services.cbm_client import cbm_call
+from services.cbm_client import cbm_search_with_auto_index
 from services.hermes_client import (
     get_comments,
     get_confluence_page_content,
@@ -116,18 +116,13 @@ def read_relevant_files(
     return result
 
 
-async def _query_dev_context(issue_key: str, issue_summary: str) -> str:
-    """Query codebase-memory-mcp graph for context relevant to the dev task.
-
-    Returns formatted "- name (file)" lines or a fallback string on empty/error.
-    Per CTX-04: no project credentials are passed to cbm_call.
-    """
+async def _query_dev_context(issue_key: str, issue_summary: str, github_repo: str, github_token: str) -> str:
+    """Query codebase-memory-mcp graph for context, auto-indexing if not yet indexed."""
     graph_text = "(codebase graph unavailable)"
     try:
         graph_result = await asyncio.to_thread(
-            cbm_call,
-            "search_graph",
-            {"query": issue_summary, "limit": 20},
+            cbm_search_with_auto_index,
+            issue_summary, 20, github_repo, github_token,
         )
         nodes = graph_result.get("nodes", graph_result.get("results", []))
         if nodes:
@@ -230,7 +225,7 @@ async def run(
         github_token = decrypt_credential(project.github_token)
         github_repo = decrypt_credential(project.github_repo)
         # CTX-04: query cbm graph before cloning so codegen prompt has context.
-        graph_text = await _query_dev_context(issue_key, issue_summary)
+        graph_text = await _query_dev_context(issue_key, issue_summary, github_repo, github_token)
 
         cloned = clone_repository(github_repo, github_token)
         relevant_files = read_relevant_files(

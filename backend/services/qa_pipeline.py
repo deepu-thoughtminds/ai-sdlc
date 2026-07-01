@@ -42,6 +42,7 @@ Phase 28 scope: live app container E2E (PWGEN-01..03, EXEC-01..02).
            continues to Step 5.
 """
 
+import asyncio
 import glob
 import logging
 import os
@@ -56,7 +57,7 @@ from models.project import Project
 from repositories import pipeline_state_repo
 from services.auto_fix_loop import MAX_ATTEMPTS as MAX_AUTOFIX_ATTEMPTS
 from services.auto_fix_loop import run_auto_fix_loop
-from services.codebase_snapshot_reader import get_codebase_snapshot
+from services.cbm_client import cbm_search_with_auto_index
 from services.confluence_client import publish_qa_report
 from services.crypto import decrypt_credential
 from services.hermes_client import post_comment as hermes_post_comment
@@ -333,8 +334,21 @@ async def run(
         # Step 4b — Generate and execute LLM-driven unit tests (TESTGEN-01).
         # T-24-02: codebase_context and file contents only; no credentials forwarded.
 
-        # (a) Fetch codebase snapshot context (.hermes/codebase.md)
-        codebase_context = await get_codebase_snapshot(github_repo, github_token)
+        # (a) Fetch codebase context from CBM graph (same pattern as dev/describe pipelines).
+        codebase_context: str | None = None
+        try:
+            graph_result = await asyncio.to_thread(
+                cbm_search_with_auto_index,
+                issue_summary, 20, github_repo, github_token,
+            )
+            nodes = graph_result.get("nodes", graph_result.get("results", []))
+            if nodes:
+                codebase_context = "\n".join(
+                    f"- {n.get('name', n.get('id', ''))} ({n.get('file', n.get('path', ''))})"
+                    for n in nodes[:20]
+                )
+        except Exception as _cbm_exc:
+            logger.warning("cbm search_graph failed for QA %s: %s", issue_key, _cbm_exc)
 
         # (b) Collect relevant source files from the cloned workspace (T-24-04: bounded)
         relevant_file_contents = _collect_relevant_files(cloned.workspace_path)
@@ -430,7 +444,7 @@ async def run(
 
         # Step 4e — Generate Python Playwright tests now (no live app needed for generation).
         # Execution is deferred into the managed_app_container block below.
-        pw_py_file_changes = await run_claude_playwright_generator(
+        pw_py_file_changes = run_claude_playwright_generator(
             workspace_path=cloned.workspace_path,
             issue_key=issue_key,
             issue_summary=issue_summary,
