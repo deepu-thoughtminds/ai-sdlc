@@ -774,16 +774,16 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 31. Confluence Report Section | 1/1 | Complete    | 2026-06-27 |
 | 32. opencode + codebase-memory-mcp Infrastructure | 1/1 | Complete    | 2026-06-30 |
 | 33. Onboarding & Describe Pipeline | 2/2 | Complete   | 2026-06-30 |
-| 34. Architecture Pipeline | 0/? | Not started | - |
-| 35. Dev Pipeline | 0/? | Not started | - |
+| 34. Architecture Pipeline | 1/1 | Complete   | 2026-06-30 |
+| 35. Dev Pipeline | 1/1 | Complete   | 2026-07-01 |
 | 36. QA Pipeline & LLM Router Cleanup | 0/? | Not started | - |
 
 ## Milestone v2.1: OpenCode CLI Coding Agent
 
 - [x] **Phase 32: opencode + codebase-memory-mcp Infrastructure** - Wire opencode CLI env vars in backend Compose service; register codebase-memory-mcp as opencode MCP server (stdio) and expose Python `cbm_call()` subprocess client (completed 2026-06-30)
 - [x] **Phase 33: Onboarding & Describe Pipeline** - Index target repo via codebase-memory-mcp on project onboarding; route describe pipeline through opencode CLI with graph context (completed 2026-06-30)
-- [ ] **Phase 34: Architecture Pipeline** - Route architecture pipeline LLM work through opencode CLI with codebase graph context; retire direct opencode.ai API calls
-- [ ] **Phase 35: Dev Pipeline** - Replace subprocess(["claude",...]) with opencode CLI in dev pipeline; replace .hermes/codebase.md read with codebase graph query
+- [x] **Phase 34: Architecture Pipeline** - Route architecture pipeline LLM work through opencode CLI with codebase graph context; retire direct opencode.ai API calls (completed 2026-06-30)
+- [x] **Phase 35: Dev Pipeline** - Replace subprocess(["claude",...]) with opencode CLI in dev pipeline; replace .hermes/codebase.md read with codebase graph query (completed 2026-07-01)
 - [ ] **Phase 36: QA Pipeline & LLM Router Cleanup** - Route all QA LLM calls through opencode CLI with graph context; re-index after merge; retire llm_router.py direct API calls
 
 ## Milestone v2.1: OpenCode CLI Coding Agent — Phase Details
@@ -841,9 +841,10 @@ Plans:
   2. Architecture output references real component names and integration points sourced from the codebase graph for the target repo
   3. No 401 errors from direct opencode.ai API calls appear in architecture pipeline logs
 
-**Plans**: 1 plan
+**Plans**: 1/1 plans complete
 Plans:
-- [ ] 34-01-PLAN.md — Migrate architecture_pipeline.py to opencode CLI + cbm graph context (replaces route_request + get_codebase_snapshot)
+
+- [x] 34-01-PLAN.md — Migrate architecture_pipeline.py to opencode CLI + cbm graph context (replaces route_request + get_codebase_snapshot)
 
 ### Phase 35: Dev Pipeline
 
@@ -857,7 +858,9 @@ Plans:
   2. Dev pipeline queries codebase-memory-mcp for relevant modules and functions before generating code — reading `.hermes/codebase.md` from GitHub is no longer the codebase context source
   3. Code changes produced by the dev pipeline reference real file paths and function signatures from the codebase graph
 
-**Plans**: TBD
+**Plans**: 1/1 plans complete
+
+- [x] 35-01-PLAN.md
 
 ### Phase 36: QA Pipeline & LLM Router Cleanup
 

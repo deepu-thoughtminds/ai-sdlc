@@ -2,15 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: OpenCode CLI Coding Agent
-status: planning
-last_updated: "2026-06-30T12:17:15.986Z"
+current_phase: 35
+current_phase_name: dev-pipeline
+status: executing
+stopped_at: Phase 31 complete — v2.0 milestone complete, all 9 phases done
+last_updated: "2026-06-30T23:13:13.473Z"
 last_activity: 2026-06-30
+last_activity_desc: Phase 35 execution started
 progress:
-  total_phases: 0
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 5
+  completed_plans: 4
+  percent: 75
 ---
 
 # Project State
@@ -20,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** v2.0 milestone complete — SonarQube QA Integration shipped
+**Current focus:** Phase 35 — dev-pipeline
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-06-30 — Milestone v2.1 started
+Phase: 35 (dev-pipeline) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 35
+Last activity: 2026-06-30 — Phase 35 execution started
 
 ## Milestone History
 
@@ -48,7 +52,7 @@ Last activity: 2026-06-30 — Milestone v2.1 started
 
 **Velocity:**
 
-- Total plans completed: 34
+- Total plans completed: 35
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -72,6 +76,7 @@ Last activity: 2026-06-30 — Milestone v2.1 started
 | 28 | 1 | - | - |
 | 29 | 2 | - | - |
 | 31 | 1 | - | - |
+| 32 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -101,6 +106,9 @@ Last activity: 2026-06-30 — Milestone v2.1 started
 | Phase 28 P01 | 12min | 3 tasks | 2 files |
 | Phase 30 P01 | 2 | 2 tasks | 4 files |
 | Phase 31 P01 | 58 | 3 tasks | 5 files |
+| Phase 32-opencode-codebase-memory-mcp-infrastructure P01 | 12min | 3 tasks | 5 files |
+| Phase 33 P01 | 8 | 2 tasks | 2 files |
+| Phase 33 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -183,6 +191,9 @@ Recent decisions affecting current work:
 - [Phase ?]: SonarMetrics dataclass transports quality gate metrics from SonarQube API to Confluence renderer
 - [Phase ?]: TYPE_CHECKING guard in confluence_client.py for SonarMetrics import avoids circular import at runtime
 - [Phase ?]: fetch_sonar_metrics never raises — exceptions return None so QA pipeline is never blocked by metrics fetch failure
+- [Phase ?]: CBM_CACHE_DIR pinned to /app/cbm-cache for codebase-memory-mcp graph cache persistence
+- [Phase ?]: opencode MCP config uses mcp key with type:local schema, distinct from Claude Code's mcpServers/stdio schema
+- [Phase ?]: CBM index task fire-and-forget: WARNING on failure, no PipelineState row, workspace cleaned in finally block
 
 ### Pending Todos
 
@@ -234,7 +245,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-27
+Last session: 2026-06-30T22:23:23.565Z
 Stopped at: Phase 31 complete — v2.0 milestone complete, all 9 phases done
 Resume file: None
 
