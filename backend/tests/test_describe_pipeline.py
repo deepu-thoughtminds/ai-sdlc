@@ -1,13 +1,11 @@
-"""TDD tests for describe_pipeline.run().
+"""TDD tests for describe_pipeline.run() — Phase 33 revision.
 
 Tests (5 total):
-1. test_run_returns_generated_description — mocked dependencies; run() returns LLM content string
+1. test_run_returns_generated_description — mocked deps; run() returns opencode content
 2. test_run_with_no_sprint_backlog — empty backlog; run() completes returns non-empty string
-3. test_run_with_no_codebase_snapshot — get_codebase_snapshot returns None; run() still calls route_request
-4. test_run_includes_snapshot_content_in_prompt — snapshot content (file paths) appears in LLM prompt (DESCCTX-02)
-5. test_run_with_decrypt_failure — decrypt_credential raises; run() degrades gracefully, route_request still called
-
-Dependencies (get_codebase_snapshot, post_sprint_backlog, route_request) mocked via unittest.mock.
+3. test_run_cbm_unavailable — cbm_call raises; run() still calls _run_opencode_describe
+4. test_run_graph_context_in_prompt — graph node names appear in prompt passed to opencode
+5. test_run_with_decrypt_failure — decrypt raises; run() degrades gracefully
 """
 
 import asyncio
@@ -20,20 +18,17 @@ from cryptography.fernet import Fernet
 from database import get_database
 from services.describe_pipeline import run
 
-# Set up test encryption key before any module-level imports that read env vars
 _TEST_KEY = Fernet.generate_key().decode()
 os.environ.setdefault("ENCRYPTION_KEY", _TEST_KEY)
 os.environ.setdefault("JIRA_ACCOUNT_EMAIL", "test@example.com")
 
 
 def _make_encrypted(value: str) -> str:
-    """Encrypt value using test key."""
     from cryptography.fernet import Fernet as _Fernet
     return _Fernet(os.environ["ENCRYPTION_KEY"].encode()).encrypt(value.encode()).decode()
 
 
 def _make_mock_project():
-    """Return mock Project fields needed by describe_pipeline.run()."""
     project = MagicMock()
     project.id = 1
     project.name = "Test Project"
@@ -47,7 +42,6 @@ def _make_mock_project():
 
 
 def _make_mock_event():
-    """Return mock JiraCommentEvent."""
     event = MagicMock()
     event.issue.key = "PROJ-42"
     event.issue.summary = "Add JWT authentication"
@@ -55,154 +49,125 @@ def _make_mock_event():
     return event
 
 
-def _make_stub_snapshot() -> str:
-    """Return a stub codebase snapshot string."""
-    return (
-        "# Codebase Snapshot\n"
-        "## Services\n"
-        "- backend/services/describe_pipeline.py\n"
-        "- backend/services/hermes_client.py\n"
-        "- backend/services/llm_router.py\n"
-    )
-
-
-def _make_stub_llm_response(content: str):
-    """Return a stub LLM route_request response with .content attribute."""
-    stub = MagicMock()
-    stub.content = content
-    stub.reasoning = ""  # real LLMResponse defaults reasoning to ""
-    return stub
+def _graph_nodes():
+    return {
+        "nodes": [
+            {"name": "auth_service", "file": "backend/services/auth.py"},
+            {"name": "JwtPayload", "file": "backend/models/jwt.py"},
+        ]
+    }
 
 
 def test_run_returns_generated_description():
-    """Mocked dependencies; run() returns the LLM content string."""
+    """Mocked deps; run() returns the opencode-generated content string."""
     with (
         patch(
-            "services.describe_pipeline.get_codebase_snapshot",
+            "services.describe_pipeline.cbm_call",
+            return_value=_graph_nodes(),
+        ),
+        patch(
+            "services.describe_pipeline.asyncio.to_thread",
             new_callable=AsyncMock,
-            return_value=_make_stub_snapshot(),
+            return_value=_graph_nodes(),
         ),
         patch(
             "services.describe_pipeline.post_sprint_backlog",
             new_callable=AsyncMock,
-        ) as mock_backlog,
+            return_value=[{"key": "PROJ-1", "summary": "Setup repo", "issue_type": "Task"}],
+        ),
         patch(
-            "services.describe_pipeline.route_request",
-            return_value=_make_stub_llm_response(
-                "Elaborated: feature adds login capability with JWT tokens."
-            ),
+            "services.describe_pipeline._run_opencode_describe",
+            new_callable=AsyncMock,
+            return_value=("Elaborated: feature adds login capability with JWT tokens.", ""),
         ),
     ):
-        mock_backlog.return_value = [
-            {"key": "PROJ-1", "summary": "Setup repo", "issue_type": "Task"},
-        ]
-
-
         result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
-
         assert isinstance(result, str)
-        assert result == "Elaborated: feature adds login capability with JWT tokens."
+        assert "JWT" in result
 
 
 def test_run_with_no_sprint_backlog():
     """Empty sprint backlog; run() completes and returns non-empty string."""
     with (
         patch(
-            "services.describe_pipeline.get_codebase_snapshot",
+            "services.describe_pipeline.asyncio.to_thread",
             new_callable=AsyncMock,
-            return_value=_make_stub_snapshot(),
+            return_value=_graph_nodes(),
         ),
         patch(
             "services.describe_pipeline.post_sprint_backlog",
             new_callable=AsyncMock,
-        ) as mock_backlog,
+            return_value=[],
+        ),
         patch(
-            "services.describe_pipeline.route_request",
-            return_value=_make_stub_llm_response(
-                "Feature description without sprint context."
-            ),
+            "services.describe_pipeline._run_opencode_describe",
+            new_callable=AsyncMock,
+            return_value=("Feature description without sprint context.", ""),
         ),
     ):
-        mock_backlog.return_value = []  # Empty backlog
-
-
         result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
-
         assert isinstance(result, str)
         assert len(result) > 0
 
 
-def test_run_with_no_codebase_snapshot():
-    """get_codebase_snapshot returns None; run() still calls route_request (graceful degradation)."""
+def test_run_cbm_unavailable():
+    """cbm search_graph raises; run() still calls _run_opencode_describe (CTX-02 graceful)."""
     with (
         patch(
-            "services.describe_pipeline.get_codebase_snapshot",
+            "services.describe_pipeline.asyncio.to_thread",
             new_callable=AsyncMock,
-            return_value=None,  # Snapshot unavailable
+            side_effect=RuntimeError("cbm binary not found"),
         ),
         patch(
             "services.describe_pipeline.post_sprint_backlog",
             new_callable=AsyncMock,
-        ) as mock_backlog,
+            return_value=[],
+        ),
         patch(
-            "services.describe_pipeline.route_request",
-            return_value=_make_stub_llm_response(
-                "Description even without codebase context."
-            ),
-        ) as mock_route,
+            "services.describe_pipeline._run_opencode_describe",
+            new_callable=AsyncMock,
+            return_value=("Description even without graph context.", ""),
+        ) as mock_opencode,
     ):
-        mock_backlog.return_value = [
-            {"key": "PROJ-1", "summary": "Background task", "issue_type": "Task"},
-        ]
-
-
         result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
-
-        # route_request must be called even with no codebase snapshot
-        mock_route.assert_called_once()
+        mock_opencode.assert_called_once()
         assert isinstance(result, str)
-        assert len(result) > 0
 
 
-def test_run_includes_snapshot_content_in_prompt():
-    """Snapshot content (real file paths) appears in the LLM prompt (DESCCTX-02)."""
-    snapshot_text = (
-        "## Services\n"
-        "- backend/services/describe_pipeline.py\n"
-        "- backend/services/hermes_client.py\n"
-    )
+def test_run_graph_context_in_prompt():
+    """Graph node names from cbm appear in the prompt passed to opencode (CTX-02)."""
+    captured_prompt: list[str] = []
+
+    async def _capture(prompt: str) -> tuple[str, str]:
+        captured_prompt.append(prompt)
+        return ("Feature elaboration with graph context.", "")
 
     with (
         patch(
-            "services.describe_pipeline.get_codebase_snapshot",
+            "services.describe_pipeline.asyncio.to_thread",
             new_callable=AsyncMock,
-            return_value=snapshot_text,
+            return_value=_graph_nodes(),
         ),
         patch(
             "services.describe_pipeline.post_sprint_backlog",
             new_callable=AsyncMock,
-        ) as mock_backlog,
+            return_value=[],
+        ),
         patch(
-            "services.describe_pipeline.route_request",
-            return_value=_make_stub_llm_response("Feature elaboration with codebase context."),
-        ) as mock_route,
+            "services.describe_pipeline._run_opencode_describe",
+            side_effect=_capture,
+        ),
     ):
-        mock_backlog.return_value = []
-
-
         asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
 
-        # Verify snapshot content appears in the prompt passed to route_request
-        assert mock_route.called, "route_request should have been called"
-        call_args = mock_route.call_args
-        prompt_arg = call_args[0][1]  # Second positional arg is the prompt string
+    assert captured_prompt, "_run_opencode_describe was not called"
+    prompt = captured_prompt[0]
+    assert "auth_service" in prompt, "Graph node name must appear in prompt (CTX-02)"
+    assert "backend/services/auth.py" in prompt, "Graph file path must appear in prompt"
 
-        assert "backend/services/describe_pipeline.py" in prompt_arg, (
-            "Snapshot content (file path) must appear in LLM prompt for DESCCTX-02"
-        )
 
 def test_run_with_decrypt_failure():
-    """decrypt_credential raises; run() still completes gracefully (CR-01)."""
+    """decrypt_credential raises; run() degrades gracefully."""
     from cryptography.fernet import InvalidToken
 
     with (
@@ -211,9 +176,9 @@ def test_run_with_decrypt_failure():
             side_effect=InvalidToken,
         ),
         patch(
-            "services.describe_pipeline.get_codebase_snapshot",
+            "services.describe_pipeline.asyncio.to_thread",
             new_callable=AsyncMock,
-            return_value=None,
+            side_effect=RuntimeError("cbm unavailable"),
         ),
         patch(
             "services.describe_pipeline.post_sprint_backlog",
@@ -221,10 +186,11 @@ def test_run_with_decrypt_failure():
             return_value=[],
         ),
         patch(
-            "services.describe_pipeline.route_request",
-            return_value=_make_stub_llm_response("ok after decrypt failure"),
-        ) as mock_route,
+            "services.describe_pipeline._run_opencode_describe",
+            new_callable=AsyncMock,
+            return_value=("ok after decrypt failure", ""),
+        ) as mock_opencode,
     ):
         result = asyncio.run(run(_make_mock_event(), _make_mock_project(), get_database()))
-        mock_route.assert_called_once()
+        mock_opencode.assert_called_once()
         assert isinstance(result, str)

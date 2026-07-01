@@ -10,5 +10,4 @@ pymongo==4.10.1
 dnspython==2.7.0  # required by pymongo to resolve Atlas mongodb+srv:// SRV records
 PyJWT==2.10.1
 respx==0.23.1
-claude-agent-sdk==0.2.107
 mongomock==4.3.0

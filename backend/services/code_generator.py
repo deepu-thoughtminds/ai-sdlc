@@ -1,7 +1,7 @@
 """Code generation service — DEVPIPE-03.
 
 Builds a structured prompt from the Jira issue, Confluence architecture page,
-and codebase context, then calls freellmapi via route_request('codegen', ...)
+and codebase context, then calls route_request('codegen', ...)
 to generate file-level code changes.
 
 The LLM is prompted to respond with structured sections using the convention:

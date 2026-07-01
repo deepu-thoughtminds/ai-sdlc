@@ -1,11 +1,14 @@
 # AI-SDLC Jira
 
-## Current State: v2.0 Shipped — Planning Next Milestone
+## Current Milestone: v2.1 OpenCode CLI Coding Agent
 
-**Shipped:** v2.0 SonarQube QA Integration (2026-06-27)
-Every Jira-triggered QA run now produces a Confluence QA page with SonarQube quality metrics (gate status, bugs, vulns, smells, coverage, duplications, dashboard link). Pipeline degrades gracefully when SonarQube is unavailable.
+**Goal:** Replace all direct LLM API calls and claude_agent_sdk usage with opencode CLI as the agentic coding engine, and use codebase-memory-mcp for indexed codebase context across all SDLC pipeline stages.
 
-**Codebase state:** Python (FastAPI) backend + Next.js frontend + Docker Compose. Phases 1–31 complete. QA pipeline fully wired: unit tests → static analysis → sonar-scanner → Playwright E2E → Confluence report.
+**Target features:**
+- opencode CLI as the coding agent for dev stage, QA test generation, and Playwright generation — replaces subprocess("claude") and removed claude_agent_sdk
+- codebase-memory-mcp integration: index target repos at onboarding, query graph for codebase context in describe/arch/dev/qa stages (replaces .hermes/codebase.md snapshot approach)
+- Fix describe pipeline: opencode CLI replaces direct opencode.ai API calls (401ing); LLM routing goes through opencode CLI which handles auth natively
+- llm_router.py retired or reduced: all heavy LLM work routes through opencode CLI
 
 ## Previous Milestone: v2.0 SonarQube QA Integration
 

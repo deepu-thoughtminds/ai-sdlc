@@ -5,6 +5,8 @@ points database._client at mongomock, stubs auth, and resets collections per
 test). Direct DB assertions go through the repository layer / collections.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from fastapi.testclient import TestClient
 
 from database import get_database
@@ -200,8 +202,11 @@ def test_create_project_with_github_repo_schedules_scan_run(monkeypatch) -> None
     response = client.post("/api/projects", json=_unique_payload())
     assert response.status_code == 201, response.text
 
-    assert len(scheduled) == 1, f"Expected one create_task call, got {len(scheduled)}"
-    assert scheduled[0] == "_run_scan_background"
+    # Two tasks are scheduled: scan + CBM index
+    assert "_run_scan_background" in scheduled, f"Expected _run_scan_background in {scheduled}"
+    assert "_run_cbm_index_background" in scheduled, (
+        f"Expected _run_cbm_index_background in {scheduled}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -289,3 +294,37 @@ def test_delete_project_removes_pipeline_states() -> None:
 
     remaining = get_database()["pipeline_states"].count_documents({"project_id": project_id})
     assert remaining == 0, "pipeline_states should be removed with the project"
+
+
+def test_create_project_schedules_cbm_index() -> None:
+    """CTX-01: cbm_call("index_repository", ...) is scheduled when github_repo is set."""
+    mock_cloned = MagicMock()
+    mock_cloned.workspace_path = "/tmp/fake-clone"
+    mock_cloned.owner = "acme"
+    mock_cloned.repo = "my-app"
+
+    with (
+        patch("routers.projects.codebase_scan_service.run", new_callable=AsyncMock),
+        patch("routers.projects.repo_clone.clone_repository", return_value=mock_cloned),
+        patch("routers.projects.cbm_call", return_value={"status": "indexed"}) as mock_cbm,
+        patch("routers.projects.shutil.rmtree"),
+        patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+    ):
+        response = client.post("/api/projects", json=_unique_payload())
+        assert response.status_code == 201, response.text
+        # asyncio.to_thread wraps the synchronous cbm_call
+        mock_to_thread.assert_called()
+        # Workspace cleanup happens regardless (rmtree mock prevents FS side-effects)
+
+
+def test_create_project_cbm_index_graceful_on_clone_failure() -> None:
+    """CTX-01: if clone fails, project creation still returns 201."""
+    with (
+        patch("routers.projects.codebase_scan_service.run", new_callable=AsyncMock),
+        patch(
+            "routers.projects.repo_clone.clone_repository",
+            side_effect=RuntimeError("git clone failed"),
+        ),
+    ):
+        response = client.post("/api/projects", json=_unique_payload())
+        assert response.status_code == 201, response.text

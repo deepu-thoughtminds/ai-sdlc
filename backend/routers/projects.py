@@ -16,6 +16,7 @@ Threat mitigations:
 
 import asyncio
 import logging
+import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pymongo.database import Database
@@ -24,8 +25,9 @@ from pymongo.errors import DuplicateKeyError
 from database import get_database, get_db
 from models.project import Project, ProjectCreate, ProjectListItem, ProjectPublic, ProjectUpdate
 from repositories import pipeline_state_repo, projects_repo
-from services import codebase_scan_service
+from services import codebase_scan_service, repo_clone
 from services.auth import get_current_user
+from services.cbm_client import cbm_call
 from services.crypto import decrypt_credential, encrypt_credential
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,40 @@ async def create_project(
         asyncio.create_task(_run_scan_background())
         logger.info("Codebase scan scheduled project id=%d", project.id)  # T-18-01: no token
 
+        async def _run_cbm_index_background() -> None:
+            bg_db = get_database()
+            bg_project = projects_repo.get(bg_db, project_id)
+            if bg_project is None:
+                logger.warning(
+                    "Project id=%s not found in cbm index background task — aborting",
+                    project_id,
+                )
+                return
+            github_token = decrypt_credential(bg_project.github_token)  # T-18-01: not logged
+            github_repo = decrypt_credential(bg_project.github_repo)
+            cloned: repo_clone.ClonedRepo | None = None
+            try:
+                cloned = repo_clone.clone_repository(github_repo, github_token)
+                await asyncio.to_thread(
+                    cbm_call,
+                    "index_repository",
+                    {"repo_path": cloned.workspace_path},
+                )
+                logger.info(
+                    "CBM index complete for project id=%d repo=%s/%s",
+                    project_id,
+                    cloned.owner,
+                    cloned.repo,
+                )
+            except Exception as exc:
+                logger.warning("CBM indexing failed for project id=%s: %s", project_id, exc)
+            finally:
+                if cloned is not None:
+                    shutil.rmtree(cloned.workspace_path, ignore_errors=True)
+
+        asyncio.create_task(_run_cbm_index_background())
+        logger.info("CBM indexing scheduled project id=%d", project.id)  # T-18-01: no token
+
     return _project_to_public(project)
 
 
@@ -218,3 +254,42 @@ def delete_project(project_id: int, db: Database = Depends(get_db)) -> Response:
     projects_repo.delete(db, project_id)
     logger.info("project deleted id=%d", project_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/projects/{project_id}/reindex", status_code=202)
+async def reindex_project(project_id: int, db: Database = Depends(get_db)) -> dict:
+    """Trigger a fresh CBM index for an existing project (clone → index → cleanup).
+
+    Useful when the project was onboarded without a successful index, or when
+    the codebase has changed significantly and a re-index is needed.
+    Returns 202 immediately; indexing runs in the background.
+    """
+    project = projects_repo.get(db, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+
+    async def _reindex() -> None:
+        bg_db = get_database()
+        bg_project = projects_repo.get(bg_db, project_id)
+        if bg_project is None:
+            return
+        github_token = decrypt_credential(bg_project.github_token)
+        github_repo = decrypt_credential(bg_project.github_repo)
+        cloned: repo_clone.ClonedRepo | None = None
+        try:
+            cloned = repo_clone.clone_repository(github_repo, github_token)
+            await asyncio.to_thread(
+                cbm_call,
+                "index_repository",
+                {"repo_path": cloned.workspace_path},
+            )
+            logger.info("CBM reindex complete for project id=%d repo=%s/%s", project_id, cloned.owner, cloned.repo)
+        except Exception as exc:
+            logger.warning("CBM reindex failed for project id=%d: %s", project_id, exc)
+        finally:
+            if cloned is not None:
+                shutil.rmtree(cloned.workspace_path, ignore_errors=True)
+
+    asyncio.create_task(_reindex())
+    logger.info("CBM reindex scheduled for project id=%d", project_id)
+    return {"status": "indexing", "project_id": project_id}

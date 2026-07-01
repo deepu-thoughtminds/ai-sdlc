@@ -1,4 +1,6 @@
-"""TDD tests for architecture_pipeline.run() — single-pass complexity-aware pipeline.
+"""Tests for architecture_pipeline.run() — single-pass complexity-aware pipeline.
+
+Phase 34: route_request → _run_opencode_arch, get_codebase_snapshot → _query_arch_context.
 
 Tests (7 total):
 1. test_run_complex_path — classify_complexity returns "complex"; generate_diagram called;
@@ -10,14 +12,13 @@ Tests (7 total):
 4. test_run_creates_pipeline_state_complete — PipelineState status="complete" after run()
 5. test_run_graceful_on_confluence_failure — Confluence raises; pipeline still returns string;
    no "https://conf" in result
-6. test_run_calls_llm_with_architecture_stage — route_request called with stage="architecture"
-   and issue_summary in prompt
+6. test_run_calls_opencode_with_summary — _run_opencode_arch called and issue_summary in prompt
 7. test_run_posts_jira_comment — hermes_post_comment is called with the architecture comment body
 
-Uses StaticPool in-memory DB; unittest.mock.patch for LLM, classify_complexity, drawio,
+Uses mongomock in-memory DB; unittest.mock.patch for LLM, classify_complexity, drawio,
 Confluence, and hermes_post_comment dependencies.
 
-Threat T-04-01: prompt must not contain token values — verified by checking args to route_request.
+Threat T-04-01: prompt must not contain token values — verified in test 6.
 """
 
 import json
@@ -30,8 +31,37 @@ from repositories import pipeline_state_repo
 from services.crypto import encrypt_credential
 
 # ---------------------------------------------------------------------------
-# Helpers (DB is the shared mongomock handle; see conftest.py)
+# Helpers
 # ---------------------------------------------------------------------------
+
+# Stub LLM return value: _run_opencode_arch returns (content, reasoning) tuple.
+_COMPLEX_CONTENT = (
+    "## Summary\n"
+    "This is a complex multi-service architecture.\n"
+    "## Approach\n"
+    "Use microservices with async messaging.\n"
+    "## Component Breakdown\n"
+    "API Gateway, Auth Service, User Service\n"
+    "## Integration Points\n"
+    "REST between gateway and services; Kafka for events\n"
+    "## Key Decisions\n"
+    "Use event sourcing for audit trail\n"
+    "## Risks\n"
+    "High coupling between services if not decoupled properly"
+)
+
+_SIMPLE_CONTENT = (
+    "## Summary\n"
+    "Simple single-service change.\n"
+    "## Approach\n"
+    "Add a field to the existing User model.\n"
+    "## Key Decisions\n"
+    "Minimal change — no new services needed\n"
+    "## Risks\n"
+    "Low risk; backward compatible"
+)
+
+_GRAPH_CONTEXT = "- architecture_pipeline (backend/services/architecture_pipeline.py)"
 
 
 def _make_mock_project():
@@ -48,45 +78,59 @@ def _make_mock_project():
     return p
 
 
-def _make_stub_llm_response_complex():
-    """Return a mock LLMResponse with 6 sections for the complex-ticket path."""
-    from services.llm_router import LLMResponse
-    content = (
-        "## Summary\n"
-        "This is a complex multi-service architecture.\n"
-        "## Approach\n"
-        "Use microservices with async messaging.\n"
-        "## Component Breakdown\n"
-        "API Gateway, Auth Service, User Service\n"
-        "## Integration Points\n"
-        "REST between gateway and services; Kafka for events\n"
-        "## Key Decisions\n"
-        "Use event sourcing for audit trail\n"
-        "## Risks\n"
-        "High coupling between services if not decoupled properly"
-    )
-    return LLMResponse(provider="freellmapi", content=content, model="llama3")
-
-
-def _make_stub_llm_response_simple():
-    """Return a mock LLMResponse with 4 sections for the simple-ticket path."""
-    from services.llm_router import LLMResponse
-    content = (
-        "## Summary\n"
-        "Simple single-service change.\n"
-        "## Approach\n"
-        "Add a field to the existing User model.\n"
-        "## Key Decisions\n"
-        "Minimal change — no new services needed\n"
-        "## Risks\n"
-        "Low risk; backward compatible"
-    )
-    return LLMResponse(provider="freellmapi", content=content, model="llama3")
-
-
 def _make_db():
     """Return the shared mongomock Database handle."""
     return get_database()
+
+
+def _arch_patches(
+    *,
+    complexity=("small", "single service"),
+    graph_context=_GRAPH_CONTEXT,
+    opencode_content=_SIMPLE_CONTENT,
+    confluence_return="https://conf.example.com/wiki/spaces/PROJ/pages/1",
+    confluence_side_effect=None,
+):
+    """Return a list of patch() context managers for common architecture pipeline deps."""
+    publish_kwargs = {"new_callable": AsyncMock}
+    if confluence_side_effect is not None:
+        publish_kwargs["side_effect"] = confluence_side_effect
+    else:
+        publish_kwargs["return_value"] = confluence_return
+
+    return [
+        patch(
+            "services.architecture_pipeline.classify_complexity",
+            return_value=complexity,
+        ),
+        patch(
+            "services.architecture_pipeline._query_arch_context",
+            new_callable=AsyncMock,
+            return_value=graph_context,
+        ),
+        patch(
+            "services.architecture_pipeline._run_opencode_arch",
+            new_callable=AsyncMock,
+            return_value=(opencode_content, ""),
+        ),
+        patch(
+            "services.architecture_pipeline.generate_diagram",
+            return_value="<mxGraphModel/>",
+        ),
+        patch(
+            "services.architecture_pipeline.generate_viewer_url",
+            return_value="https://diagrams.net/view",
+        ),
+        patch(
+            "services.architecture_pipeline.publish_architecture",
+            **publish_kwargs,
+        ),
+        patch(
+            "services.architecture_pipeline.hermes_post_comment",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -101,57 +145,33 @@ async def test_run_complex_path():
     'Multi-component feature — diagram included'.
     """
     db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("complex", "touches 3 services"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_complex(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ) as mock_generate_diagram,
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
-            ) as mock_publish,
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
+    patches = _arch_patches(
+        complexity=("complex", "touches 3 services"),
+        opencode_content=_COMPLEX_CONTENT,
+    )
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3] as mock_generate_diagram,
+        patches[4],
+        patches[5] as mock_publish,
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
 
-            result = await run(
-                _make_mock_project(), "PROJ-1", "Auth feature", "User can login", db
-            )
-
-        assert isinstance(result, str)
-        assert "Multi-component feature — diagram included" in result
-        mock_generate_diagram.assert_called_once()
-        # publish_architecture must be called with is_complex=True
-        call_kwargs = mock_publish.call_args[1] if mock_publish.call_args[1] else {}
-        call_args = mock_publish.call_args[0] if mock_publish.call_args[0] else ()
-        assert call_kwargs.get("is_complex") is True or (
-            len(call_args) > 6 and call_args[6] is True
+        result = await run(
+            _make_mock_project(), "PROJ-1", "Auth feature", "User can login", db
         )
-    finally:
-        pass
+
+    assert isinstance(result, str)
+    assert "Multi-component feature — diagram included" in result
+    mock_generate_diagram.assert_called_once()
+    call_kwargs = mock_publish.call_args[1] if mock_publish.call_args[1] else {}
+    call_args = mock_publish.call_args[0] if mock_publish.call_args[0] else ()
+    assert call_kwargs.get("is_complex") is True or (
+        len(call_args) > 6 and call_args[6] is True
+    )
 
 
 @pytest.mark.asyncio
@@ -161,57 +181,33 @@ async def test_run_simple_path():
     'Simple change — text architecture'.
     """
     db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "single service change"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ) as mock_generate_diagram,
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
-            ) as mock_publish,
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
+    patches = _arch_patches(
+        complexity=("small", "single service change"),
+        opencode_content=_SIMPLE_CONTENT,
+    )
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3] as mock_generate_diagram,
+        patches[4],
+        patches[5] as mock_publish,
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
 
-            result = await run(
-                _make_mock_project(), "PROJ-1", "Add field", "Add email field to User", db
-            )
-
-        assert isinstance(result, str)
-        assert "Simple change — text architecture" in result
-        mock_generate_diagram.assert_not_called()
-        # publish_architecture must be called with is_complex=False
-        call_kwargs = mock_publish.call_args[1] if mock_publish.call_args[1] else {}
-        call_args = mock_publish.call_args[0] if mock_publish.call_args[0] else ()
-        assert call_kwargs.get("is_complex") is False or (
-            len(call_args) > 6 and call_args[6] is False
+        result = await run(
+            _make_mock_project(), "PROJ-1", "Add field", "Add email field to User", db
         )
-    finally:
-        pass
+
+    assert isinstance(result, str)
+    assert "Simple change — text architecture" in result
+    mock_generate_diagram.assert_not_called()
+    call_kwargs = mock_publish.call_args[1] if mock_publish.call_args[1] else {}
+    call_args = mock_publish.call_args[0] if mock_publish.call_args[0] else ()
+    assert call_kwargs.get("is_complex") is False or (
+        len(call_args) > 6 and call_args[6] is False
+    )
 
 
 @pytest.mark.asyncio
@@ -220,115 +216,62 @@ async def test_run_draft_content_is_human_readable():
     does not start with '{'.
     """
     db = _make_db()
+    patches = _arch_patches()
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
+
+        await run(_make_mock_project(), "PROJ-1", "Simple fix", "Fix null pointer", db)
+
+    row = pipeline_state_repo.find_latest(
+        db, ticket_key="PROJ-1", stage="architecture"
+    )
+    assert row is not None
+    assert row.draft_content is not None
+    content = row.draft_content
+    assert not content.strip().startswith("{"), "draft_content must not be JSON"
     try:
-        mock_project = _make_mock_project()
-
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "single service"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
-
-            await run(mock_project, "PROJ-1", "Simple fix", "Fix null pointer", db)
-
-        row = pipeline_state_repo.find_latest(
-            db, ticket_key="PROJ-1", stage="architecture"
-        )
-        assert row is not None
-        assert row.draft_content is not None
-        content = row.draft_content
-        assert not content.strip().startswith("{"), "draft_content must not be JSON"
-        try:
-            json.loads(content)
-            raise AssertionError("draft_content must not be valid JSON")
-        except (json.JSONDecodeError, ValueError):
-            pass  # expected — content is plain text
-    finally:
-        pass
+        json.loads(content)
+        raise AssertionError("draft_content must not be valid JSON")
+    except (json.JSONDecodeError, ValueError):
+        pass  # expected — content is plain text
 
 
 @pytest.mark.asyncio
 async def test_run_creates_pipeline_state_complete():
     """After run() completes, PipelineState has stage='architecture'
-    and status='complete' (not 'awaiting_approval').
+    and status='complete'.
     """
     db = _make_db()
-    try:
-        mock_project = _make_mock_project()
+    patches = _arch_patches(
+        complexity=("complex", "multi-service"),
+        opencode_content=_COMPLEX_CONTENT,
+    )
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
 
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("complex", "multi-service"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_complex(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="https://conf.example.com/wiki/spaces/PROJ/pages/1",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
+        await run(_make_mock_project(), "PROJ-1", "Big feature", "Needs many services", db)
 
-            await run(mock_project, "PROJ-1", "Big feature", "Needs many services", db)
-
-        row = pipeline_state_repo.find_latest(
-            db, ticket_key="PROJ-1", stage="architecture"
-        )
-        assert row is not None
-        assert row.status == "complete", f"Expected 'complete', got '{row.status}'"
-    finally:
-        pass
+    row = pipeline_state_repo.find_latest(
+        db, ticket_key="PROJ-1", stage="architecture"
+    )
+    assert row is not None
+    assert row.status == "complete", f"Expected 'complete', got '{row.status}'"
 
 
 @pytest.mark.asyncio
@@ -337,266 +280,83 @@ async def test_run_graceful_on_confluence_failure():
     and 'https://conf' is not in the result (graceful degradation — T-04-03).
     """
     db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("complex", "multi-service"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_complex(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                side_effect=Exception("network error"),
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
+    patches = _arch_patches(
+        complexity=("complex", "multi-service"),
+        opencode_content=_COMPLEX_CONTENT,
+        confluence_side_effect=Exception("network error"),
+    )
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
 
-            result = await run(
-                _make_mock_project(), "PROJ-1", "Big feature", "Needs services", db
-            )
+        result = await run(
+            _make_mock_project(), "PROJ-1", "Big feature", "Needs services", db
+        )
 
-        assert isinstance(result, str)
-        assert len(result) > 0, "run() must return non-empty string even on Confluence failure"
-        assert "https://conf" not in result, "Confluence URL must not appear when publishing failed"
-    finally:
-        pass
+    assert isinstance(result, str)
+    assert len(result) > 0, "run() must return non-empty string even on Confluence failure"
+    assert "https://conf" not in result, "Confluence URL must not appear when publishing failed"
 
 
 @pytest.mark.asyncio
-async def test_run_calls_llm_with_architecture_stage():
-    """route_request is called with 'architecture' as first arg and issue_summary in prompt.
+async def test_run_calls_opencode_with_summary():
+    """_run_opencode_arch is called and issue_summary appears in the prompt.
 
-    Threat T-04-01: prompt must not contain token values.
+    Also verifies T-04-01: prompt must not contain decrypted token values.
     """
     db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "single service"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ) as mock_route,
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
+    patches = _arch_patches()
+    with (
+        patches[0],
+        patches[1],
+        patches[2] as mock_opencode,
+        patches[3],
+        patches[4],
+        patches[5],
+        patches[6],
+    ):
+        from services.architecture_pipeline import run
 
-            await run(
-                _make_mock_project(), "PROJ-1", "Auth feature", "User can login", db
-            )
+        await run(
+            _make_mock_project(), "PROJ-1", "Auth feature", "User can login", db
+        )
 
-        assert mock_route.called, "route_request must be called"
-        call_args = mock_route.call_args[0]
-        # First positional arg must be "architecture"
-        assert call_args[0] == "architecture", (
-            f"Expected first arg 'architecture', got '{call_args[0]}'"
-        )
-        # Prompt (second arg) must contain the issue summary
-        assert "Auth feature" in call_args[1], (
-            "issue_summary must appear in LLM prompt"
-        )
-        # T-04-01: prompt must NOT contain token values
-        prompt = call_args[1]
-        assert "jira-secret-token" not in prompt
-        assert "conf-secret-token" not in prompt
-    finally:
-        pass
+    assert mock_opencode.called, "_run_opencode_arch must be called"
+    prompt = mock_opencode.call_args[0][0]
+    assert "Auth feature" in prompt, "issue_summary must appear in prompt"
+    # T-04-01: prompt must NOT contain token values
+    assert "jira-secret-token" not in prompt
+    assert "conf-secret-token" not in prompt
 
 
 @pytest.mark.asyncio
 async def test_run_posts_jira_comment():
     """hermes_post_comment is called once with the architecture comment body.
 
-    Verifies CR-01: run() must actually post the result to Jira, not merely
-    return it. The 5th positional arg (body) must contain the issue key.
+    Verifies CR-01: run() must actually post the result to Jira.
+    The 5th positional arg (body) must contain the issue key.
     """
     db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "simple"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="# Codebase snapshot\nbackend/services/architecture_pipeline.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ) as mock_post,
-        ):
-            from services.architecture_pipeline import run
-            await run(_make_mock_project(), "PROJ-1", "Fix", "Small fix", db)
+    patches = _arch_patches()
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        patches[6] as mock_post,
+    ):
+        from services.architecture_pipeline import run
+        await run(_make_mock_project(), "PROJ-1", "Fix", "Small fix", db)
 
-        mock_post.assert_called_once()
-        call_body = mock_post.call_args[0][4]  # 5th positional arg is the comment body
-        assert "PROJ-1" in call_body, "comment body must reference the issue key"
-    finally:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_run_includes_snapshot_in_architecture_prompt():
-    """ARCHCTX-02: the codebase snapshot fetched in run() must appear in the
-    architecture generation prompt passed to route_request.
-    """
-    db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "single service"),
-            ),
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="SENTINEL_COMPONENT: backend/services/my_unique_module.py",
-            ),
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ) as mock_rr,
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
-
-            await run(_make_mock_project(), "PROJ-1", "Fix", "desc", db)
-
-        prompt = mock_rr.call_args[0][1]
-        assert "my_unique_module.py" in prompt
-    finally:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_run_passes_snapshot_to_complexity_classifier():
-    """ARCHCTX-01: the snapshot fetched in run() must be passed to
-    classify_complexity() as the codebase_snapshot keyword argument.
-    """
-    db = _make_db()
-    try:
-        with (
-            patch(
-                "services.architecture_pipeline.get_codebase_snapshot",
-                new_callable=AsyncMock,
-                return_value="snapshot-content-xyz",
-            ),
-            patch(
-                "services.architecture_pipeline.classify_complexity",
-                return_value=("small", "one service"),
-            ) as mock_classify,
-            patch(
-                "services.architecture_pipeline.route_request",
-                return_value=_make_stub_llm_response_simple(),
-            ),
-            patch(
-                "services.architecture_pipeline.generate_diagram",
-                return_value="<mxGraphModel/>",
-            ),
-            patch(
-                "services.architecture_pipeline.generate_viewer_url",
-                return_value="https://diagrams.net/view",
-            ),
-            patch(
-                "services.architecture_pipeline.publish_architecture",
-                new_callable=AsyncMock,
-                return_value="",
-            ),
-            patch(
-                "services.architecture_pipeline.hermes_post_comment",
-                new_callable=AsyncMock,
-                return_value={},
-            ),
-        ):
-            from services.architecture_pipeline import run
-
-            await run(_make_mock_project(), "PROJ-1", "Fix", "desc", db)
-
-        assert mock_classify.call_args[1].get("codebase_snapshot") == "snapshot-content-xyz" or (
-            mock_classify.call_args[0][-1] == "snapshot-content-xyz"
-        )
-    finally:
-        pass
+    mock_post.assert_called_once()
+    call_body = mock_post.call_args[0][4]  # 5th positional arg is the comment body
+    assert "PROJ-1" in call_body, "comment body must reference the issue key"

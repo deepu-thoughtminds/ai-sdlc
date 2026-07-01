@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: SonarQube QA Integration
-current_phase: 31
-status: complete
-stopped_at: Phase 30 Plan 01 complete — sonar-scanner step integrated in QA pipeline
-last_updated: "2026-06-27T11:23:33.159Z"
-last_activity: 2026-06-27
-last_activity_desc: Phase 31 complete
+milestone: v2.1
+milestone_name: OpenCode CLI Coding Agent
+current_phase: 35
+status: completed
+stopped_at: Phase 31 complete — v2.0 milestone complete, all 9 phases done
+last_updated: "2026-07-01T03:54:57.468Z"
+last_activity: 2026-07-01
+last_activity_desc: Phase 35 marked complete
 progress:
-  total_phases: 9
-  completed_phases: 6
-  total_plans: 11
-  completed_plans: 10
-  percent: 67
-current_phase_name: confluence-report-section
+  total_phases: 4
+  completed_phases: 4
+  total_plans: 5
+  completed_plans: 5
+  percent: 100
+current_phase_name: dev-pipeline
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase_name: confluence-report-section
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Team members trigger AI-powered SDLC automation directly from Jira comment history, with every output linked back to the originating ticket.
-**Current focus:** v2.0 milestone complete — SonarQube QA Integration shipped
+**Current focus:** Phase 35 — dev-pipeline
 
 ## Current Position
 
-Phase: 31
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-06-27 — Phase 31 complete
+Phase: 35 — COMPLETE
+Plan: 1 of 1
+Status: Phase 35 complete
+Last activity: 2026-07-01 — Phase 35 marked complete
 
 ## Milestone History
 
@@ -52,7 +52,7 @@ Last activity: 2026-06-27 — Phase 31 complete
 
 **Velocity:**
 
-- Total plans completed: 34
+- Total plans completed: 35
 - Average duration: ~12 min/plan
 - Total execution time: ~144 min
 
@@ -76,6 +76,7 @@ Last activity: 2026-06-27 — Phase 31 complete
 | 28 | 1 | - | - |
 | 29 | 2 | - | - |
 | 31 | 1 | - | - |
+| 32 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -105,6 +106,9 @@ Last activity: 2026-06-27 — Phase 31 complete
 | Phase 28 P01 | 12min | 3 tasks | 2 files |
 | Phase 30 P01 | 2 | 2 tasks | 4 files |
 | Phase 31 P01 | 58 | 3 tasks | 5 files |
+| Phase 32-opencode-codebase-memory-mcp-infrastructure P01 | 12min | 3 tasks | 5 files |
+| Phase 33 P01 | 8 | 2 tasks | 2 files |
+| Phase 33 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -187,6 +191,9 @@ Recent decisions affecting current work:
 - [Phase ?]: SonarMetrics dataclass transports quality gate metrics from SonarQube API to Confluence renderer
 - [Phase ?]: TYPE_CHECKING guard in confluence_client.py for SonarMetrics import avoids circular import at runtime
 - [Phase ?]: fetch_sonar_metrics never raises — exceptions return None so QA pipeline is never blocked by metrics fetch failure
+- [Phase ?]: CBM_CACHE_DIR pinned to /app/cbm-cache for codebase-memory-mcp graph cache persistence
+- [Phase ?]: opencode MCP config uses mcp key with type:local schema, distinct from Claude Code's mcpServers/stdio schema
+- [Phase ?]: CBM index task fire-and-forget: WARNING on failure, no PipelineState row, workspace cleaned in finally block
 
 ### Pending Todos
 
@@ -238,7 +245,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-06-27
+Last session: 2026-06-30T22:23:23.565Z
 Stopped at: Phase 31 complete — v2.0 milestone complete, all 9 phases done
 Resume file: None
 

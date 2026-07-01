@@ -163,24 +163,27 @@ async def handle_jira_comment(
         # Run the describe pipeline (async — awaited directly)
         description = await describe_pipeline.run(event, project, db)
 
-        # Post the draft as a Jira comment
-        try:
-            jira_token = decrypt_credential(project.jira_token)
-            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-            await hermes_post_comment(
-                project.jira_url,
-                jira_email,
-                jira_token,
-                event.issue.key,
-                AGENT_COMMENT_PREFIX
-                + AGENT_BODY_MARKER + "\n\n"
-                + "*Draft description — reply* `@jarvis approve story description` *to apply it to the ticket:*\n\n"
-                + description,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to post draft comment for ticket %s: %s", event.issue.key, exc
-            )
+        # Post the draft as a Jira comment (skip if empty — LLM failed)
+        if not description:
+            logger.warning("describe_pipeline returned empty for %s — skipping draft comment", event.issue.key)
+        else:
+            try:
+                jira_token = decrypt_credential(project.jira_token)
+                jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+                await hermes_post_comment(
+                    project.jira_url,
+                    jira_email,
+                    jira_token,
+                    event.issue.key,
+                    AGENT_COMMENT_PREFIX
+                    + AGENT_BODY_MARKER + "\n\n"
+                    + "*Draft description — reply* `@jarvis approve story description` *to apply it to the ticket:*\n\n"
+                    + description,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to post draft comment for ticket %s: %s", event.issue.key, exc
+                )
 
         # Update PipelineState to awaiting_approval with the draft content
         pipeline_state_repo.update(
@@ -632,23 +635,26 @@ async def handle_jira_issue_created(
     description = await describe_pipeline.run(adapter, project, db)
 
     # Step 8: Post draft comment with @jarvis approve story description instruction
-    try:
-        jira_token = decrypt_credential(project.jira_token)
-        jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
-        await hermes_post_comment(
-            project.jira_url,
-            jira_email,
-            jira_token,
-            event.issue.key,
-            AGENT_COMMENT_PREFIX
-            + AGENT_BODY_MARKER + "\n\n"
-            + "*Draft description — reply* `@jarvis approve story description` *to apply it to the ticket:*\n\n"
-            + description,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to post draft comment for ticket %s: %s", event.issue.key, exc
-        )
+    if not description:
+        logger.warning("describe_pipeline returned empty for %s (issue_created) — skipping draft comment", event.issue.key)
+    else:
+        try:
+            jira_token = decrypt_credential(project.jira_token)
+            jira_email = getattr(project, "jira_email", "") or os.environ.get("JIRA_ACCOUNT_EMAIL", "")
+            await hermes_post_comment(
+                project.jira_url,
+                jira_email,
+                jira_token,
+                event.issue.key,
+                AGENT_COMMENT_PREFIX
+                + AGENT_BODY_MARKER + "\n\n"
+                + "*Draft description — reply* `@jarvis approve story description` *to apply it to the ticket:*\n\n"
+                + description,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to post draft comment for ticket %s: %s", event.issue.key, exc
+            )
 
     # Step 9: Update PipelineState to awaiting_approval with the draft content
     pipeline_state_repo.update(

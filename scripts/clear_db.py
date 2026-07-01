@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://mongo:27017/?replicaSet=rs0")
+MONGODB_URI = os.environ["MONGODB_URI"]
 MONGODB_DB = os.environ.get("MONGODB_DB", "aisdlc")
 
 COLLECTIONS = [
@@ -25,7 +25,7 @@ COLLECTIONS = [
 INNER_SCRIPT = """
 import os, json
 from pymongo import MongoClient
-uri = os.environ.get("MONGODB_URI", "mongodb://mongo:27017/?replicaSet=rs0")
+uri = os.environ["MONGODB_URI"]
 db_name = os.environ.get("MONGODB_DB", "aisdlc")
 db = MongoClient(uri)[db_name]
 collections = {collections}

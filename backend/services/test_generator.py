@@ -1,7 +1,7 @@
 """Test generation service — TESTGEN-01.
 
 Builds a structured prompt from the Jira issue, codebase snapshot context,
-and relevant file contents, then calls freellmapi via route_request('testgen', ...)
+and relevant file contents, then calls route_request('testgen', ...)
 to generate pytest unit test files.
 
 The LLM is prompted to respond with structured sections using the convention:
@@ -28,25 +28,60 @@ import logging
 
 from pymongo.database import Database
 
+import asyncio
+import json
+import os
+import tempfile
+
+from services.agentic_coder import _opencode_config
 from services.code_generator import FileChange, _parse_file_changes
-from services.llm_router import route_request
 from services.reasoning import REASONING_INSTRUCTION, split_reasoning
 from services.ticket_tracking import safe_record_reasoning
+
+
+def _opencode_text(prompt: str) -> str:
+    """Run opencode CLI for text generation. Returns assistant text or empty string."""
+    model = os.environ.get("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+    fallback = os.environ.get("OPENCODE_FALLBACK_MODEL", "opencode/mimo-v2.5-free")
+    opencode_bin = os.environ.get("OPENCODE_BIN", "opencode")
+    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": _opencode_config(with_mcp=False)}
+
+    for model_id in (model, fallback):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import subprocess
+            result = subprocess.run(
+                [opencode_bin, "run", prompt, "--model", model_id,
+                 "--dir", tmpdir, "--dangerously-skip-permissions", "--format", "json"],
+                env=env, capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                logger.warning("opencode exited %s (model=%s): %s", result.returncode, model_id, result.stderr[:300])
+                continue
+            parts = []
+            for line in result.stdout.splitlines():
+                try:
+                    ev = json.loads(line)
+                    if ev.get("type") == "text" and ev.get("part", {}).get("text"):
+                        parts.append(ev["part"]["text"].strip())
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            text = "\n\n".join(parts)
+            if text:
+                return text
+            logger.warning("opencode produced no text (model=%s)", model_id)
+    return ""
 
 logger = logging.getLogger(__name__)
 
 
 def _capture_and_parse(
-    route_result,
+    content: str,
     db: Database | None,
     project_id: int | None,
     ticket_key: str | None,
 ) -> list[FileChange]:
-    """Split off the model's <thinking> reasoning (persist it as qa thinking when a
-    db handle is supplied), then parse the answer into FileChanges."""
-    reasoning, answer = split_reasoning(route_result.content)
-    if getattr(route_result, "reasoning", ""):
-        reasoning = route_result.reasoning
+    """Split reasoning from content, persist it, and parse FileChanges."""
+    reasoning, answer = split_reasoning(content)
     if db is not None and project_id is not None and ticket_key is not None:
         safe_record_reasoning(db, project_id, ticket_key, "qa", reasoning)
     return _parse_file_changes(answer)
@@ -124,6 +159,13 @@ def generate_unit_tests(
             "  - Place tests in tests/pages/ComponentName.test.tsx (mirror src/ paths "
             "under tests/, NOT under tests/src/). A file at src/pages/Foo.tsx gets a "
             "test at tests/pages/Foo.test.tsx with import path '../../src/pages/Foo'.\n"
+            "  - CRITICAL import path: the tests/ dir is TWO levels above src/. "
+            "WRONG: import Foo from './Foo'  RIGHT: import Foo from '../../src/pages/Foo'\n"
+            "  - CRITICAL 'Found multiple elements' prevention: NEVER use bare getByText() "
+            "for text that appears in more than one place (headings, buttons, and links can "
+            "all share the same text). ALWAYS use getByRole with an explicit level for "
+            "headings: getByRole('heading', { name: /sign in/i, level: 1 }). "
+            "If a role query is impossible, use getAllByText('text')[0] — never bare getByText().\n"
             "  - CRITICAL for headings with <br /> elements: the accessible name will "
             "NOT contain a space between lines. Use screen.getByRole('heading') then "
             "check .textContent with a regex, e.g.:\n"
@@ -163,8 +205,7 @@ def generate_unit_tests(
         + REASONING_INSTRUCTION
     )
 
-    route_result = route_request("testgen", prompt)
-    return _capture_and_parse(route_result, db, project_id, ticket_key)
+    return _capture_and_parse(_opencode_text(prompt), db, project_id, ticket_key)
 
 
 def generate_playwright_config(
@@ -204,8 +245,7 @@ def generate_playwright_config(
         "Output ONLY the two file blocks. No explanations."
     )
 
-    route_result = route_request("testgen", prompt)
-    return _parse_file_changes(route_result.content)
+    return _parse_file_changes(_opencode_text(prompt))
 
 
 def generate_e2e_tests(
@@ -268,10 +308,12 @@ def generate_e2e_tests(
         "- Do not include explanations outside of the file blocks\n"
         "- ALWAYS set viewport at the start of each test: await page.setViewportSize({ width: 1280, height: 720 })\n"
         "- NEVER use page.locator('text=...'). Use page.getByRole() or page.getByText() instead.\n"
-        "  Example: await expect(page.getByRole('heading', { name: 'Welcome to Pivot' })).toBeVisible()\n"
-        "  Example: await expect(page.getByText('Welcome to Pivot', { exact: false })).toBeVisible()"
+        "- Prefer structural assertions over exact-text assertions: verify the page loads, "
+        "  key elements are visible, and navigation works — not that a specific string is present.\n"
+        "  Good: await expect(page.getByRole('heading')).toBeVisible()\n"
+        "  Bad:  await expect(page.getByText('Welcome to Pivot', { exact: true })).toBeVisible()\n"
+        "- Only assert specific text if it is explicitly hardcoded in the file contents provided."
         + REASONING_INSTRUCTION
     )
 
-    route_result = route_request("testgen", prompt)
-    return _capture_and_parse(route_result, db, project_id, ticket_key)
+    return _capture_and_parse(_opencode_text(prompt), db, project_id, ticket_key)

@@ -186,7 +186,8 @@ export async function getTicketDetail(
   ticketKey: string
 ): Promise<TicketDetail> {
   const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}`
+    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}`,
+    { headers: authHeaders() }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<TicketDetail>
@@ -201,7 +202,8 @@ export async function getAgentEvents(
   ticketKey: string
 ): Promise<AgentEventPublic[]> {
   const res = await fetch(
-    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}/agent-events`
+    `${API_BASE}/api/projects/${projectId}/tickets/${encodeURIComponent(ticketKey)}/agent-events`,
+    { headers: authHeaders() }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<AgentEventPublic[]>

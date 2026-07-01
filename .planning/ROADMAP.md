@@ -737,7 +737,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28 → 29 → 30 → 31
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28 → 29 → 30 → 31 → 32 → 33 → 34 → 35 → 36
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -772,3 +772,107 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 29. SonarQube Service Setup | 2/2 | Complete    | 2026-06-27 |
 | 30. Scanner Integration | 2/2 | Complete   | 2026-06-27 |
 | 31. Confluence Report Section | 1/1 | Complete    | 2026-06-27 |
+| 32. opencode + codebase-memory-mcp Infrastructure | 1/1 | Complete    | 2026-06-30 |
+| 33. Onboarding & Describe Pipeline | 2/2 | Complete   | 2026-06-30 |
+| 34. Architecture Pipeline | 1/1 | Complete   | 2026-06-30 |
+| 35. Dev Pipeline | 1/1 | Complete   | 2026-07-01 |
+| 36. QA Pipeline & LLM Router Cleanup | 0/? | Not started | - |
+
+## Milestone v2.1: OpenCode CLI Coding Agent
+
+- [x] **Phase 32: opencode + codebase-memory-mcp Infrastructure** - Wire opencode CLI env vars in backend Compose service; register codebase-memory-mcp as opencode MCP server (stdio) and expose Python `cbm_call()` subprocess client (completed 2026-06-30)
+- [x] **Phase 33: Onboarding & Describe Pipeline** - Index target repo via codebase-memory-mcp on project onboarding; route describe pipeline through opencode CLI with graph context (completed 2026-06-30)
+- [x] **Phase 34: Architecture Pipeline** - Route architecture pipeline LLM work through opencode CLI with codebase graph context; retire direct opencode.ai API calls (completed 2026-06-30)
+- [x] **Phase 35: Dev Pipeline** - Replace subprocess(["claude",...]) with opencode CLI in dev pipeline; replace .hermes/codebase.md read with codebase graph query (completed 2026-07-01)
+- [ ] **Phase 36: QA Pipeline & LLM Router Cleanup** - Route all QA LLM calls through opencode CLI with graph context; re-index after merge; retire llm_router.py direct API calls
+
+## Milestone v2.1: OpenCode CLI Coding Agent — Phase Details
+
+### Phase 32: opencode + codebase-memory-mcp Infrastructure
+
+**Goal**: opencode CLI env vars are wired in Docker Compose, codebase-memory-mcp is registered as an opencode MCP server (stdio), and Python can call it directly via `cbm_call()` — so all subsequent pipeline phases can use them
+**Depends on**: Phase 31
+**Milestone**: v2.1 — opencode-cli-coding-agent
+**Requirements**: INFRA-01, INFRA-02, INFRA-03, INFRA-04
+**Success Criteria** (what must be TRUE):
+
+  1. `docker compose build backend` succeeds; `opencode --version` exits 0 inside the container
+  2. Backend container reads `OPENCODE_API_KEY` and `OPENCODE_MODEL` from Docker Compose environment variables — no credentials hardcoded in source files; missing key fails startup with a clear error
+  3. `_opencode_config()` JSON includes `mcp.codebase-memory-mcp` with `type: local` so opencode sessions can invoke codebase-memory-mcp tools (stdio, not a network service)
+  4. `cbm_call("index_repository", {"repo_path": "/app"})` returns valid JSON from inside the backend container
+
+**Plans**: 1/1 plans complete
+
+- [x] 32-01-PLAN.md
+
+### Phase 33: Onboarding & Describe Pipeline
+
+**Goal**: Target repos are indexed in the codebase graph at project onboarding and the describe pipeline generates story elaborations through opencode CLI using that graph context — eliminating the 401-prone direct opencode.ai HTTP calls
+**Depends on**: Phase 32
+**Milestone**: v2.1 — opencode-cli-coding-agent
+**Requirements**: CTX-01, AGENT-04, CTX-02
+**Success Criteria** (what must be TRUE):
+
+  1. When a project is saved with a github_repo value, codebase-memory-mcp indexes the repo automatically — no manual indexing step is required
+  2. A `@jarvis describe` trigger invokes opencode CLI for LLM generation — no direct HTTP call to opencode.ai API occurs and no 401 errors appear in logs
+  3. Generated story elaborations reference real module names or file paths drawn from the codebase graph rather than generic placeholders
+
+**Plans**: 2/2 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 33-01-PLAN.md — codebase-memory-mcp index trigger on project onboarding (CTX-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 33-02-PLAN.md — opencode CLI describe pipeline with codebase graph context (AGENT-04, CTX-02)
+
+### Phase 34: Architecture Pipeline
+
+**Goal**: Architecture pipeline routes complexity classification and diagram generation through opencode CLI, and queries the codebase graph for relevant component context — replacing direct opencode.ai API calls
+**Depends on**: Phase 33
+**Milestone**: v2.1 — opencode-cli-coding-agent
+**Requirements**: AGENT-05, CTX-03
+**Success Criteria** (what must be TRUE):
+
+  1. A `@jarvis architecture` trigger invokes opencode CLI for all LLM work — no direct opencode.ai HTTP call occurs in architecture_pipeline.py
+  2. Architecture output references real component names and integration points sourced from the codebase graph for the target repo
+  3. No 401 errors from direct opencode.ai API calls appear in architecture pipeline logs
+
+**Plans**: 1/1 plans complete
+Plans:
+
+- [x] 34-01-PLAN.md — Migrate architecture_pipeline.py to opencode CLI + cbm graph context (replaces route_request + get_codebase_snapshot)
+
+### Phase 35: Dev Pipeline
+
+**Goal**: Dev pipeline uses opencode CLI for autonomous code generation and queries the codebase graph for context, replacing both the claude subprocess call and the .hermes/codebase.md file read
+**Depends on**: Phase 34
+**Milestone**: v2.1 — opencode-cli-coding-agent
+**Requirements**: AGENT-01, CTX-04
+**Success Criteria** (what must be TRUE):
+
+  1. A `@jarvis start coding` trigger invokes opencode CLI for code generation — `subprocess(["claude", ...])` no longer exists in the dev pipeline code path
+  2. Dev pipeline queries codebase-memory-mcp for relevant modules and functions before generating code — reading `.hermes/codebase.md` from GitHub is no longer the codebase context source
+  3. Code changes produced by the dev pipeline reference real file paths and function signatures from the codebase graph
+
+**Plans**: 1/1 plans complete
+
+- [x] 35-01-PLAN.md
+
+### Phase 36: QA Pipeline & LLM Router Cleanup
+
+**Goal**: All QA LLM calls (unit test generation, Playwright generation) run through opencode CLI with codebase graph context; the graph re-indexes automatically after a PR merge; and llm_router.py direct API calls are eliminated
+**Depends on**: Phase 35
+**Milestone**: v2.1 — opencode-cli-coding-agent
+**Requirements**: AGENT-02, AGENT-03, CTX-05, CTX-06, AGENT-06
+**Success Criteria** (what must be TRUE):
+
+  1. Unit and static test generation invokes opencode CLI — claude_code_executor.py subprocess call no longer exists in the QA code path
+  2. Playwright E2E test generation invokes opencode CLI — run_claude_playwright_generator subprocess call is gone
+  3. After a successful PR merge, codebase-memory-mcp re-indexes the target repo automatically — the .hermes/codebase.md snapshot refresh is replaced
+  4. `grep -r "opencode.ai" backend/` returns no matches in llm_router.py — all direct HTTP LLM API calls are removed from the module
+
+**Plans**: TBD
