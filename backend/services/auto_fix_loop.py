@@ -27,10 +27,10 @@ import pathlib
 
 from repositories import pipeline_state_repo
 from services.code_generator import FileChange, _parse_file_changes
-from services.llm_router import route_request
 from services.pr_creator import apply_commit_push_and_open_pr
 from services.reasoning import REASONING_INSTRUCTION, split_reasoning
 from services.test_executor import TestResult, ToolchainCommand, run_command
+from services.test_generator import _opencode_text
 from services.ticket_tracking import safe_record_agent_event, safe_record_reasoning
 
 logger = logging.getLogger(__name__)
@@ -168,10 +168,8 @@ def run_auto_fix_loop(
         prev_fingerprint = fingerprint
 
         prompt = _build_fix_prompt(failing)
-        response = route_request(stage="autofix", prompt=prompt)
-        reasoning, answer = split_reasoning(response.content)
-        if response.reasoning:
-            reasoning = response.reasoning
+        content = _opencode_text(prompt)
+        reasoning, answer = split_reasoning(content)
         safe_record_agent_event(
             db, state_row.project_id, issue_key, "qa", "decision",
             f"Auto-fix attempt {attempt}/{MAX_ATTEMPTS}",
