@@ -69,7 +69,7 @@ services:
       hermes:
         condition: service_started
       sonarqube:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8000:8000"
     networks:
