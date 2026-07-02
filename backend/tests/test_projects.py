@@ -296,6 +296,21 @@ def test_delete_project_removes_pipeline_states() -> None:
     assert remaining == 0, "pipeline_states should be removed with the project"
 
 
+def test_delete_project_removes_agent_events() -> None:
+    """DELETE also clears the project's agent_events (no orphan rows)."""
+    from repositories import agent_event_repo
+
+    create = client.post("/api/projects", json=_unique_payload())
+    project_id = create.json()["id"]
+    db = get_database()
+    agent_event_repo.append(db, project_id, "P-1", "dev", "thinking", "pondering")
+
+    client.delete(f"/api/projects/{project_id}")
+
+    remaining = db["agent_events"].count_documents({"project_id": project_id})
+    assert remaining == 0, "agent_events should be removed with the project"
+
+
 def test_create_project_schedules_cbm_index() -> None:
     """CTX-01: cbm_call("index_repository", ...) is scheduled when github_repo is set."""
     mock_cloned = MagicMock()

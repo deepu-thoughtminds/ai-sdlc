@@ -83,3 +83,10 @@ def upsert(
 def delete_for_project(db: Database, project_id: int) -> int:
     """Delete all status rows for a project. Returns the deleted count."""
     return db[COLL].delete_many({"project_id": project_id}).deleted_count
+
+
+def delete_for_ticket(db: Database, project_id: int, ticket_key: str) -> int:
+    """Delete the status row for (project_id, ticket_key). Returns the deleted count."""
+    return db[COLL].delete_many(
+        {"project_id": project_id, "ticket_key": ticket_key}
+    ).deleted_count
