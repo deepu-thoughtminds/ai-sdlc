@@ -113,3 +113,10 @@ def update_status_many(db: Database, query: dict, to_status: str) -> int:
 def delete_for_project(db: Database, project_id: int) -> int:
     """Delete all pipeline-state rows for a project. Returns the deleted count."""
     return db[COLL].delete_many({"project_id": project_id}).deleted_count
+
+
+def delete_for_ticket(db: Database, project_id: int, ticket_key: str) -> int:
+    """Delete all pipeline-state rows for (project_id, ticket_key). Returns the deleted count."""
+    return db[COLL].delete_many(
+        {"project_id": project_id, "ticket_key": ticket_key}
+    ).deleted_count

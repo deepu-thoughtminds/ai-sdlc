@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 
 from database import get_database
 from main import app
-from repositories import stage_transaction_repo, ticket_status_repo
+from repositories import (
+    agent_event_repo,
+    pipeline_state_repo,
+    stage_transaction_repo,
+    ticket_status_repo,
+)
 from services.auth import get_current_user
 from tests.support import make_project
 
@@ -92,5 +97,58 @@ def test_endpoints_require_auth() -> None:
         assert client.get(f"/api/projects/{pid}/tickets").status_code == 401
         assert client.get(f"/api/projects/{pid}/tickets/P-1/status").status_code == 401
         assert client.get(f"/api/projects/{pid}/tickets/P-1").status_code == 401
+        assert client.delete(f"/api/projects/{pid}/tickets/P-1").status_code == 401
     finally:
         app.dependency_overrides[get_current_user] = lambda: "test-admin"
+
+
+def test_delete_ticket_removes_all_pipeline_data() -> None:
+    """DELETE removes the status row, transactions, pipeline states and agent events."""
+    pid = _seed()
+    db = get_database()
+    pipeline_state_repo.create(db, pid, "P-1", "dev", status="failed")
+    pipeline_state_repo.create(db, pid, "P-1", "qa", status="failed")
+    agent_event_repo.append(db, pid, "P-1", "dev", "thinking", "pondering")
+
+    resp = client.delete(f"/api/projects/{pid}/tickets/P-1")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ticket_key"] == "P-1"
+    assert data["deleted"] == {
+        "ticket_statuses": 1,
+        "stage_transactions": 3,
+        "pipeline_states": 2,
+        "agent_events": 1,
+    }
+
+    # gone from every collection and from the list/detail endpoints
+    assert client.get(f"/api/projects/{pid}/tickets/P-1").status_code == 404
+    assert client.get(f"/api/projects/{pid}/tickets").json() == []
+    assert stage_transaction_repo.list_for_ticket(db, pid, "P-1") == []
+    assert agent_event_repo.list_for_ticket(db, pid, "P-1") == []
+
+
+def test_delete_ticket_scoped_to_one_ticket() -> None:
+    """Deleting P-1 must not touch data belonging to another ticket."""
+    pid = _seed()
+    db = get_database()
+    ticket_status_repo.upsert(db, pid, "P-2", pipeline_stage="dev")
+    stage_transaction_repo.append(db, pid, "P-2", "dev", "started", status="in_progress")
+
+    resp = client.delete(f"/api/projects/{pid}/tickets/P-1")
+    assert resp.status_code == 200, resp.text
+
+    remaining = client.get(f"/api/projects/{pid}/tickets").json()
+    assert [t["ticket_key"] for t in remaining] == ["P-2"]
+    assert len(stage_transaction_repo.list_for_ticket(db, pid, "P-2")) == 1
+
+
+def test_delete_unknown_ticket_404() -> None:
+    pid = _seed()
+    resp = client.delete(f"/api/projects/{pid}/tickets/NOPE-1")
+    assert resp.status_code == 404, resp.text
+
+
+def test_delete_unknown_project_404() -> None:
+    resp = client.delete("/api/projects/999/tickets/P-1")
+    assert resp.status_code == 404, resp.text

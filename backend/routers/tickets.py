@@ -11,6 +11,9 @@ Read-only views over the data populated by the SDLC pipelines:
   GET /api/projects/{project_id}/tickets/{ticket_key}/agent-events
       — the captured agent activity log (thinking / action / decision / goal)
         for one ticket, oldest-first.
+  DELETE /api/projects/{project_id}/tickets/{ticket_key}
+      — remove one tracked ticket and all of its pipeline data (status row,
+        stage transactions, pipeline states, agent events). Jira is untouched.
 
 All routes require a valid JWT (same get_current_user dependency as the rest of
 /api). The Jira webhook keeps its own HMAC secret and is unaffected.
@@ -29,6 +32,7 @@ from models.stage_transaction import StageTransactionPublic
 from models.ticket_status import TicketStatus, TicketStatusPublic
 from repositories import (
     agent_event_repo,
+    pipeline_state_repo,
     projects_repo,
     stage_transaction_repo,
     ticket_status_repo,
@@ -39,6 +43,13 @@ logger = logging.getLogger("backend.tickets")
 
 # All ticket routes require a valid JWT.
 router = APIRouter(dependencies=[Depends(get_current_user)])
+
+
+class TicketDeleteResult(BaseModel):
+    """Outcome of deleting one tracked ticket — per-collection deleted counts."""
+
+    ticket_key: str
+    deleted: dict[str, int]
 
 
 class TicketDetail(BaseModel):
@@ -145,3 +156,33 @@ def get_ticket_agent_events(
 
     events = agent_event_repo.list_for_ticket(db, project_id, ticket_key)
     return [AgentEventPublic.model_validate(e) for e in events]
+
+
+@router.delete(
+    "/projects/{project_id}/tickets/{ticket_key}",
+    response_model=TicketDeleteResult,
+)
+def delete_ticket(
+    project_id: int, ticket_key: str, db: Database = Depends(get_db)
+) -> TicketDeleteResult:
+    """Delete one tracked ticket and all of its pipeline data.
+
+    Removes the ticket's status row, stage transactions, pipeline states and
+    agent events for (project_id, ticket_key). Only the platform's tracking
+    data is deleted — the Jira issue itself is untouched. If a pipeline is
+    still running for the ticket, its next status write will re-create the
+    ticket row. 404 if the project or ticket is unknown.
+    """
+    _get_project_or_404(db, project_id)
+    _get_ticket_or_404(db, project_id, ticket_key)
+
+    deleted = {
+        "ticket_statuses": ticket_status_repo.delete_for_ticket(db, project_id, ticket_key),
+        "stage_transactions": stage_transaction_repo.delete_for_ticket(db, project_id, ticket_key),
+        "pipeline_states": pipeline_state_repo.delete_for_ticket(db, project_id, ticket_key),
+        "agent_events": agent_event_repo.delete_for_ticket(db, project_id, ticket_key),
+    }
+    logger.info(
+        "Deleted ticket %s from project %s: %s", ticket_key, project_id, deleted
+    )
+    return TicketDeleteResult(ticket_key=ticket_key, deleted=deleted)

@@ -15,7 +15,12 @@ from pymongo import ReturnDocument
 from pymongo.database import Database
 
 from database import Doc, next_id, to_doc
-from repositories import pipeline_state_repo, stage_transaction_repo, ticket_status_repo
+from repositories import (
+    agent_event_repo,
+    pipeline_state_repo,
+    stage_transaction_repo,
+    ticket_status_repo,
+)
 
 COLL = "projects"
 
@@ -89,9 +94,10 @@ def delete(db: Database, project_id: int) -> bool:
 
     Replaces the ORM cascade + explicit cleanup: SQLite cascades only covered
     ticket_statuses, with pipeline_states/stage_transactions deleted by hand.
-    Here all three child collections are cleared explicitly.
+    Here all four child collections are cleared explicitly.
     """
     ticket_status_repo.delete_for_project(db, project_id)
     pipeline_state_repo.delete_for_project(db, project_id)
     stage_transaction_repo.delete_for_project(db, project_id)
+    agent_event_repo.delete_for_project(db, project_id)
     return db[COLL].delete_one({"_id": project_id}).deleted_count > 0
